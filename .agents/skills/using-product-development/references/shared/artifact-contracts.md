@@ -1,5 +1,11 @@
 # 阶段产物契约
 
+## 1. Work Item 与 Feature 范围
+
+需求、方案、实施、评审、验证和发布检查都必须明确当前作用域：是整个 Work Item，还是其中一个 Feature。多 Feature Work Item 的总览产物负责汇总，不替代各 Feature 的独立产物；单个 Feature 的产物不得承载其他 Feature 的需求、任务或状态。
+
+需求阶段在正式写入前必须存在已确认的 Work Item 分解结果。分解状态为 `draft` 或 `needs-confirmation` 时，只能维护分解草稿和控制状态，不能把任何子项写成正式需求、方案或计划。
+
 | 阶段 | 必需输入 | 默认产物 | 写入确认 | 完成检查 |
 | --- | --- | --- | --- | --- |
 | `requirement` | 原始需求、需求规范 | 正式 `requirement.md`；控制 `state.md`、`change-log.md` | 需求口径和路径 | 原子需求、范围、验收、待确认项 |

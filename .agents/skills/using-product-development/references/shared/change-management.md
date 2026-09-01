@@ -1,10 +1,14 @@
 # 变更与基线管理
 
-## 1. 基线
+## 1. Work Item 级变更
+
+以下变化属于 Work Item 级范围变更，不能只改某个 Feature 的文档：新增或删除 Feature、迁移需求归属、改变 Feature 依赖、修改跨 Feature 契约、改变整体验收或把单 Feature 改为多 Feature。必须先更新总需求分解记录，明确受影响 Feature 和版本，再分别更新各 Feature 的基线。
+
+## 2. 基线
 
 用户确认后的 `requirement.md`、`design.md` 和 `implementation-plan.md` 是版本化基线。后续消息默认是增量变更，不表示授权重写全部历史产物。
 
-## 2. 变更分类
+## 3. 变更分类
 
 | 类型 | 默认影响 |
 | --- | --- |
@@ -15,13 +19,21 @@
 | `design-change` | 用户确认后更新方案和计划 |
 | `documentation-correction` | 只改指定文档 |
 
-## 3. 控制目录中的 change-log.md
+## 4. 控制目录中的 change-log.md
 
 `change-log.md` 位于：
 
 ```text
 .product-development/features/feature-<featureId>/change-log.md
 ```
+
+Work Item 级变更还要追加到：
+
+```text
+.product-development/work-items/work-<workItemId>/change-log.md
+```
+
+Feature 级日志记录本 Feature 的影响；总需求日志记录拆分、合并、迁移、依赖和整体验收影响。两者不能相互替代。
 
 它不是任务日志。普通实现偏好、任务完成、上下文恢复和单次验证结果只写入 `state.md`；只有影响需求、设计、实施计划或风险接受的变更才追加记录。
 
@@ -43,7 +55,7 @@
 - 替代关系：none | supersedes DEC/CR
 ```
 
-## 4. 冲突处理
+## 5. 冲突处理
 
 新请求与历史基线冲突时：
 

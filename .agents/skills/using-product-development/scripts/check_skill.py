@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""检查 using-product-development-v2 的自包含结构。"""
+"""检查 using-product-development 的自包含结构。"""
 
 from __future__ import annotations
 
@@ -18,12 +18,14 @@ REQUIRED_FILES = (
     "references/shared/change-management.md",
     "references/shared/artifact-contracts.md",
     "references/shared/artifact-locations.md",
+    "references/shared/work-item-contract.md",
     "references/shared/specialized-route-loading.md",
     "references/methods/brainstorming.md",
     "references/methods/writing-plans.md",
     "references/methods/executing-plans.md",
     "references/methods/subagent-development.md",
     "references/workflow/overview.md",
+    "references/workflow/decomposition.md",
     "references/workflow/requirement.md",
     "references/workflow/design.md",
     "references/workflow/implementation.md",
@@ -32,6 +34,7 @@ REQUIRED_FILES = (
     "references/workflow/release-check.md",
     "references/workflow/documentation.md",
     "scripts/check_feature.py",
+    "scripts/check_work_item.py",
 )
 
 
@@ -59,6 +62,9 @@ def main() -> int:
                 errors.append("frontmatter 缺少 description")
         if re.search(r"(?im)^\s*(?:TODO|TBD)\s*[:：]", text):
             errors.append("SKILL.md 包含未处理的占位内容")
+        for required_phrase in ("Work Item", "requirement-*", "decomposition.md"):
+            if required_phrase not in text:
+                errors.append(f"SKILL.md 缺少复杂需求治理规则：{required_phrase}")
 
     for relative in REQUIRED_FILES[2:]:
         path = root / relative

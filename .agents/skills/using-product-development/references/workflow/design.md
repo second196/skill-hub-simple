@@ -4,7 +4,7 @@
 
 ## 1. 阶段目标
 
-输入已确认需求和源码事实，输出可行的技术方案、影响面、风险、验证思路和可执行实施计划。
+输入已确认的 Work Item/Feature 需求和源码事实，输出当前 Feature 可行的技术方案、影响面、风险、验证思路和可执行实施计划。多 Feature Work Item 的总览、依赖和跨 Feature 契约不得塞入某个子 Feature 的方案正文。
 
 Feature 方案阶段默认同时生成：
 
@@ -18,9 +18,9 @@ implementation-plan.md
 ## 2. 阶段流程
 
 ```text
-确认 Feature 和需求基线
+确认 Work Item、Feature 和需求基线
 -> 读取专项规范、需求、状态和源码事实
--> 判断是否需要拆分 Feature
+-> 复核当前 Feature 边界和跨 Feature 契约
 -> 头脑风暴澄清和比较方案
 -> 建立源码事实地图
 -> 形成设计草稿
@@ -36,8 +36,9 @@ implementation-plan.md
 
 确认：
 
-- 唯一 Feature 目录；
+- 唯一 Feature 目录及其 Work Item 归属；
 - `requirement.md` 存在且需求版本明确；
+- 分解状态为 `confirmed`，且当前 Feature 的需求映射完整；
 - 需求没有未处理的会改变设计的 `needs-confirmation`；
 - 控制目录中 `state.md` 的当前阶段、基线和活动变更；
 - `AGENTS.md` 的方案、架构、接口、代码和测试规范；
@@ -63,7 +64,7 @@ implementation-plan.md
 
 读取 `references/methods/brainstorming.md`：
 
-1. 需求复杂时先拆成可独立交付的 Feature；
+1. 需求复杂时先拆成可独立交付的 Feature；设计阶段发现边界过大或需求混杂时，必须回到 `decomposition` 子流程；
 2. 一次问一个会改变方案的关键问题；
 3. 提出两到三个可行路径；
 4. 对比改动范围、复杂度、性能、兼容性、风险和验证成本；
@@ -72,7 +73,19 @@ implementation-plan.md
 
 如果需求和用户输入已经完整且没有歧义，可以减少提问，但仍要完成方案自检。
 
-## 6. 设计文档内容
+## 6. Feature 边界复核
+
+设计草稿完成后必须重新判断当前 Feature 是否仍满足 `decomposition.md` 的边界条件：
+
+- 需求是否仍只服务一个主要用户目标；
+- 当前 Feature 是否拥有独立的验收结果；
+- 是否混入其他 Feature 的需求或状态；
+- 跨 Feature 的数据、接口、状态和错误责任是否明确；
+- 当前方案是否已经大到无法由一个 Slice 独立验证。
+
+边界不成立时，停止写入正式方案，回到 `requirement` 阶段重新分解。没有源码的 greenfield 任务必须明确记录“无现有实现”、设计假设和验证方式，不得虚构源码事实。
+
+## 7. 设计文档内容
 
 `design.md` 至少包含：
 
@@ -98,12 +111,12 @@ implementation-plan.md
 
 需求覆盖矩阵固定使用：
 
-| REQ-ID | 方案响应 | 计划任务 | 验证方式 | 状态 |
+| requirement-id | 方案响应 | 计划任务 | 验证方式 | 状态 |
 | --- | --- | --- | --- | --- |
 
 状态只能是 `covered`、`partial`、`excluded`、`needs-confirmation`。
 
-## 7. 可行性检查
+## 8. 可行性检查
 
 对高风险或未知假设，至少选择一种证据：
 
@@ -115,13 +128,13 @@ implementation-plan.md
 
 无法验证时，必须记录原因、替代检查和剩余风险。不能把设计推断写成可行性事实。
 
-## 8. 使用计划编写方法
+## 9. 使用计划编写方法
 
 读取 `references/methods/writing-plans.md`，把每个需求拆到实施计划。每个任务至少包含精确文件和符号、目标、实现细节、依赖、验证命令、预期结果、停止条件、回滚方式和需求 ID。
 
 实施计划必须能支撑后续逐任务执行，不得只写“修改相关文件”“补测试”“处理异常”等笼统描述。
 
-## 9. 方案确认和写入
+## 10. 方案确认和写入
 
 写入前向用户展示：
 
@@ -145,7 +158,7 @@ docs/product-development/features/feature-<featureId>/implementation-plan.md
 
 只有用户明确说“只写方案，不创建或更新实施计划”时，才允许只写 `design.md`，并在控制目录中的 `state.md` 记录原因。
 
-## 10. 出口检查
+## 11. 出口检查
 
 1. 每条需求都有方案响应、任务和验证方式；
 2. 方案中的文件、符号、接口、类型和计划一致；
@@ -155,11 +168,11 @@ docs/product-development/features/feature-<featureId>/implementation-plan.md
 6. 控制目录中的 `state.md` 已记录决策、源码事实和风险；
 7. 两个正式文件均存在且 diff 无无关修改。
 
-## 11. 阶段停止
+## 12. 阶段停止
 
 方案和计划完成或因冲突阻塞后停止。不得自动进入实现、评审、验证或发布检查。
 
-## 12. 复杂方案的最低深度
+## 13. 复杂方案的最低深度
 
 复杂 Feature 不能只给模块列表和任务标题。至少要完成一条从入口到结果的完整链路分析，并逐项回答：
 
@@ -168,6 +181,6 @@ docs/product-development/features/feature-<featureId>/implementation-plan.md
 3. 数据或错误如何跨边界传递，契约由谁负责；
 4. 正常、异常、超时、重试、重复请求和部分失败分别如何处理；
 5. 每个高风险判断由哪条源码事实或实验支持；
-6. 修改后如何证明每条 `REQ-*` 都满足，失败时如何回滚。
+6. 修改后如何证明每条 `requirement-*` 都满足，失败时如何回滚。
 
 如果无法回答其中一项，必须把它列为风险或待确认项，不能隐藏在“实现时处理”中。

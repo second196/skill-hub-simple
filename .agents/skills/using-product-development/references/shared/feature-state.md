@@ -10,6 +10,8 @@
 # Feature 状态
 
 feature: feature-<featureId>
+work_item: work-<workItemId>
+decomposition_status: confirmed
 artifact_dir: docs/product-development/features/feature-<featureId>
 control_dir: .product-development/features/feature-<featureId>
 current_phase: requirement
@@ -23,6 +25,13 @@ requirement_version: v1
 design_version: n/a
 plan_version: n/a
 active_change: none
+
+## Work Item 边界
+- work_item: work-<workItemId>
+- scope_decision: single-feature | multi-feature
+- allowed_requirements: requirement-...
+- forbidden_requirements: requirement-...
+- dependency_features: feature-...
 
 ## 已确认决策
 - [DEC-001] ...
@@ -89,7 +98,11 @@ active_change: none
 
 如果状态文件与正式产物或工作区 diff 冲突，以可验证的工作区事实为准，暂停并修正状态；不得默默选择其中一个继续。
 
-## 6. 两类记录的边界
+## 6. Work Item 恢复
+
+如果 `work_item` 不为空，恢复时还必须读取 Work Item 的 `index.md`、`decomposition.md` 和总需求 `state.md`，核对当前 Feature 是否仍在已确认的 Feature 清单中、需求映射是否完整、跨 Feature 契约是否有变化。Work Item 总状态不能由单个 Feature 的状态推断。
+
+## 7. 两类记录的边界
 
 - `state.md`：高频更新的当前状态、任务进度、阻塞、验证结果和恢复索引；
 - `change-log.md`：低频追加的、会改变正式需求/方案/计划基线的变更及审批状态；

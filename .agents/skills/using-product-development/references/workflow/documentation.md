@@ -4,7 +4,7 @@
 
 ## 1. 阶段目标
 
-把已经确认的需求、方案、测试、验证、发布检查、规范、入口页和交叉链接沉淀到正确的 `docs/` 位置。
+把已经确认的 Work Item、Feature、需求、方案、测试、验证、发布检查、规范、入口页和交叉链接沉淀到正确的 `docs/` 位置。
 
 文档阶段不替用户确认未经采纳的 AI 推断，也不自动改变需求、方案或实现。
 
@@ -36,11 +36,15 @@
 优先检查真实目录和 `AGENTS.md` 路由，不凭经验猜路径：
 
 - Feature 需求：`docs/product-development/features/feature-<featureId>/requirement.md`；
+- Work Item 总览：`docs/product-development/work-items/work-<workItemId>/index.md`；
+- Work Item 分解：同目录 `decomposition.md`；
 - Feature 方案：同目录 `design.md`；
 - Feature 实施计划：同目录 `implementation-plan.md`；
 - Feature 流程状态和基线变更：`.product-development/features/feature-<featureId>/state.md`、`change-log.md`；
 - Feature 验证和发布：同目录 `verification.md`、`release-check.md`；
 - 产品内部设计、架构和规范：以仓库目录地图为准。
+
+多 Feature 文档维护必须保持总览与子 Feature 一致：总览记录 Feature、依赖、跨 Feature 契约和整体验收；子 Feature 只记录自己的需求、方案、计划和验证。新增、删除、合并或迁移 Feature 先走 Work Item 变更管理。
 
 ## 5. 执行检查
 

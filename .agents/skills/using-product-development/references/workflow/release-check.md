@@ -24,12 +24,13 @@
 
 ## 3. 检查输入
 
-发布对象必须明确为 Feature、分支、commit、PR、版本范围或发布变更清单。读取：
+发布对象必须明确为 Work Item、Feature、分支、commit、PR、版本范围或发布变更清单。多 Feature Work Item 必须先列出本次发布包含的 Feature，未纳入发布的 Feature 不能被默认为已交付。读取：
 
 - `.product-development/features/feature-<featureId>/state.md` 和 `change-log.md`；
 - 需求、方案和实施计划；
 - 当前 diff 和关键文件；
 - 验证矩阵和验证证据；
+- Work Item 的 Feature 清单、依赖、跨 Feature 契约和整体验收状态（如适用）；
 - 真实部署、监控、灰度和回滚配置。
 
 ## 4. 检查内容
@@ -42,6 +43,7 @@
 - 回滚触发条件、操作步骤和数据恢复方式是否明确；
 - 未验证项、剩余风险和负责人是否列出；
 - 发布、合入和风险接受是否已有人工确认。
+- 多 Feature 发布是否按依赖顺序、兼容契约和集成验证结果确定范围；
 
 ## 5. 输出
 
@@ -57,6 +59,8 @@
 - 建议：可以进入人工发布决策、暂不建议发布或无法判断。
 
 “可以进入人工发布决策”不等于 Agent 代替负责人批准发布。
+
+多 Feature Work Item 必须额外输出：已纳入发布的 Feature、延期或未纳入的 Feature、跨 Feature 契约验证结果以及总体验收缺口。单个 Feature 可以发布不等于整个 Work Item 可以发布。
 
 ## 6. 阶段停止
 

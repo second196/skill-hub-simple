@@ -6,7 +6,7 @@
 requirement -> design -> implementation -> review -> verification -> release-check -> documentation
 ```
 
-这是一条可回溯的生命周期，不是每个任务都必须完整经过的流水线。低风险修改可以直接进入实现；高风险或复杂任务应完整经过需求、方案、计划、实现、评审、验证和发布检查。
+这是一条可回溯的生命周期，不是每个任务都必须完整经过的流水线。低风险修改可以直接进入实现；高风险或复杂任务应完整经过需求、方案、计划、实现、评审、验证和发布检查。无论输入来自用户、文档还是对话，只要尚未绑定已确认的 Feature，都必须先完成 Work Item 分解；不能因为输入看起来像一篇完整文档就跳过拆分。
 
 `plan` 不是独立用户阶段，而是 `design` 阶段的必需子产物；任务级测试、实现者自检、规范检查和代码质量检查是 `implementation` 阶段的子步骤。
 
@@ -43,11 +43,13 @@ requirement -> design -> implementation -> review -> verification -> release-che
 
 每个阶段都必须按以下五个动作执行，阶段文件中的专属步骤是在此协议上展开：
 
-1. **入口确认**：确认用户意图、阶段、Feature、基线、授权和允许写入范围。
+1. **入口确认**：确认用户意图、阶段、Work Item、Feature、基线、授权和允许写入范围。
 2. **最小上下文读取**：读取规则、当前阶段产物、状态、变更记录、当前 diff 和任务所需源码；记录源码事实及证据路径。
 3. **执行本阶段动作**：只修改本阶段允许的产物；遇到跨阶段问题记录为阻塞，不越权解决。
 4. **出口检查**：按阶段检查表逐项给出 `pass`、`fail`、`not-run` 或 `unavailable`，不能用一句“已完成”替代。
 5. **状态固化和停止**：更新 `.product-development` 控制目录中的 `state.md`，必要时追加 `change-log.md`，报告结果并停止等待用户下一步。
+
+Work Item 和 Feature 的阶段状态分别维护。Work Item 的完成条件是所有必要 Feature、跨 Feature 契约和整体验收均完成；单个 Feature 完成不能自动推导 Work Item 完成。
 
 阶段状态只能前进或显式回退，不允许静默覆盖：
 

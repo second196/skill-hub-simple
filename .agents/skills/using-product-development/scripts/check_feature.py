@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""检查一个研发 Feature 的结构不变量。"""
+"""Validate the structural invariants of one Feature."""
 
 from __future__ import annotations
 
@@ -12,13 +12,33 @@ from pathlib import Path
 REQUIRED_STATE = (
     "current_phase",
     "feature",
+    "work_item",
+    "decomposition_status",
     "artifact_dir",
     "control_dir",
     "requirement_version",
     "design_version",
     "plan_version",
 )
-PHASES = {"requirement", "design", "implementation", "review", "verification", "release-check", "documentation"}
+PHASES = {
+    "requirement",
+    "design",
+    "implementation",
+    "review",
+    "verification",
+    "release-check",
+    "documentation",
+}
+DECOMPOSITION_STATUSES = {
+    "draft",
+    "confirmed",
+    "superseded",
+    "blocked",
+    "needs-confirmation",
+}
+REQUIREMENT_RE = re.compile(r"\brequirement-[a-z0-9]+(?:-[a-z0-9]+)*\b")
+LEGACY_REQUIREMENT_RE = re.compile(r"\bREQ-(?:[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)\b")
+NUMERIC_REQUIREMENT_RE = re.compile(r"\brequirement-\d+(?:-\d+)*\b")
 GENERIC_SLUGS = {"id", "req", "task", "new", "feature", "test", "todo"}
 
 
@@ -26,8 +46,12 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def field(text: str, name: str) -> str | None:
+    match = re.search(rf"^\s*{re.escape(name)}\s*:\s*([^\n\r]+)", text, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
 def default_control_dir(feature: Path) -> Path | None:
-    """根据默认正式产物路径推导流程控制目录。"""
     parts = feature.resolve().parts
     marker = ("docs", "product-development", "features")
     for index in range(len(parts) - len(marker) + 1):
@@ -37,91 +61,137 @@ def default_control_dir(feature: Path) -> Path | None:
     return None
 
 
+def default_work_item_dir(feature: Path, work_item: str) -> Path | None:
+    parts = feature.resolve().parts
+    marker = ("docs", "product-development", "features")
+    for index in range(len(parts) - len(marker) + 1):
+        if parts[index : index + len(marker)] == marker:
+            repo_root = Path(*parts[:index])
+            return repo_root / "docs" / "product-development" / "work-items" / work_item
+    return None
+
+
 def validate_feature_name(feature: Path) -> str | None:
-    """拒绝无法表达需求含义的 Feature 目录名。"""
     match = re.fullmatch(r"feature-([a-z0-9]+(?:-[a-z0-9]+)+)", feature.name, re.IGNORECASE)
     if not match:
-        return "Feature 目录必须使用 feature-<对象>-<动作> 格式"
+        return "Feature directory must use feature-<meaningful-object>-<action> format"
     slug = match.group(1).lower()
     tokens = slug.split("-")
     if all(token.isdigit() for token in tokens):
-        return "Feature 目录不能只有数字"
+        return "Feature directory cannot contain only numbers"
     if re.fullmatch(r"(?:req|task)-\d+", slug) or slug in {"new-feature", "test"}:
-        return "Feature 目录不能使用 REQ、Task、new-feature 或 test 作为唯一含义"
+        return "Feature directory cannot use a generic REQ, Task, new-feature, or test name"
     meaningful_tokens = [token for token in tokens if token not in GENERIC_SLUGS and not token.isdigit()]
     if len(meaningful_tokens) < 2:
-        return "Feature 目录至少要包含需求对象和动作两个有意义词"
+        return "Feature directory must contain meaningful object and action words"
     return None
+
+
+def validate_requirement_names(text: str, label: str, errors: list[str]) -> set[str]:
+    if LEGACY_REQUIREMENT_RE.search(text):
+        errors.append(f"{label} contains legacy REQ-* identifiers")
+    if NUMERIC_REQUIREMENT_RE.search(text):
+        errors.append(f"{label} contains numeric requirement identifiers")
+    return {
+        requirement_id
+        for requirement_id in REQUIREMENT_RE.findall(text)
+        if requirement_id not in {"requirement-id", "requirement-semantic-name"}
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("feature", type=Path, help="正式 Feature 产物目录")
-    parser.add_argument(
-        "--control-dir",
-        type=Path,
-        help="流程控制目录；默认从 docs/product-development/features 路径推导",
-    )
+    parser.add_argument("feature", type=Path, help="formal Feature artifact directory")
+    parser.add_argument("--control-dir", type=Path, help="Feature control directory")
+    parser.add_argument("--work-item-dir", type=Path, help="formal Work Item directory")
     parser.add_argument("--phase", choices=sorted(PHASES))
     args = parser.parse_args()
 
     feature = args.feature
-    control = args.control_dir or default_control_dir(feature)
     errors: list[str] = []
-    if control is None:
-        errors.append("无法从 Feature 路径推导控制目录，请使用 --control-dir")
-        return report(errors)
-    state = control / "state.md"
-
     if not feature.is_dir():
-        errors.append(f"Feature 目录不存在：{feature}")
-        return report(errors)
+        return report([f"Feature directory does not exist: {feature}"])
     name_error = validate_feature_name(feature)
     if name_error:
         errors.append(name_error)
 
+    control = args.control_dir or default_control_dir(feature)
+    if control is None:
+        errors.append("Cannot infer Feature control directory; use --control-dir")
+        return report(errors)
+    state = control / "state.md"
+    state_text = ""
     if not state.is_file():
-        errors.append("缺少 state.md")
+        errors.append("Missing Feature control file: state.md")
     else:
         state_text = read(state)
         for key in REQUIRED_STATE:
-            if not re.search(rf"^\s*{re.escape(key)}\s*:", state_text, re.MULTILINE):
-                errors.append(f"state.md 缺少字段：{key}")
-        phase_match = re.search(r"^\s*current_phase\s*:\s*([^\s]+)", state_text, re.MULTILINE)
-        if phase_match and phase_match.group(1) not in PHASES:
-            errors.append(f"未知的 current_phase：{phase_match.group(1)}")
+            if field(state_text, key) is None:
+                errors.append(f"state.md is missing field: {key}")
+        phase = field(state_text, "current_phase")
+        if phase and phase not in PHASES:
+            errors.append(f"Unknown current_phase: {phase}")
+        decomposition_status = field(state_text, "decomposition_status")
+        if decomposition_status and decomposition_status not in DECOMPOSITION_STATUSES:
+            errors.append(f"Unknown decomposition_status: {decomposition_status}")
+
+    work_item = field(state_text, "work_item")
+    work_item_dir = args.work_item_dir
+    if work_item and work_item_dir is None:
+        work_item_dir = default_work_item_dir(feature, work_item)
+    if not work_item:
+        errors.append("Feature must declare its Work Item in state.md")
+    if work_item_dir is None:
+        errors.append("Cannot infer Work Item directory; use --work-item-dir")
+    elif not (work_item_dir / "decomposition.md").is_file():
+        errors.append("Work Item is missing decomposition.md")
+    elif field(read(work_item_dir / "decomposition.md"), "decomposition_status") != "confirmed":
+        errors.append("Feature cannot enter a formal phase before Work Item decomposition is confirmed")
+    if work_item and work_item_dir is not None and work_item_dir.name != work_item:
+        errors.append("Feature state.md work_item does not match the selected Work Item directory")
+    state_feature = field(state_text, "feature")
+    if state_feature and state_feature != feature.name:
+        errors.append("Feature state.md feature does not match the selected Feature directory")
+
+    requirement_path = feature / "requirement.md"
+    requirement_ids: set[str] = set()
+    if requirement_path.is_file():
+        requirement_ids = validate_requirement_names(read(requirement_path), "requirement.md", errors)
+        if not requirement_ids:
+            errors.append("requirement.md must contain at least one semantic requirement-* identifier")
+    elif args.phase in {"requirement", "design", "implementation"}:
+        errors.append("Missing formal artifact: requirement.md")
 
     if args.phase == "requirement":
-        if not (feature / "requirement.md").is_file():
-            errors.append("需求阶段需要正式产物：requirement.md")
         if not (control / "change-log.md").is_file():
-            errors.append("需求阶段需要控制产物：change-log.md")
+            errors.append("Requirement phase requires change-log.md")
     if args.phase == "design":
         for name in ("requirement.md", "design.md", "implementation-plan.md"):
             if not (feature / name).is_file():
-                errors.append(f"方案阶段缺少正式产物：{name}")
+                errors.append(f"Design phase is missing formal artifact: {name}")
         if not (control / "change-log.md").is_file():
-            errors.append("方案阶段缺少控制产物：change-log.md")
-        design_path = feature / "design.md"
+            errors.append("Design phase requires change-log.md")
+        for name in ("design.md", "implementation-plan.md"):
+            path = feature / name
+            if path.is_file():
+                ids = validate_requirement_names(read(path), name, errors)
+                if requirement_ids and not requirement_ids.issubset(ids):
+                    errors.append(f"{name} does not reference every requirement-* from requirement.md")
         plan_path = feature / "implementation-plan.md"
-        if design_path.is_file():
-            design_text = read(design_path)
-            if "REQ-ID" not in design_text and "需求" not in design_text:
-                errors.append("design.md 不包含需求覆盖部分")
         if plan_path.is_file():
             plan_text = read(plan_path)
-            if "REQ-" not in plan_text and "REQ-ID" not in plan_text:
-                errors.append("implementation-plan.md 没有引用需求 ID")
+            if "Slice" not in plan_text and "slice" not in plan_text:
+                errors.append("implementation-plan.md must define implementation Slices")
             if re.search(r"(?im)^\s*(?:TODO|TBD)\s*[:：]", plan_text) or re.search(
                 r"(?i)\bimplement\s+later\b", plan_text
             ):
-                errors.append("implementation-plan.md 包含未处理的占位内容")
+                errors.append("implementation-plan.md contains unresolved placeholders")
     if args.phase == "implementation":
         for name in ("requirement.md", "design.md", "implementation-plan.md"):
             if not (feature / name).is_file():
-                errors.append(f"实现阶段缺少前置产物：{name}")
+                errors.append(f"Implementation phase is missing prerequisite: {name}")
         if not (control / "change-log.md").is_file():
-            errors.append("实现阶段缺少控制记录：change-log.md")
+            errors.append("Implementation phase requires change-log.md")
 
     return report(errors)
 
@@ -129,9 +199,9 @@ def main() -> int:
 def report(errors: list[str]) -> int:
     if errors:
         for error in errors:
-            print(f"错误：{error}")
+            print(f"ERROR: {error}")
         return 1
-    print("通过：Feature 结构不变量满足")
+    print("PASS: Feature structural invariants satisfied")
     return 0
 
 
