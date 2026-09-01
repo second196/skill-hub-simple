@@ -19,6 +19,7 @@ REQUIRED_FILES = (
     "references/shared/artifact-contracts.md",
     "references/shared/artifact-locations.md",
     "references/shared/work-item-contract.md",
+    "references/shared/test-feedback.md",
     "references/shared/specialized-route-loading.md",
     "references/methods/brainstorming.md",
     "references/methods/writing-plans.md",
@@ -65,6 +66,8 @@ def main() -> int:
         for required_phrase in ("Work Item", "requirement-*", "decomposition.md"):
             if required_phrase not in text:
                 errors.append(f"SKILL.md 缺少复杂需求治理规则：{required_phrase}")
+        if "test-feedback.md" not in text:
+            errors.append("SKILL.md 缺少测试反馈契约路由")
 
     for relative in REQUIRED_FILES[2:]:
         path = root / relative

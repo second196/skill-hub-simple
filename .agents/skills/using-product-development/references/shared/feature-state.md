@@ -25,6 +25,8 @@ requirement_version: v1
 design_version: n/a
 plan_version: n/a
 active_change: none
+last_test_result: not-run
+feedback_status: none
 
 ## Work Item 边界
 - work_item: work-<workItemId>
@@ -50,6 +52,14 @@ active_change: none
 - fail: none
 - not-run: ...
 - unavailable: none
+
+## 测试反馈索引
+- validation: validation-<meaningful-outcome> | none
+- feedback: feedback-<meaningful-finding> | none
+- classification: implementation-defect | design-defect | plan-defect | requirement-change | test-defect | environment-failure | flaky-or-timeout | none
+- source: validation-<meaningful-outcome> | none
+- affected_requirements: requirement-... | none
+- feedback_status: none | open | awaiting-confirmation | resolved | accepted-risk
 
 ## 本轮边界
 - allowed: ...
@@ -94,6 +104,7 @@ active_change: none
 - 当前活动变更、任务和阻塞；
 - 与当前任务有关的源码事实及来源；
 - 已执行、未执行、无法执行的验证；
+- 测试验证记录、失败归因和受影响的 `requirement-*`；
 - 下一次恢复所需的最小读取范围。
 
 如果状态文件与正式产物或工作区 diff 冲突，以可验证的工作区事实为准，暂停并修正状态；不得默默选择其中一个继续。

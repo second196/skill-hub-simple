@@ -65,8 +65,8 @@ Work Item（总需求）
 
 1. 所有文字输入先按 `decomposition.md` 提取事实、需求、建议、假设、来源和待确认项；输入来源不决定是否复杂。
 2. 需求有歧义或方案有多个路径时，按 `brainstorming.md` 逐问澄清，区分事实、假设、建议和待确认项。
-3. 进入方案阶段时，按 `writing-plans.md` 先核对源码事实，再把每个 `requirement-*` 拆为可独立验证的 Slice/Task；每个任务必须有文件、符号、逻辑、命令、预期结果和回滚方式。
-4. 进入实现阶段时，按 `executing-plans.md` 逐 Slice、逐任务执行；每个任务都要经历计划审查、必要的失败复现、最小修改、定向验证、规范检查和质量检查。
+3. 进入方案阶段时，按 `writing-plans.md` 和 `test-feedback.md` 先核对源码事实与可测试性，再把每个 `requirement-*` 拆为可独立验证的 Slice/Task；每个任务必须有文件、符号、逻辑、命令、预期结果和回滚方式。
+4. 进入实现阶段时，按 `executing-plans.md` 和 `test-feedback.md` 逐 Slice、逐任务执行；每个任务都要经历必要的失败复现、最小修改、定向验证、失败归因、规范检查和质量检查。
 5. 只有用户授权多 Agent 时，才按 `subagent-development.md` 派发隔离任务；实现者完成后必须依次通过规范符合性评审和代码质量评审。
 
 ## 4. Feature 闭环
@@ -74,6 +74,7 @@ Work Item（总需求）
 每个研发请求都必须先确定一个 Work Item。Work Item 可以只有一个 Feature，也可以包含多个 Feature。完整契约见：
 
 - `references/shared/work-item-contract.md`
+- `references/shared/test-feedback.md`
 - `references/workflow/decomposition.md`
 
 Work Item 总览和分解产物使用独立目录：
@@ -121,6 +122,7 @@ docs/product-development/features/feature-<featureId>/
 - `references/shared/artifact-contracts.md`
 - `references/shared/artifact-locations.md`
 - `references/shared/specialized-route-loading.md`
+- `references/shared/test-feedback.md`
 
 新建 Feature 时，先按 `references/shared/artifact-locations.md` 同时确认正式文档目录和流程控制目录，再创建最小状态包。不得因为目录不存在就凭经验创建另一套目录。
 

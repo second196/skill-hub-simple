@@ -4,6 +4,8 @@
 
 以下变化属于 Work Item 级范围变更，不能只改某个 Feature 的文档：新增或删除 Feature、迁移需求归属、改变 Feature 依赖、修改跨 Feature 契约、改变整体验收或把单 Feature 改为多 Feature。必须先更新总需求分解记录，明确受影响 Feature 和版本，再分别更新各 Feature 的基线。
 
+测试发现需求、设计或实施计划与实现不一致时，先按 `references/shared/test-feedback.md` 分类并记录证据，再决定回退阶段。不能直接修改断言、需求或设计来消除失败。
+
 ## 2. 基线
 
 用户确认后的 `requirement.md`、`design.md` 和 `implementation-plan.md` 是版本化基线。后续消息默认是增量变更，不表示授权重写全部历史产物。
@@ -18,6 +20,7 @@
 | `scope-change` | 停止并评估需求、方案、计划和验证影响 |
 | `design-change` | 用户确认后更新方案和计划 |
 | `documentation-correction` | 只改指定文档 |
+| `test-feedback` | 记录验证结果、失败归因和受影响基线 |
 
 ## 4. 控制目录中的 change-log.md
 

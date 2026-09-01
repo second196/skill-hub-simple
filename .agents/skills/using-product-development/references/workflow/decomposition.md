@@ -75,7 +75,7 @@ decomposition_status: draft | confirmed | superseded | blocked | needs-confirmat
 | --- | --- | --- | --- | --- |
 
 ## 需求映射
-| requirement-id | Feature | 来源证据 | 验收条件 | 状态 |
+| requirement-<semantic-name> | Feature | 来源证据 | 验收条件 | 状态 |
 | --- | --- | --- | --- | --- |
 
 ## 合并或拆分理由

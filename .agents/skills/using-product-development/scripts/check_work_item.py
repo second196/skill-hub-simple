@@ -34,6 +34,21 @@ def semantic_requirement_ids(text: str) -> set[str]:
     }
 
 
+def mapping_section(text: str) -> str:
+    match = re.search(r"(?ms)^##\s*需求映射\s*$\n(.*?)(?=^##\s|\Z)", text)
+    return match.group(1) if match else ""
+
+
+def requirement_mapping(text: str, feature_ids: set[str]) -> dict[str, set[str]]:
+    mapping: dict[str, set[str]] = {}
+    for line in mapping_section(text).splitlines():
+        requirements = set(REQUIREMENT_RE.findall(line))
+        features = set(FEATURE_RE.findall(line)) & feature_ids
+        for requirement_id in requirements:
+            mapping.setdefault(requirement_id, set()).update(features)
+    return mapping
+
+
 def repo_root(work_item: Path) -> Path | None:
     parts = work_item.resolve().parts
     marker = ("docs", "product-development", "work-items")
@@ -125,6 +140,9 @@ def main() -> int:
         errors.append("single-feature Work Item must list exactly one Feature")
     if scope_decision == "multi-feature" and len(feature_ids) < 2:
         errors.append("multi-feature Work Item must list at least two Features")
+    decomposition_feature_ids = set(FEATURE_RE.findall(decomposition_text))
+    if decomposition_feature_ids != feature_ids:
+        errors.append("decomposition.md Feature list does not match index.md")
     if decomposition_status == "confirmed":
         if field(decomposition_text, "confirmed_by") is None:
             errors.append("confirmed decomposition must declare confirmed_by")
@@ -132,8 +150,19 @@ def main() -> int:
             errors.append("confirmed decomposition must declare confirmed_at")
 
     requirement_ids = semantic_requirement_ids(decomposition_text)
-    if not requirement_ids:
-        errors.append("decomposition.md must contain semantic requirement-* mappings")
+    mapping = requirement_mapping(decomposition_text, feature_ids)
+    if not mapping:
+        errors.append("decomposition.md must contain a 需求映射 section with semantic requirement-* mappings")
+    else:
+        if set(mapping) != requirement_ids:
+            errors.append("decomposition.md requirement IDs must be declared in the 需求映射 table")
+        for requirement_id, owners in sorted(mapping.items()):
+            if not owners:
+                errors.append(f"Requirement {requirement_id} is not assigned to a listed Feature")
+            elif len(owners) > 1:
+                errors.append(f"Requirement {requirement_id} is assigned to multiple Features: {', '.join(sorted(owners))}")
+        if decomposition_status == "confirmed" and set().union(*mapping.values()) != feature_ids:
+            errors.append("Confirmed Work Item must assign at least one requirement to every Feature")
 
     root = repo_root(work_item)
     features_dir = args.features_dir

@@ -19,6 +19,8 @@ REQUIRED_STATE = (
     "requirement_version",
     "design_version",
     "plan_version",
+    "last_test_result",
+    "feedback_status",
 )
 PHASES = {
     "requirement",
@@ -37,9 +39,22 @@ DECOMPOSITION_STATUSES = {
     "needs-confirmation",
 }
 REQUIREMENT_RE = re.compile(r"\brequirement-[a-z0-9]+(?:-[a-z0-9]+)*\b")
+FEATURE_RE = re.compile(r"\bfeature-[a-z0-9]+(?:-[a-z0-9]+)+\b")
 LEGACY_REQUIREMENT_RE = re.compile(r"\bREQ-(?:[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)\b")
 NUMERIC_REQUIREMENT_RE = re.compile(r"\brequirement-\d+(?:-\d+)*\b")
 GENERIC_SLUGS = {"id", "req", "task", "new", "feature", "test", "todo"}
+TEST_RESULTS = {"not-run", "pass", "fail", "unavailable"}
+FEEDBACK_STATUSES = {"none", "open", "awaiting-confirmation", "resolved", "accepted-risk"}
+FEEDBACK_CLASSIFICATIONS = {
+    "implementation-defect",
+    "design-defect",
+    "plan-defect",
+    "requirement-change",
+    "test-defect",
+    "environment-failure",
+    "flaky-or-timeout",
+    "none",
+}
 
 
 def read(path: Path) -> str:
@@ -47,7 +62,7 @@ def read(path: Path) -> str:
 
 
 def field(text: str, name: str) -> str | None:
-    match = re.search(rf"^\s*{re.escape(name)}\s*:\s*([^\n\r]+)", text, re.MULTILINE)
+    match = re.search(rf"^\s*(?:-\s*)?{re.escape(name)}\s*:\s*([^\n\r]+)", text, re.MULTILINE)
     return match.group(1).strip() if match else None
 
 
@@ -99,6 +114,30 @@ def validate_requirement_names(text: str, label: str, errors: list[str]) -> set[
     }
 
 
+def mapped_requirements(decomposition_text: str, feature_id: str) -> set[str]:
+    match = re.search(r"(?ms)^##\s*需求映射\s*$\n(.*?)(?=^##\s|\Z)", decomposition_text)
+    if not match:
+        return set()
+    mapped: set[str] = set()
+    for line in match.group(1).splitlines():
+        if feature_id in FEATURE_RE.findall(line):
+            mapped.update(REQUIREMENT_RE.findall(line))
+    return mapped
+
+
+def validate_requirement_structure(text: str, errors: list[str]) -> None:
+    required_headings = (
+        "## 1. 版本修订记录",
+        "## 2. 需求来源",
+        "## 3. 功能描述",
+        "## 4. 非功能性需求",
+        "## 5. 需求评审记录",
+    )
+    for heading in required_headings:
+        if heading not in text:
+            errors.append(f"requirement.md is missing required heading: {heading}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("feature", type=Path, help="formal Feature artifact directory")
@@ -134,6 +173,21 @@ def main() -> int:
         decomposition_status = field(state_text, "decomposition_status")
         if decomposition_status and decomposition_status not in DECOMPOSITION_STATUSES:
             errors.append(f"Unknown decomposition_status: {decomposition_status}")
+        last_test_result = field(state_text, "last_test_result")
+        if last_test_result and last_test_result not in TEST_RESULTS:
+            errors.append(f"Unknown last_test_result: {last_test_result}")
+        feedback_status = field(state_text, "feedback_status")
+        if feedback_status and feedback_status not in FEEDBACK_STATUSES:
+            errors.append(f"Unknown feedback_status: {feedback_status}")
+        classification = field(state_text, "classification")
+        if classification and classification not in FEEDBACK_CLASSIFICATIONS:
+            errors.append(f"Unknown test feedback classification: {classification}")
+        if feedback_status and feedback_status != "none":
+            for key in ("feedback", "source", "classification", "affected_requirements"):
+                if field(state_text, key) in {None, "", "none"}:
+                    errors.append(f"Active test feedback is missing field: {key}")
+            if classification == "none":
+                errors.append("Active test feedback cannot use classification: none")
 
     work_item = field(state_text, "work_item")
     work_item_dir = args.work_item_dir
@@ -147,6 +201,9 @@ def main() -> int:
         errors.append("Work Item is missing decomposition.md")
     elif field(read(work_item_dir / "decomposition.md"), "decomposition_status") != "confirmed":
         errors.append("Feature cannot enter a formal phase before Work Item decomposition is confirmed")
+    decomposition_text = ""
+    if work_item_dir is not None and (work_item_dir / "decomposition.md").is_file():
+        decomposition_text = read(work_item_dir / "decomposition.md")
     if work_item and work_item_dir is not None and work_item_dir.name != work_item:
         errors.append("Feature state.md work_item does not match the selected Work Item directory")
     state_feature = field(state_text, "feature")
@@ -156,9 +213,20 @@ def main() -> int:
     requirement_path = feature / "requirement.md"
     requirement_ids: set[str] = set()
     if requirement_path.is_file():
-        requirement_ids = validate_requirement_names(read(requirement_path), "requirement.md", errors)
+        requirement_text = read(requirement_path)
+        requirement_ids = validate_requirement_names(requirement_text, "requirement.md", errors)
         if not requirement_ids:
             errors.append("requirement.md must contain at least one semantic requirement-* identifier")
+        validate_requirement_structure(requirement_text, errors)
+        if decomposition_text:
+            mapped_ids = mapped_requirements(decomposition_text, feature.name)
+            if mapped_ids and requirement_ids != mapped_ids:
+                missing = sorted(mapped_ids - requirement_ids)
+                extra = sorted(requirement_ids - mapped_ids)
+                if missing:
+                    errors.append("requirement.md is missing mapped requirement(s): " + ", ".join(missing))
+                if extra:
+                    errors.append("requirement.md contains requirements not mapped to this Feature: " + ", ".join(extra))
     elif args.phase in {"requirement", "design", "implementation"}:
         errors.append("Missing formal artifact: requirement.md")
 
@@ -177,11 +245,20 @@ def main() -> int:
                 ids = validate_requirement_names(read(path), name, errors)
                 if requirement_ids and not requirement_ids.issubset(ids):
                     errors.append(f"{name} does not reference every requirement-* from requirement.md")
+        design_path = feature / "design.md"
+        if design_path.is_file():
+            design_text = read(design_path)
+            if "可测试性" not in design_text and "验证策略" not in design_text:
+                errors.append("design.md is missing testability or validation strategy")
         plan_path = feature / "implementation-plan.md"
         if plan_path.is_file():
             plan_text = read(plan_path)
             if "Slice" not in plan_text and "slice" not in plan_text:
                 errors.append("implementation-plan.md must define implementation Slices")
+            if "测试" not in plan_text and "替代验证" not in plan_text:
+                errors.append("implementation-plan.md is missing test or alternative validation strategy")
+            if "预期结果" not in plan_text and "expected" not in plan_text:
+                errors.append("implementation-plan.md is missing expected validation results")
             if re.search(r"(?im)^\s*(?:TODO|TBD)\s*[:：]", plan_text) or re.search(
                 r"(?i)\bimplement\s+later\b", plan_text
             ):
