@@ -31,7 +31,7 @@ Work Item（总需求）
 4. 研发任务读取 `references/collaboration/stage-entry.md`，识别唯一阶段。
 5. 尚未确定 Work Item 或 Feature 时，先在 `requirement` 阶段执行 `references/workflow/decomposition.md`；不得因输入来自单个文件、调研材料或用户指定标题而默认只有一个 Feature。
 6. 已指定 Feature 时，读取 `references/shared/feature-state.md`、`references/shared/artifact-locations.md`，再读取正式产物目录和 `.product-development` 控制目录中的 `state.md`；不得依赖旧聊天记忆恢复状态。
-7. 读取当前阶段文件以及该阶段明确要求的方法文件，不读取无关阶段。
+  7. 读取当前阶段文件以及该阶段明确要求的方法文件，不读取无关阶段。进入 `design` 时额外读取 `references/workflow/design-baselines.md`，检查架构和实施标准基线。
 8. 如果发现 `state.md` 不存在或与当前工作区不一致，先进入恢复/校正动作，不直接继续执行。
 
 每轮开始时必须先向用户报告：当前阶段、Work Item、Feature、已读取的规则、允许修改范围和本轮出口证据。没有这些信息时，不得开始写文件或改代码。
@@ -41,7 +41,7 @@ Work Item（总需求）
 | 阶段 | 用户意图 | 必读文件 |
 | --- | --- | --- |
 | `requirement` | 分解、整理、澄清、确认需求 | `references/workflow/requirement.md`、`references/workflow/decomposition.md` |
-| `design` | 技术方案、影响面、实施计划 | `references/workflow/design.md` |
+| `design` | 技术方案、影响面、实施计划 | `references/workflow/design.md`、`references/workflow/design-baselines.md` |
 | `implementation` | 实现、修复、重构、补测试 | `references/workflow/implementation.md` |
 | `review` | 只读评审需求、方案、计划、代码或证据 | `references/workflow/review.md` |
 | `verification` | 测试、构建、验证矩阵、回归检查 | `references/workflow/verification.md` |
@@ -58,6 +58,7 @@ Work Item（总需求）
 - `references/methods/writing-plans.md`：可执行实施计划编写。
 - `references/methods/executing-plans.md`：计划审查、逐任务实现和检查点。
 - `references/methods/subagent-development.md`：隔离任务包、实现者和双阶段评审。
+- `references/workflow/design-baselines.md`：设计阶段架构和实施标准基线检查及缺失文档引导。
 
 阶段文件决定何时使用方法、使用哪些步骤以及何时停止。方法不得改变阶段、文档落位、写入权限和人工确认门禁。
 

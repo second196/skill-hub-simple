@@ -11,7 +11,7 @@
 | 阶段 | 必需输入 | 默认产物 | 写入确认 | 完成检查 |
 | --- | --- | --- | --- | --- |
 | `requirement` | 原始需求、需求规范 | 正式 `requirement.md`；控制 `state.md`、`change-log.md` | 需求口径和路径 | 原子需求、范围、验收、待确认项 |
-| `design` | 已确认需求、源码事实 | 正式 `design.md`、`implementation-plan.md`；控制 `state.md`、`change-log.md` | 方案与计划 | 双产物、覆盖矩阵、可行性、验证任务 |
+| `design` | 已确认需求、源码事实、架构基线、实施标准 | 正式 `design.md`、`implementation-plan.md`；控制 `state.md`、`change-log.md` | 方案、计划与基线 | 双产物、覆盖矩阵、可行性、验证任务、基线引用 |
 | `implementation` | 需求、方案、计划、状态、测试契约 | 源码、测试、配置；控制 `state.md`，必要时 `change-log.md` | 实现范围和风险 | 逐任务测试/验证结果、失败归因、无计划外偏离 |
 | `review` | 评审对象和标准 | 对话结论或授权记录 | 仅记录文件时 | 问题优先、证据、严重级别 |
 | `verification` | 验证对象、真实命令、测试反馈和已有证据 | 证据或授权 `verification.md` | 仅记录文件时 | 通过/失败/未执行/无法执行、独立性 |

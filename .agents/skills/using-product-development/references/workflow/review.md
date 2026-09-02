@@ -81,6 +81,8 @@
 
 - 是否覆盖每条需求；
 - 架构、模块、接口、类型、数据和状态是否一致；
+- 是否读取并正确引用 `docs/product-development/architecture/` 下相关架构基线和 `docs/product-development/standards/implementation/` 下相关实施标准；
+- 基线文档的版本、适用范围、设计引用和计划引用是否一致；
 - 调用链、异常、重试、权限、性能和兼容性是否合理；
 - 备选方案和取舍是否有依据；
 - 方案是否与真实源码和脚本相符；

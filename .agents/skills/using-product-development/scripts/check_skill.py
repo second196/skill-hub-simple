@@ -29,6 +29,7 @@ REQUIRED_FILES = (
     "references/workflow/decomposition.md",
     "references/workflow/requirement.md",
     "references/workflow/design.md",
+    "references/workflow/design-baselines.md",
     "references/workflow/implementation.md",
     "references/workflow/review.md",
     "references/workflow/verification.md",
@@ -36,6 +37,7 @@ REQUIRED_FILES = (
     "references/workflow/documentation.md",
     "scripts/check_feature.py",
     "scripts/check_work_item.py",
+    "scripts/check_design_baselines.py",
 )
 
 
@@ -68,6 +70,8 @@ def main() -> int:
                 errors.append(f"SKILL.md 缺少复杂需求治理规则：{required_phrase}")
         if "test-feedback.md" not in text:
             errors.append("SKILL.md 缺少测试反馈契约路由")
+        if "design-baselines.md" not in text:
+            errors.append("SKILL.md 缺少设计基线文档路由")
 
     for relative in REQUIRED_FILES[2:]:
         path = root / relative

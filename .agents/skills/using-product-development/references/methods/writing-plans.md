@@ -11,6 +11,7 @@
 - 已确认的 `design.md`；
 - `.product-development` 控制目录中 `state.md` 的源码事实地图和决策；
 - 相关源码、类型、入口、测试和真实验证脚本；
+- `references/workflow/design-baselines.md` 要求的架构文档和实施标准；
 - `references/shared/test-feedback.md` 中的测试义务、验证记录格式和失败归因规则；
 - 控制目录中 `change-log.md` 的已批准有效变更。
 
@@ -64,6 +65,7 @@ Slice：slice-<meaningful-result>
 - 每个需求是否至少对应一个任务，或明确说明无需代码任务；
 - 需求覆盖矩阵和任务中的 ID、类型、方法名是否一致；
 - 文件路径、符号、字段和签名是否前后一致；
+- 每个任务是否遵循并引用适用的实施标准；
 - 是否包含正常、异常、边界、兼容和验证任务；
 - 每个有用户可观察行为的 Slice 是否有自动化测试或有理由的替代验证；
 - 测试预期是否直接来自已确认需求和设计，而不是实现细节；
