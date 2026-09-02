@@ -111,3 +111,17 @@
 - Approval status: approved for draft baseline correction; baseline confirmation pending
 - Verification status: not-run
 - Replacement relation: supersedes the JDK 21 and OAuth2-related assumptions in CR-007
+
+## CR-009
+
+- Date: 2026-09-02
+- User confirmation: 采用《阿里巴巴 Java 开发手册》嵩山版，并确认 JDK 8、Spring Boot 2.7.18、Spring MVC 5.3.31、Spring Security 5.7.11、MyBatis-Plus 3.5.5、PostgreSQL 15、Redis Streams、Vue 3、TypeScript、账户密码和服务端 Session 基线；确认四份 draft 基线可作为设计输入。
+- Type: design-baseline-confirmation-and-redesign
+- Reason: 解除设计基线阻塞，重新形成可供用户评审的资产与发布治理设计双产物。
+- Affected requirements: all requirements in `requirement.md`
+- Affected design: replace invalid v1 draft with `design.md` v2
+- Affected tasks: replace invalid v1 draft with `implementation-plan.md` v2
+- Code scope: none; greenfield design only
+- Approval status: baseline confirmed; design and plan confirmation pending
+- Verification status: not-run
+- Replacement relation: supersedes CR-003 through CR-008 as the active design handoff for this Feature

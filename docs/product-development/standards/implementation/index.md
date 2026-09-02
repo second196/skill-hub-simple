@@ -16,7 +16,7 @@ sourceType: manual
 | 基线版本 | v0.3-draft |
 | --- | --- |
 | 技术栈依据 | iflytek SkillHub 调研事实与 `kmplm-development-process` 实施规范 |
-| 确认状态 | draft，具体组件版本、供应链和部署参数待确认 |
+| 确认状态 | draft，用户已确认本入口和当前 Java/Vue/TypeScript/PostgreSQL 实施约束作为设计输入；组件库、供应链和部署参数待确认 |
 
 ## 推荐阅读顺序
 

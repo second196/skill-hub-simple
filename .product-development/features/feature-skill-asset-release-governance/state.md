@@ -7,15 +7,15 @@ artifact_dir: docs/product-development/features/feature-skill-asset-release-gove
 control_dir: .product-development/features/feature-skill-asset-release-governance
 current_phase: design
 requirement_status: draft
-design_status: blocked
+design_status: draft
 implementation_status: not-started
 review_status: not-requested
 verification_status: not-requested
 release_check_status: not-requested
 requirement_version: v1
-design_version: v1
-plan_version: v1
-active_change: CR-008
+design_version: v2
+plan_version: v2
+active_change: CR-009
 last_test_result: not-run
 feedback_status: none
 
@@ -34,6 +34,7 @@ feedback_status: none
 - Design uses an independent governance domain with optional iflytek capability adapters; gray traffic execution and runtime rollback remain downstream responsibilities.
 - PostgreSQL 15 is the authoritative transaction database; PostgreSQL-specific types and indexes must be used in the database baseline.
 - JDK 8 is mandatory; all selected versions must be Java 8 compatible. The current baseline uses Spring Boot 2.7.18, Spring MVC 5.3.31, Spring Security 5.7.11, MyBatis-Plus 3.5.5, PostgreSQL JDBC 42.2.27, Flyway 8.5.13, Redis 6.2.14, OpenTelemetry Java 1.32.0, Micrometer 1.10.13, Docker Compose 2.24.6, Kubernetes 1.28.15 and Helm 3.14.4. Authentication is account/password plus server session only.
+- 《阿里巴巴 Java 开发手册》采用嵩山版；用户已确认 v0.4-draft 后端、v0.3-draft 前端、v0.3-draft 实施规范入口和 v0.4-draft 数据库规范作为设计输入，并允许容量、备份等参数保留待确认。数据库随后仅做了支持本 Feature 的最小 v0.5-draft 增量，仍保持 draft 状态。
 
 ## Source Map
 
@@ -48,11 +49,11 @@ feedback_status: none
 
 ## Design Baseline Check
 
-- status: blocked
-- present: `docs/product-development/architecture/index.md`, `backend-architecture.md` v0.4-draft, `frontend-architecture.md` v0.3-draft, `docs/product-development/standards/implementation/index.md` v0.3-draft, `database-design.md` v0.4-draft, `java-best-practices.md`, `component-standard.md`, `typescript-best-practices.md`, `typescript-doc-style-guide.md`.
-- status: still blocked; architecture and implementation baselines are drafts and require user confirmation before formal design.
+- status: pass
+- present: `docs/product-development/architecture/index.md`, `backend-architecture.md` v0.4-draft, `frontend-architecture.md` v0.3-draft, `docs/product-development/standards/implementation/index.md` v0.3-draft, `database-design.md` v0.5-draft, `java-best-practices.md` (嵩山版), `component-standard.md`, `typescript-best-practices.md`, `typescript-doc-style-guide.md`.
+- status: pass after user confirmation on 2026-09-02; the baselines remain draft documents but are valid inputs for this Feature design.
 - impact: the Feature affects backend governance, frontend governance console, PostgreSQL 15 persistence and cross-Feature contracts; all relevant baseline paths are now present.
-- rule: do not use draft baselines as confirmed design input; database model must follow `database-design.md` after its scope and assumptions are confirmed.
+- rule: design must cite the confirmed draft versions and keep capacity, backup, RPO/RTO, storage products and formal package name as explicit pending items.
 
 ## Task Progress
 
@@ -61,8 +62,9 @@ feedback_status: none
 - [x] Create draft backend and frontend architecture baselines.
 - [x] Create draft architecture and implementation standard entry points.
 - [x] Create SKILL HUB database design draft.
-- [ ] Confirm architecture and implementation baseline versions and applicability.
-- [ ] Re-enter formal design after baseline confirmation.
+- [x] Confirm architecture and implementation baseline versions and applicability.
+- [x] Re-enter design and implementation planning using the confirmed baseline.
+- [ ] Obtain user confirmation of design v2 and implementation plan v2.
 
 ## Verification Status
 
@@ -78,4 +80,4 @@ feedback_status: none
 
 ## Blockers and Handoff
 
-- Formal design is blocked because required architecture and implementation baselines are still drafts and require user confirmation; current design and plan are invalid drafts and cannot be used for implementation.
+- Design v2 and implementation plan v2 are drafted and await user confirmation. Implementation, review, verification and release-check remain forbidden in this turn.

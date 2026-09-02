@@ -25,7 +25,7 @@ sourceType: manual
 | 路由 | Vue Router |
 | 状态管理 | Pinia |
 | 维护责任 | product-development |
-| 确认状态 | draft，Vue 3 选型和账户密码登录已确认；iflytek SkillHub 的 React 19 作为对比参考，实施标准待确认 |
+| 确认状态 | draft，用户已确认 Vue 3、TypeScript、Vite、Vue Router、Pinia、账户密码登录和本文件作为设计输入；组件库、浏览器、性能和发布参数待确认 |
 
 本文件是治理控制台的架构基线，不是现有页面或组件清单。当前仓库没有前端源码、构建文件、路由或测试入口。
 

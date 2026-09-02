@@ -1,367 +1,459 @@
 ---
-title: Skill 资产与发布治理方案
-description: Skill 资产登记、不可变版本、授权发布、发布门禁、审计和数据保留的技术设计
+title: Skill 资产与发布治理设计
+description: Skill 资产登记、不可变版本、授权发布、门禁、审计和数据保留的详细技术设计
 audience:
   - product-development
 owner: product-development
 status: draft
-lastReviewed: 2026-09-01
+lastReviewed: 2026-09-02
 sourceType: manual
 ---
 
 # 方案：Skill 资产与发布治理
 
-> 状态：无效草稿。设计阶段基线检查未通过；在架构基线和实施标准确认前，本文件不得作为正式设计依据。
-
-## 0. 基线阻塞说明
-
-本仓库当前缺少设计阶段要求的架构和实施标准基线。本文件此前形成的方案内容仅保留为讨论草稿，不能据此进入实现、评审、验证或发布检查。
+> 设计版本：v2。本文已依据用户确认的架构与实施基线形成，需在进入 implementation 前再次确认方案、风险和实施计划。
 
 ## 1. 目标与非目标
 
 ### 1.1 目标
 
-为公司内部 Skill 建立一个可追溯的治理控制面，形成以下闭环：
+为公司内部 Skill 建立可追溯的治理控制面，完成：
 
 ```text
-导入/注册 -> 完整性检查 -> 不可变版本 -> 候选门禁
--> 审核/自动决策 -> 公司/项目/环境发布绑定 -> 下线/撤回
+注册/导入 -> 完整性检查 -> 不可变版本 -> 证据门禁
+-> 审核/发布决策 -> 公司/项目/环境绑定 -> 灰度观察/下线/撤回
 ```
 
-平台必须能够回答：某个 Skill 从哪里来、当前有哪些版本、哪个版本在哪个授权范围生效、发布依据是什么、谁做了什么操作，以及策略何时生效。
+系统必须能回答：资产从哪里来、某个版本的内容摘要是什么、是否完整、在哪些授权范围生效、发布依据和策略版本是什么、谁执行了操作，以及失败发生在哪个阶段。
 
 ### 1.2 非目标
 
-- 不实现 Agent runtime 执行、Skill 安装或安装失败回退。
-- 不实现运行时 Tracker、Agent Trace 或生产调用采集。
-- 不实现评测 Runner、判定器或 Skill 内容自动生成。
-- 不把 iflytek SkillHub 直接作为目标产品的完整后端，也不在本 Feature 引入 SaaS 多租户。
-- 不规定当前仓库不存在的具体数据库、云厂商、部署平台或编程语言实现。
+- 不实现 Agent runtime 执行、Skill 安装、安装失败回退或实际流量调度。
+- 不实现 Tracker、原始运行事件摄入、Trace/指标计算或评测 Runner。
+- 不实现静态扫描器、评测引擎、Finding 生成或 Skill 内容自动生成；本 Feature 只接收并校验证据。
+- 不建设 SaaS 多租户，不替代公司统一身份、日志、APM 或对象存储平台。
+- 不使用 OAuth2、统一单点登录、CLI Device Flow 或 API Token；首期只支持账户密码登录和服务端 Session。
 
 ## 2. 需求依据与版本
 
-- 需求基线：`requirement.md` v1。
-- Work Item 分解：`docs/product-development/work-items/work-skill-hub-platform/decomposition.md`。
-- 调研依据：`docs/research/skill-hub-research.md` 第 3.1、4.3、5.1、6.2、6.4、7.3、8.1 节。
-- 设计版本：v1。
-- 计划版本：v1。
-
-已确认的产品决策：首期为公司私有化部署；首期运行时为 Codex CLI、VS Code/Cursor/Windsurf 扩展和 Claude Code OTLP，运行时矩阵可配置；发布、灰度、回退和保留策略可按公司、项目、环境配置并版本化审计。
-
-## 3. 源码现状和影响范围
-
-### 3.1 源码事实
-
-当前仓库没有 `src`、业务服务、数据库模型、API、构建脚本或测试入口；现有内容是产品调研、需求和研发治理文档。因此本方案是 greenfield 目标设计，下面的模块和文件均为实施阶段拟创建的目标结构，不是现有实现事实。
-
-### 3.2 影响范围
-
-本 Feature 新增治理控制面，向其他 Feature 提供以下稳定结果：
-
-| 消费方 | 本 Feature 提供 | 消费方负责 |
+| 依据 | 版本/范围 | 用途 |
 | --- | --- | --- |
-| 安装与回退 | 已发布版本、发布绑定、可安装状态、撤回通知、灰度/回退策略 | 下载、安装、切换、实例停用和实际回退 |
-| 运行时观测 | `skill_id`、`version_digest`、发布范围和策略上下文 | 采集调用、统计灰度调用和质量证据 |
-| 评测与持续演进 | 版本、内容摘要、门禁证据关联点 | 评测执行、报告生成、Finding 和候选版本 |
+| `docs/product-development/features/feature-skill-asset-release-governance/requirement.md` | v1 | 本 Feature 的 9 条确认需求 |
+| `docs/product-development/work-items/work-skill-hub-platform/decomposition.md` | confirmed | Feature 边界、跨 Feature 契约和需求映射 |
+| `docs/research/skill-hub-research.md` | 3.1、4.3、5.1、6.2、6.4、7.3、8.1 | Registry、审核、扫描、发布和保留的调研事实 |
+| `.product-development/features/feature-skill-asset-release-governance/state.md` | CR-008 后 | 当前阶段、确认决策和 greenfield 事实 |
 
-跨 Feature 的核心约束是：任何运行、安装或评测关联都必须引用不可变的 `version_digest`，不能用 `latest` 补齐缺失版本。
+设计版本和实施计划版本均为 v2。跨 Feature 关联统一使用不可变 `version_digest`；缺失关联必须显式标记，禁止用 `latest` 补齐。
 
-## 4. 方案概览
+## 3. 架构和实施基线
 
-采用“独立治理域 + 上游能力适配器”的架构。
+### 3.1 已确认基线
 
-```text
-                    +---------------------------+
-                    | Governance API / Console  |
-                    +-------------+-------------+
-                                  |
-                    +-------------v-------------+
-                    | Asset Governance Service  |
-                    | registry/catalog/gate      |
-                    | release/audit/retention    |
-                    +--+----------+----------+---+
-                       |          |          |
-             +---------v--+ +-----v-----+ +--v-------------+
-             | Authoritative| | Immutable | | Search/Query  |
-             | metadata DB  | | artifact  | | index         |
-             +--------------+ | storage   | +---------------+
-                              +-----------+
-                       ^             ^
-                       |             |
-              iflytek adapter   Evaluation/Runtime contracts
-```
+| 类型 | 文档 | 版本/状态 | 本方案约束 |
+| --- | --- | --- | --- |
+| 后端架构 | `docs/product-development/architecture/backend-architecture.md` | v0.4-draft，用户已确认 | JDK 8、Spring Boot 2.7.18 模块化单体、Spring MVC 5.3.31、Spring Security 5.7.11、MyBatis-Plus 3.5.5、分层目录 |
+| 前端架构 | `docs/product-development/architecture/frontend-architecture.md` | v0.3-draft，用户已确认 | Vue 3、TypeScript、Vite、Vue Router、Pinia、Feature 模块化 |
+| 实施规范入口 | `docs/product-development/standards/implementation/index.md` | v0.3-draft，用户已确认 | 按 Feature 影响范围读取 Java、Vue 组件、TypeScript、数据库规范 |
+| 数据库规范 | `docs/product-development/standards/implementation/database-design.md` | v0.5-draft，由 v0.4 补充导入留痕和灰度状态 | PostgreSQL 15、MyBatis-Plus、Flyway、追加式审计、版本化策略 |
+| Java 规范 | `docs/product-development/standards/implementation/java-best-practices.md` | active，嵩山版 | Controller/Service/Mapper 分层、明确类型、异常分层、事务和命名约束 |
+| Vue 组件规范 | `docs/product-development/standards/implementation/component-standard.md` | active | 单一职责、明确 Props/Emits、状态最小化、分页和可访问性 |
+| TypeScript 规范 | `docs/product-development/standards/implementation/typescript-best-practices.md` | active | 精确类型、外部输入先校验、禁止无界 `any`、异步失败语义明确 |
+| TypeScript 注释规范 | `docs/product-development/standards/implementation/typescript-doc-style-guide.md` | active | 公共类型和接口使用结构化文档注释 |
 
-逻辑上的权威数据由治理域持有。iflytek SkillHub 的 Registry、版本、namespace、审核、RBAC、CLI 分发和静态扫描能力作为可替换适配器候选；适配器不得绕过本系统的版本摘要、范围绑定、策略版本和审计记录。
+数据库规范从 v0.4-draft 补充为 v0.5-draft，是本 Feature 设计所需的最小增量：新增 `skill_import_attempt`，并将 `PENDING_GRAY` 纳入发布决策状态。容量、对象存储、分析存储、备份、RPO/RTO 和灾备仍是待确认项，不能作为已验证事实。
 
-## 5. 模块和职责边界
+### 3.2 技术边界
 
-| 模块 | 职责 | 不负责 |
-| --- | --- | --- |
-| Asset Registry | 注册/导入、来源追踪、内容清单、导入失败记录 | 生成或修改 Skill 内容 |
-| Version Service | 创建内容版本、计算摘要、差异查询、生命周期状态 | 原地更新历史版本 |
-| Catalog Service | 授权范围内搜索、筛选、详情和关联信息 | 越权显示资产 |
-| Release Scope Service | 公司/项目/环境绑定、当前版本解析、发布范围查询 | 实际流量分配 |
-| Gate Service | 收集证据、校验门禁、生成发布决策 | 执行评测和扫描本身 |
-| Policy Service | 发布、灰度、回退、审批和保留策略的版本管理 | 无审计地修改生效策略 |
-| Governance Service | RBAC、范围授权、审批人分离、机器主体控制 | 替代组织身份系统 |
-| Audit Service | 记录关键操作和状态变化，提供还原查询 | 删除永久审计数据 |
-| Retention Service | 计算策略和生效范围，向数据域提供执行契约 | 代替运行观测域删除原始事件 |
+- PostgreSQL 15 是治理元数据和事务状态的权威来源；时间使用 `TIMESTAMP(3) WITH TIME ZONE`，结构化扩展使用 `JSONB`。
+- Skill 制品、来源快照和大型报告进入不可变对象存储，数据库只保存 URI、媒体类型、大小和摘要。
+- 目录搜索使用可由 PostgreSQL 重建的派生索引；搜索索引没有状态写权限。
+- Redis 6.2.14 Streams 通过 Outbox 投递跨 Feature 事件；事件消费必须幂等、可重试且可观察。
+- 平台内部观测使用 OpenTelemetry Java 1.32.0、Micrometer 1.10.13、SLF4J 1.7.36 和 Logback 1.2.13，不把用户 Agent 运行观测混入本 Feature。
+- 前端只消费后端契约，不能在浏览器决定权限、门禁、版本不可变性或默认发布版本。
 
-## 6. 接口、类型和数据结构
+## 4. 源码现状和影响范围
 
-以下是领域契约，不是对不存在代码的事实描述。实施时应以契约测试固定字段语义。
+当前仓库没有业务 `src`、构建文件、API、数据库迁移、对象存储适配器或测试入口。以下文件和符号均是实施阶段拟创建的 greenfield 目标，不是现有代码事实。首个实施 Slice 必须先创建工程骨架和真实测试入口。
 
-### 6.1 资产和版本
+### 4.1 影响范围
 
-```text
-SkillAsset
-  asset_id: stable identifier
-  name, description, labels
-  source_type, source_locator
-  license: known | unknown | missing
-  dependencies: declared list
-  runtime_matrix: runtime, version constraint, support status
-  content_manifest: required/optional content and read status
-  owner_scope
-
-SkillVersion
-  version_id: stable identifier
-  asset_id
-  version_label: display version
-  version_digest: immutable content identity
-  source_snapshot: immutable source reference
-  metadata_check: passed | failed | incomplete
-  lifecycle_state
-  created_by, created_at
-```
-
-`version_digest` 必须由规范化后的 Skill 制品和必要元数据计算，创建后不可变。显示版本号可以重复出现在不同资产中，但不能替代 `version_digest`。
-
-### 6.2 发布、门禁和策略
-
-```text
-ReleaseBinding
-  binding_id, asset_id, version_digest
-  scope_type: company | project | environment
-  scope_id
-  binding_state: active | offline | emergency_revoked
-  effective_at, released_at
-  policy_version, decision_id
-
-GateEvidence
-  evidence_id, version_digest
-  evidence_type: static_scan | evaluation | risk | review | gray_observation
-  result: pass | fail | incomplete | expired
-  evidence_locator, evidence_digest
-  generated_at, expires_at
-  producer_type: human | service
-
-ReleasePolicyVersion
-  scope_type, scope_id, version, effective_at
-  required_evidence_types
-  minimum_valid_cases: default 30
-  auto_release_conditions
-  gray_ratio: default 10%
-  observation_window: default 24h
-  minimum_valid_calls: default 30
-  rollback_conditions
-  approval_rules
-```
-
-发布决策必须保存命中的策略版本、全部门禁结果、审批信息和目标范围。证据过期、摘要不匹配、策略版本不存在或条件无法判断时，决策为阻断。
-
-### 6.3 权限、审计和保留
-
-```text
-AuditRecord
-  audit_id, actor_id, actor_type: human | service
-  action, object_type, object_id
-  before_state, after_state, reason
-  effective_scope, policy_version, occurred_at
-
-RetentionPolicyVersion
-  policy_id, scope_type, scope_id, version, effective_at
-  data_class: artifact | immutable_version | evaluation_report
-            | release_decision | audit | raw_runtime_event
-            | metric_aggregate
-  retention: permanent | duration
-  approved_by, created_at
-```
-
-默认保留值为：制品、不可变版本、评测报告、发布决策和审计永久保留；原始运行事件保留 365 天；聚合指标永久保留。原始运行事件和聚合指标由运行观测 Feature 实际存储，但必须消费本 Feature 的保留策略契约。
-
-## 7. 数据流和状态变化
-
-### 7.1 资产导入到候选
-
-```text
-注册请求
- -> 身份/范围授权
- -> 读取来源和必要内容
- -> 保存不可变制品与内容清单
- -> 完整性检查
- -> 创建 draft 版本
- -> 创建新内容时进入 candidate
-```
-
-来源不可访问、内容无法读取或缺少必要内容时，保存失败结果和原因，但不创建可发布候选。未知元数据保持 `unknown` 或 `missing`，不由平台猜测。
-
-### 7.2 候选到发布
-
-```text
-candidate
- -> 收集静态扫描/评测/风险/审核证据
- -> 按生效中的 ReleasePolicyVersion 计算门禁
- -> auto_release 或 manual_approval
- -> 创建 ReleaseBinding
- -> published
-```
-
-默认自动发布只适用于低风险白名单候选，并且必须满足：无高危或严重安全问题、无权限或外部写操作变化、无新运行时兼容性变化、有效评测案例不少于 30 个、回归结果和有效评分不低于基线。其他候选必须进入人工审批。
-
-### 7.3 生命周期状态机
-
-```text
-draft -> candidate -> published -> offline -> deprecated
-                         |             |
-                         +-> emergency_revoked
-```
-
-门禁失败的候选保持 `candidate`，同时记录阻断原因，不产生 `published` 绑定。普通下线默认阻止新增安装；已安装实例的停用由安装与回退 Feature 执行。紧急撤回可以从 `published` 进入 `emergency_revoked`，并向安装 Feature 发送带范围和原因的撤回事件。`offline`、`emergency_revoked` 和 `deprecated` 版本不能作为默认安装版本。
-
-同一范围的当前绑定更新必须具有幂等键（版本摘要、范围、决策 ID）。重复请求返回原决策，不生成第二条有效绑定。
-
-## 8. 正常流程
-
-1. 贡献者在授权范围内提交来源定位和 Skill 内容。
-2. Registry 校验来源、必要文件和内容可读性，生成制品清单和内容摘要。
-3. 系统创建草稿版本；内容发生变化时创建新的候选版本，历史版本保持只读。
-4. 目录建立可搜索索引，并展示完整性检查、来源、依赖、运行时矩阵和版本差异。
-5. 评测与扫描服务回写带版本摘要的证据，审核人查看风险和差异。
-6. Gate Service 固化当时生效的策略版本，计算自动发布或人工审批路径。
-7. 发布服务在授权公司/项目/环境创建绑定，并记录当前版本、生效时间和决策。
-8. 安装与回退 Feature 读取 `published` 绑定，运行观测和评测 Feature 继续回写证据。
-
-## 9. 异常、超时、重试和部分失败
-
-| 场景 | 处理 |
+| 影响层 | 目标范围 |
 | --- | --- |
-| 来源不可读 | 导入失败，返回可定位原因，不创建可发布版本 |
-| 必要内容缺失 | 创建失败结果或不可发布草稿，不允许进入门禁通过状态 |
-| 证据缺失/过期 | 发布阻断，列出缺失证据和有效期 |
-| 扫描或评测失败 | 候选保持不可发布，保存失败结果，不伪造通过证据 |
-| 策略不可用 | 默认阻断发布；不回退到隐式默认放行 |
-| 审批超时 | 候选保持原状态，不自动发布 |
-| 发布绑定重复请求 | 以幂等键返回原结果，不重复变更状态 |
-| 单个范围发布失败 | 保留已成功范围的审计结果，失败范围不生成 active 绑定，并返回逐范围结果 |
-| 紧急撤回部分失败 | 先阻断新增安装，记录逐范围停用结果；存量停用由下游补偿并持续审计 |
-| 保留策略缩短失败 | 不删除数据，保留旧策略并记录失败原因 |
+| 后端 | 资产、版本、目录、发布、门禁、策略、权限、审计、保留和外部适配器 |
+| 前端 | 资产目录、资产/版本详情、发布门禁、范围绑定、策略和审计控制台 |
+| 数据库 | PostgreSQL 15 治理表、索引、Flyway 迁移、Outbox 和保留策略 |
+| 跨 Feature | 向安装、运行观测和评测提供 `version_digest`、发布绑定、策略和撤回契约 |
+| 外部能力 | iflytek Registry/Scanner/RBAC 作为适配器候选；实际接口、许可证和扩展点需 PoC 验证 |
 
-不提供普通用户临时删除单条数据的接口。策略执行、删除或归档失败不能改变历史制品、版本、评测报告、发布决策和审计记录。
+### 4.2 跨 Feature 责任
 
-## 10. 权限、安全、性能和兼容性
+- 安装与回退 Feature 读取 `PUBLISHED` 绑定并执行下载、安装、切换、停用和实际回退。
+- 运行时观测 Feature 采集事件、计算有效调用和运行指标；本 Feature 只提供版本/范围/策略上下文和保留契约。
+- 评测与持续演进 Feature 生产静态扫描、评测、回归和风险证据；本 Feature 校验证据完整性和有效期，不执行 Runner。
+- 撤回事件由本 Feature 记录并通过 Outbox 发布；下游必须回报逐实例处理结果，不能把通知发送成功伪装成停用完成。
 
-### 10.1 权限模型
+## 5. 方案概览
 
-建议角色为 `asset_contributor`、`reviewer`、`release_manager`、`governance_admin` 和 `auditor`，每个角色受公司/项目/环境范围约束。权限判断顺序为身份有效性、角色权限、目标范围、对象状态和审批分离约束。
+采用 Java 8 模块化单体治理控制面：同步请求负责权威事务和可查询结果，制品/报告写入对象存储，异步任务负责派生索引和跨 Feature 通知。
 
-申请人工发布的主体不能成为同一决策的人工审批人。自动发布的主体类型为 `service`，审计中明确记录命中规则，禁止填充人工审批人身份。
+```text
+Vue 3 Console / approved clients
+             |
+      Account + Session API
+             |
+   Controller -> Application Service
+             |
+   Domain rules / transaction boundary
+       |          |          |
+ PostgreSQL   Object store  Redis Streams + Outbox
+       |          |          |
+  governance  artifacts   install/observe/evaluation contracts
+             |
+     derived catalog search projection
+```
 
-### 10.2 安全与完整性
+核心原则：PostgreSQL 中的版本、策略、证据索引、决策、绑定和审计在同一治理域内保持一致；任何外部调用都在本地事务提交后通过 Outbox 发出，不把外部成功作为本地提交条件。
 
-- 制品、来源快照、门禁证据和审计对象通过摘要关联；摘要不匹配时拒绝发布。
-- 权限变化、外部写操作变化、新运行时兼容性变化和高风险候选默认需要人工审核。
-- 审计记录采用追加式写入和受限修改权限；永久数据不得由普通业务接口删除。
-- 来源定位、依赖和日志中的敏感内容按平台统一脱敏规则处理。
-- iflytek 或其他外部能力只能通过适配器写入受控契约，不能直接修改权威版本和发布状态。
+## 6. 模块和职责边界
 
-### 10.3 性能和兼容性边界
-
-当前需求和调研没有提供吞吐、延迟、数据规模或并发指标，本方案不自行补齐数值。搜索索引、异步扫描和证据写入应与权威状态解耦；发布决策只读取一致的权威版本、策略和证据快照。
-
-运行时矩阵采用可扩展的 `runtime`、版本约束和支持状态，不把首期四类运行时写死在状态机中。新增运行时兼容性变化默认进入人工审核。
-
-## 11. 观测、灰度、迁移和回滚
-
-### 11.1 发布策略
-
-策略按公司、项目、环境保存版本和生效时间，环境级配置优先于项目级，项目级优先于公司级。没有适用策略或发生范围冲突时阻断自动发布。
-
-首期默认策略：灰度比例 10%、观察 24 小时、至少 30 次有效调用；错误率高于基线、评分低于基线或出现高危问题时触发回退。具体阈值可配置；未配置阈值时不允许自动放行。
-
-本 Feature 保存策略和 `ReleaseBinding`，不直接切换线上流量。安装回退 Feature 执行版本切换和回退，运行观测 Feature 提供有效调用、错误率和评分证据。
-
-### 11.2 迁移
-
-当前没有既有业务数据和代码迁移任务。首次部署应以空状态创建策略、角色和审计根配置；外部 Registry 导入必须保留原来源定位和原始内容摘要，并通过新版本进入本系统。
-
-### 11.3 回滚
-
-- 策略配置错误：停止新发布，恢复上一个已审核的策略版本；不得直接修改历史版本。
-- 发布门禁错误：撤销尚未生效的 binding；已生效版本通过紧急撤回或下游回退流程处理。
-- 外部适配器异常：切换到独立实现或停止发布，不绕过门禁。
-- 数据保留任务异常：暂停删除/归档，恢复旧策略，历史永久数据保持不变。
-
-## 12. 备选方案与取舍
-
-### 12.1 直接 fork iflytek SkillHub
-
-优点是 Registry、namespace、审核、RBAC、Scanner 和 CLI 能力可较快获得。缺点是目标产品需要的运行证据、策略版本、公司/项目/环境范围和跨 Feature 契约会侵入上游模型，后续升级和差异维护风险高。因此不采用直接 fork 作为总体架构。
-
-### 12.2 多个开源项目拼接为统一后端
-
-可以分别复用 Registry、评测和 Tracker，但权限、版本、证据和审计的一致性责任会分散，跨服务失败补偿复杂。仅保留模块级复用和领域参考，不把多个项目拼成不可替换的核心后端。
-
-## 13. 可行性证据
-
-- 调研报告确认 iflytek SkillHub 已具备注册、版本、namespace、审核、RBAC、CLI 分发和静态扫描能力，可作为适配器候选。
-- 调研报告确认 skill-up 可产生固定评测条件和结构化报告，适合作为 Gate Service 的证据生产方，而非资产后端。
-- 调研报告确认运行观测和评测必须通过不可变 Skill 版本关联，支持本方案把 `version_digest` 作为跨 Feature 稳定键。
-- 当前仓库没有可运行实现，因此尚未验证适配器扩展点、数据库约束、存储不可变性和真实 API 兼容性；这些列入实施阶段的 PoC 和契约验证。
-
-## 14. 可测试性与验证策略
-
-| 层级 | 重点场景 | 预期证据 |
+| 模块 | 负责 | 明确不负责 |
 | --- | --- | --- |
-| 单元测试 | 状态转移、摘要不可变、范围优先级、门禁判定、策略默认值 | 规则结果和阻断原因稳定 |
-| 集成测试 | 导入到版本、证据到发布绑定、单范围/多范围发布 | 版本、证据、策略和审计可关联 |
-| 契约测试 | 安装、运行观测、评测 Feature 的版本和撤回契约 | 缺失关联显式返回，禁止使用 latest 补齐 |
-| 安全测试 | 越权、审批人分离、机器主体、普通用户删除 | 操作被拒且审计完整 |
-| 迁移/恢复演练 | 策略恢复、适配器故障、部分范围失败、撤回补偿 | 不产生错误 active binding，历史数据不丢失 |
-| 静态检查 | 文档结构、语义需求映射、路径和版本一致性 | 设计和计划无未定义需求或任务 |
+| `asset` | 资产身份、注册/导入、来源、清单、元数据完整性 | 内容生成、扫描执行 |
+| `version` | 摘要、不可变版本、差异、生命周期转移 | 修改历史版本 |
+| `catalog` | 授权范围内搜索、筛选、详情和关联查询 | 越权查询、权威状态写入 |
+| `release` | 公司/项目/环境绑定、当前版本并发控制、下线/撤回 | 实际流量切换和安装回退 |
+| `gate` | 证据接收、有效性校验、策略门禁和决策快照 | 扫描/评测执行 |
+| `policy` | 发布、灰度、回退、审批、保留策略版本和生效解析 | 无审计修改历史策略 |
+| `governance` | 账户、角色、范围授权、审批人分离、Session | 统一身份/单点登录 |
+| `audit` | 追加式审计、前后状态和查询 | 普通删除或更新永久数据 |
+| `integration` | 对象存储、搜索、iflytek 和下游契约适配 | 绕过领域 Service 直接写表 |
 
-当前没有可执行构建或测试命令；实施首个 Slice 时必须先建立工程基线和真实测试入口，再将验证命令写入验证记录。不能把本设计中的静态分析当作代码验证通过。
+依赖方向固定为 `controller -> service -> mapper`；领域规则由 Service/Domain 承担，Mapper 只访问数据库，DO、DTO、VO、Query 不混用。
 
-## 15. 需求覆盖矩阵
+## 7. 后端目录和前端目录落位
+
+### 7.1 后端目标目录
+
+遵循 `backend-architecture.md`，包名仍使用待替换的 `com.km.skillhub` 模板：
+
+```text
+backend/src/main/java/com/km/skillhub/
+├─ controller/{asset,version,catalog,release,gate,policy,governance,audit}/
+├─ service/{asset,version,catalog,release,gate,policy,governance,audit}/
+│  └─ impl/
+├─ mapper/{asset,version,catalog,release,gate,policy,governance,audit}/
+├─ model/{entity,dto,vo,query}/
+├─ common/{constant,enums}/
+├─ config/
+├─ exception/
+├─ interceptor/
+├─ aspect/
+├─ filter/
+├─ handler/
+└─ integration/{artifact,search,iflytek,downstream}/
+backend/src/main/resources/
+├─ mapper/
+├─ db/migration/
+├─ application.yml
+└─ logback-spring.xml
+backend/src/test/java/com/km/skillhub/
+├─ service/
+├─ mapper/
+├─ integration/
+├─ contract/
+└─ support/
+```
+
+### 7.2 前端目标目录和路由
+
+遵循 `frontend-architecture.md`，路由使用目标语义路径，具体菜单文案不在本设计中扩展：
+
+```text
+frontend/src/
+├─ app/
+├─ router/
+├─ stores/
+├─ pages/asset-governance/
+│  ├─ AssetCatalogPage.vue
+│  ├─ AssetDetailPage.vue
+│  ├─ VersionDetailPage.vue
+│  ├─ ReleaseDecisionPage.vue
+│  ├─ PolicyPage.vue
+│  └─ AuditPage.vue
+├─ modules/asset-governance/{api,components,composables,services,types,tests}/
+├─ components/
+├─ api/
+├─ services/
+├─ types/
+└─ utils/
+```
+
+| 路由 | 页面责任 | 写操作 |
+| --- | --- | --- |
+| `/assets` | 授权范围内目录搜索 | 注册/导入入口 |
+| `/assets/:assetId` | 资产、来源、完整性和版本列表 | 下线入口按权限显示 |
+| `/assets/:assetId/versions/:versionDigest` | 版本清单、差异、生命周期和关联证据 | 申请候选/撤回按权限显示 |
+| `/releases/:decisionId` | 决策、策略、门禁和逐范围结果 | 发布、下线、紧急撤回按权限显示 |
+| `/governance/policies` | 发布/灰度/回退/保留策略版本 | 治理管理员 |
+| `/governance/audit` | 审计查询和状态还原 | 只读 |
+
+登录路由仅提供账户密码表单；后端通过 HttpOnly、Secure、SameSite Cookie 建立 Session，前端不保存长期 Token。
+
+## 8. 接口、类型和数据结构
+
+### 8.1 公共 API 约束
+
+所有写接口都接收 `X-Request-Id` 或等价幂等键，响应包含请求 ID、对象 ID、当前状态和可定位错误码。列表接口使用分页和稳定排序。错误分为参数错误、权限错误、业务阻断、外部依赖失败和系统错误，不向客户端回显密钥、凭据、完整制品或内部绝对路径。
+
+建议的后端接口边界：
+
+```text
+POST   /api/v1/assets/imports
+GET    /api/v1/assets/imports/{requestId}
+GET    /api/v1/assets
+GET    /api/v1/assets/{assetId}
+POST   /api/v1/assets/{assetId}/versions
+GET    /api/v1/assets/{assetId}/versions/{versionDigest}
+GET    /api/v1/assets/{assetId}/versions/{versionDigest}/diff
+POST   /api/v1/releases/decisions
+GET    /api/v1/releases/decisions/{decisionId}
+POST   /api/v1/releases/{decisionId}/approve
+POST   /api/v1/releases/{decisionId}/rollback
+POST   /api/v1/releases/{decisionId}/revoke
+GET    /api/v1/governance/policies
+POST   /api/v1/governance/policies
+GET    /api/v1/audits
+POST   /api/v1/session/login
+POST   /api/v1/session/logout
+GET    /api/v1/session/current
+```
+
+`rollback` 在本 Feature 中只产生治理撤回/回退意图和证据，不执行运行时版本切换；真实切换由安装与回退 Feature 完成。
+
+### 8.2 核心类型
+
+```text
+SkillAsset: assetId, assetKey, name, description, ownerScope,
+  sourceSummary, metadataStatus, lifecycleSummary, tags
+SkillVersion: assetId, versionDigest, versionLabel, artifactDigest,
+  manifest, sourceSnapshot, metadataStatus, lifecycleState, createdAt
+ImportAttempt: requestId, assetId?, sourceType, sourceLocator,
+  status, failureStage?, failureCode?, failureReason?, artifactDigest?
+ReleaseDecision: decisionId, versionDigest, targets, policyVersion,
+  mode, state, gateResults, approval, evidence, reason
+ReleaseBinding: bindingId, assetId, versionDigest, scopeType, scopeId,
+  bindingState, isCurrent, decisionId, effectiveAt
+PolicyVersion: policyVersion, scope, effectiveAt, autoRelease,
+  grayRatio, observationWindowSeconds, minimumValidCalls,
+  rollbackConditions, retentionRules
+AuditRecord: actor, action, object, beforeState, afterState,
+  reason, scope, policyVersion, occurredAt
+```
+
+外部 JSON 先在 integration 边界解析为明确 DTO，再转换为领域对象；不得把 `Map<String,Object>` 或未校验的 JSON 传入门禁规则。
+
+## 9. 数据模型和不变量
+
+### 9.1 PostgreSQL 15 核心表
+
+使用数据库规范中的表模型：`skill_asset`、`skill_import_attempt`、`skill_artifact`、`skill_version`、`skill_version_manifest`、`skill_dependency`、`runtime_definition`、`skill_runtime_compatibility`、`governance_scope`、`principal`、`governance_role`、`principal_scope_role`、`release_policy_version`、`retention_policy_version`、`release_binding`、`release_decision`、`gate_evidence`、`release_decision_evidence`、`approval_record`、`audit_log` 和 `governance_event_outbox`。
+
+### 9.2 关键不变量
+
+- `version_digest` 是规范化制品、必要元数据和清单的 SHA-256 内容身份；唯一且创建后不可更新。
+- `skill_import_attempt` 对 `request_id` 唯一；失败必须记录阶段和原因，且没有 `PUBLISHED` 版本。
+- 同一资产、范围类型和范围 ID 只能有一条 `is_current = TRUE` 的绑定；使用 PostgreSQL 部分唯一索引和事务锁保证。
+- 发布决策固定命中的策略版本、证据摘要和范围；证据过期、缺失、摘要不匹配或条件不可判断时阻断。
+- `release_decision` 和 `gate_evidence` 追加写入；普通业务接口不得更新或删除。
+- 策略和保留规则采用新版本插入，不修改历史生效记录。
+- 所有安装、运行观测、评测关联保存 `version_digest`；缺失时保存 `version_unknown` 和原因。
+
+### 9.3 默认策略与可配置规则
+
+默认值是首期配置，不是代码常量：
+
+| 规则 | 默认值 | 配置维度 |
+| --- | --- | --- |
+| 自动发布 | 仅低风险白名单候选 | 公司/项目/环境 |
+| 自动发布门槛 | 无高危/严重问题；无权限/外部写操作变化；无新运行时兼容变化；至少 30 个有效案例；回归和有效评分不低于稳定基线 | 同上 |
+| 灰度比例 | 10%，向上取整且至少 1 个实例 | 同上 |
+| 观察窗口 | 24 小时且至少 30 次有效调用 | 同上 |
+| 错误率回退 | 比基线增加 2 个百分点，或相对增加 20%；基线为 0 时达到 2% | 同上 |
+| 评分回退 | 有效评分下降 5 个百分点 | 同上 |
+| 紧急回退 | 高危/严重问题立即触发并上报 | 同上 |
+| 原始运行事件 | 365 天 | 同上，可由运行观测域执行 |
+| 制品/版本/评测/决策/审计 | 永久 | 同上，不允许普通删除 |
+| 聚合指标 | 永久 | 同上，可由运行观测域执行 |
+
+策略解析优先级为环境 > 项目 > 公司；同级冲突阻断自动发布。调整策略只能创建新版本，写入生效时间、创建主体、审批主体和审计记录。
+
+## 10. 数据流和状态变化
+
+### 10.1 导入流程
+
+```text
+登录 Session -> 范围/RBAC 校验 -> 创建 ImportAttempt(STARTED)
+ -> 读取来源 -> 校验必需文件和可读性 -> 计算制品/版本摘要
+ -> 保存对象存储和清单 -> 创建 DRAFT -> 完整性通过后转 CANDIDATE
+ -> 提交目录投影和审计 Outbox
+```
+
+来源不可访问、必要内容缺失、摘要计算失败或对象存储失败时，`ImportAttempt` 转为 `FAILED`，保存 `failure_stage`、稳定 `failure_code` 和脱敏原因；事务不得创建可发布版本。重复 `request_id` 返回原结果，不重复生成资产、版本或审计事件。
+
+### 10.2 生命周期状态机
+
+```text
+DRAFT -> CANDIDATE -> PUBLISHED -> OFFLINE -> DEPRECATED
+                         |             |
+                         +-> EMERGENCY_REVOKED
+```
+
+只有 `CANDIDATE` 可以进入门禁；`PUBLISHED` 必须已有有效决策和绑定；`OFFLINE`、`EMERGENCY_REVOKED`、`DEPRECATED` 不能作为默认分发版本。普通下线不强制停用存量实例，紧急撤回向安装 Feature 发出阻断新增安装和停用请求。
+
+### 10.3 发布与灰度流程
+
+1. Gate Service 读取候选版本、证据摘要和解析后的策略快照。
+2. 缺证据、证据过期、扫描失败、高风险变化或审批人不分离时写入 `BLOCKED` 或 `PENDING_APPROVAL`。
+3. 低风险白名单满足自动门槛时创建 `APPROVED`；需要灰度时同时写入 `PENDING_GRAY` 和 `GRAY_OBSERVATION` 证据。
+4. `PENDING_GRAY` 只表示已允许开始观察，不是全量发布；观察证据达标后才建立/更新 `ACTIVE` 全量绑定。
+5. 触发回退条件时写入 `REVOKED` 或回退决策，保存阈值、基线、样本数和触发证据，并通过 Outbox 通知下游。
+
+## 11. 正常流程、异常、超时和重试
+
+| 场景 | 行为、幂等和恢复 |
+| --- | --- |
+| 来源不可读/必要文件缺失 | 记录导入失败阶段和原因；不创建可发布版本 |
+| 外部 Registry/Scanner 超时 | 限定次数重试并使用退避；超时证据为 `INCOMPLETE`，默认阻断 |
+| 证据摘要不匹配/已过期 | 拒绝关联或阻断决策，保留失败审计 |
+| 审核超时或审批人重复 | 保持 `PENDING_APPROVAL`；拒绝同一人工主体既申请又审批 |
+| 重复导入/发布/撤回 | 根据请求幂等键返回原结果，不重复计账 |
+| 多范围发布部分失败 | 每个范围独立事务结果和审计；成功范围保留，失败范围不创建有效绑定 |
+| Outbox 投递失败 | 本地事务保持成功，事件进入重试状态；超过重试上限进入人工处理队列 |
+| 搜索投影失败 | 权威数据仍可查询；重建投影，不改变生命周期或 binding |
+| 紧急撤回通知部分失败 | 先阻断新绑定，再记录逐范围/逐下游结果；下游补偿持续可查 |
+| 保留任务失败或新策略缩短失败 | 不删除数据，保留旧策略并记录任务结果 |
+| 数据库并发发布 | 使用 `row_version`、事务锁和部分唯一索引；冲突返回可重试业务错误 |
+
+服务内部异常必须包含 request ID、asset ID、version digest、scope ID 和 decision ID 等必要上下文，但不得记录凭据、密钥、完整制品和敏感运行文本。
+
+## 12. 权限、安全、性能和兼容性
+
+### 12.1 账户、Session 和 RBAC
+
+- 登录使用账户密码，密码以 BCrypt 哈希保存；Session ID 通过 HttpOnly、Secure、SameSite Cookie 传输。
+- `asset_contributor` 可在授权范围注册和提交版本；`reviewer` 可审查证据；`release_manager` 可申请发布；`governance_admin` 可管理授权和策略；`auditor` 只读审计。
+- 每次操作按 Session 身份、角色、公司/项目/环境范围、对象状态和审批分离顺序校验。
+- 自动发布使用 `service` 主体；不得伪造人工审批记录。申请主体不能审批自己的决策。
+- CSRF、Session 失效、密码重试限制、Cookie 安全参数和密钥轮换由后端安全配置任务固定并测试。
+
+### 12.2 性能与兼容
+
+需求没有确认吞吐、延迟、容量、并发和可用性数值，不自行补齐。实现必须分页目录/审计/门禁，深度分页使用 seek；大报告按需加载；异步索引与通知不能阻塞导入和发布事务。新增状态和字段必须保持旧客户端可忽略未知字段，不能用前端猜测补齐缺失版本。
+
+## 13. 观测、迁移和回滚
+
+### 13.1 观测
+
+平台请求、导入、门禁、策略解析、Outbox、外部适配器和数据库查询使用结构化日志、Trace 和 Micrometer 指标。至少记录请求 ID、状态、耗时、重试次数、结果和失败码；敏感字段脱敏。重点指标包括导入成功/失败、门禁阻断、审批等待、发布部分失败、Outbox 积压和投影延迟。
+
+### 13.2 首次迁移
+
+空库使用 Flyway 按依赖顺序创建范围/主体、资产/版本/导入、策略/门禁/发布、审计/Outbox 表。建议目标脚本：
+
+```text
+backend/src/main/resources/db/migration/
+├─ V1__create_governance_scope.sql
+├─ V2__create_skill_asset_version_import.sql
+├─ V3__create_release_gate_policy.sql
+├─ V4__create_authorization_audit.sql
+├─ V5__create_cross_feature_metadata.sql
+└─ R__rebuild_catalog_projection.sql
+```
+
+当前不存在历史数据库，因此不设计存量迁移。每次迁移必须能在空库执行，Flyway 脚本不可修改；破坏性变化拆为兼容、数据迁移和清理步骤。
+
+### 13.3 回滚
+
+- 策略错误：停止自动发布，恢复上一已审核策略版本；不修改历史版本。
+- 门禁/绑定错误：撤销未生效绑定或创建紧急撤回决策；不删除历史证据。
+- 外部适配器异常：停止自动发布并切换独立适配器/人工路径，禁止绕过门禁。
+- 前端构建异常：恢复上一构建产物；API 不兼容先通过兼容字段解决。
+- Outbox 或投影异常：重试/重建派生数据；不回滚已经提交的权威版本和审计。
+
+## 14. 备选方案与取舍
+
+| 方案 | 结论 | 原因 |
+| --- | --- | --- |
+| 直接 Fork iflytek SkillHub | 不采用 | Registry、namespace、RBAC 和 Scanner 可复用，但会把目标产品的范围、证据、策略和跨 Feature 契约绑死在上游模型中 |
+| 多个开源项目拼接成运行时微服务 | 不采用 | 版本、权限、证据和审计一致性分散，跨服务补偿复杂；当前需求没有拆分为独立部署的依据 |
+| 模块化单体 + 能力适配器 | 采用 | 保持单一事务边界和统一审计，同时为 Registry/Scanner/RBAC/对象存储保留替换边界，适合 greenfield 首期 |
+| 以对象存储或搜索索引为权威 | 不采用 | 无法可靠保证并发 binding、策略生效、权限和审计一致性 |
+
+## 15. 可行性证据和验证限制
+
+### 15.1 已有证据
+
+- 调研报告确认 iflytek SkillHub 具备 Registry、版本、审核、RBAC、CLI 分发和扫描思路，适合作为适配器候选。
+- 调研报告确认评测结果、运行证据和发布治理必须关联不可变 Skill 版本，支持 `version_digest` 契约。
+- 已确认技术基线全部保持 JDK 8 兼容，认证边界收敛为账户密码和服务端 Session。
+- PostgreSQL 15 部分唯一索引、JSONB、事务锁和 Flyway 迁移可表达本方案的不变量，具体需迁移集成测试验证。
+
+### 15.2 未验证事实
+
+- 仓库没有业务源码、构建文件、测试和运行环境，无法验证编译、真实 API 或数据库执行。
+- iflytek 实际扩展点、数据模型、许可证和供应链尚未做 PoC。
+- 对象存储、搜索索引、分析存储、容量增长、备份/RPO/RTO 和组织范围来源尚未确认。
+
+上述限制进入实施计划的阻塞项；不得在设计阶段标记为代码可行性已通过。
+
+## 16. 可测试性与验证策略
+
+| 层级 | 场景 | 证据 |
+| --- | --- | --- |
+| 单元 | 摘要规范化、状态机、策略优先级、门禁阈值、保留默认值 | 规则结果、拒绝原因和边界值 |
+| Service 集成 | 导入成功/失败、版本不可变、发布绑定并发、多范围部分失败 | PostgreSQL 记录、状态和审计关联 |
+| Mapper/迁移 | 空库 Flyway、唯一索引、JSONB、追加式表权限 | 迁移日志、约束和查询计划 |
+| 契约 | 安装/观测/评测使用 `version_digest`，撤回事件和 `PENDING_GRAY` | 契约测试报告；缺失关联显式返回 |
+| 安全 | 登录 Session、越权、审批人分离、普通用户删除、CSRF | 4xx 结果和审计记录 |
+| 前端组件/E2E | 目录筛选、版本差异、门禁证据、逐范围结果、策略和审计 | 组件/页面测试与截图/报告 |
+| 运维演练 | Outbox 重试、投影重建、适配器超时、策略回退、撤回补偿 | 任务状态、指标和恢复记录 |
+| 静态文档 | 路径、版本、链接、需求/任务/验证映射 | Markdown 检查结果 |
+
+首个代码 Slice 需要先建立 Maven/Vite 测试入口；当前不存在可执行测试命令，因此本轮只执行文档和基线静态校验。
+
+## 17. 需求覆盖矩阵
 
 | requirement-<semantic-name> | 方案响应 | 计划任务 | 验证方式 | 状态 |
 | --- | --- | --- | --- | --- |
-| `requirement-skill-asset-registration` | Registry 校验来源、制品和导入失败原因 | Task 1 | 导入集成测试、不可读/缺失内容测试 | covered |
-| `requirement-skill-metadata-completeness` | 内容清单、元数据检查和 unknown/missing 显示 | Task 1 | 元数据单元与详情集成测试 | covered |
-| `requirement-skill-catalog-search` | 授权范围搜索、筛选、版本和关联详情 | Task 2 | 目录查询集成与越权测试 | covered |
-| `requirement-skill-version-immutability` | 摘要、来源快照和只读版本，差异查询 | Task 1、Task 2 | 摘要篡改、版本差异测试 | covered |
-| `requirement-skill-lifecycle-state` | 状态机、不可分发过滤和状态审计 | Task 1、Task 2 | 状态转移和默认版本测试 | covered |
-| `requirement-skill-release-scope` | 公司/项目/环境 binding 和范围优先级 | Task 2 | 多范围发布与当前版本查询测试 | covered |
-| `requirement-skill-release-gate` | 扫描/评测/审核/风险/灰度证据和策略决策 | Task 3、Task 6 | 门禁、策略、部分失败和契约测试 | covered |
-| `requirement-skill-governance-audit` | 范围 RBAC、审批人分离、机器主体、追加审计 | Task 4 | 安全集成测试和审计还原测试 | covered |
-| `requirement-skill-data-retention` | 范围化、版本化、定时生效的分层保留策略 | Task 5 | 策略单元、权限和删除拒绝测试 | covered |
+| `requirement-skill-asset-registration` | ImportAttempt、来源读取、清单、失败阶段和不可发布约束 | Task 2、Task 3 | Service 集成：成功、不可读、缺失内容、重复请求 | covered |
+| `requirement-skill-metadata-completeness` | 元数据状态、清单、依赖和运行时矩阵显式保存 unknown/missing | Task 2、Task 5 | DTO/Service 单元和详情接口集成 | covered |
+| `requirement-skill-catalog-search` | 授权范围、名称/描述/标签/来源/运行时/状态/版本查询 | Task 5 | Mapper/投影集成、分页和越权测试 | covered |
+| `requirement-skill-version-immutability` | 摘要唯一、来源快照不可变、差异查询和数据库追加式约束 | Task 3、Task 4 | 摘要篡改、重复版本和差异测试 | covered |
+| `requirement-skill-lifecycle-state` | 明确状态机、可分发过滤、状态原因和审计 | Task 4 | 状态转移、非法转移和默认版本测试 | covered |
+| `requirement-skill-release-scope` | 公司/项目/环境范围、当前 binding 并发控制和逐范围结果 | Task 6 | 多范围发布、冲突和部分失败集成测试 | covered |
+| `requirement-skill-release-gate` | 静态扫描/评测/风险/审核/灰度证据、策略快照和决策 | Task 7、Task 8 | 门禁单元、证据契约、灰度和回退演练 | covered |
+| `requirement-skill-governance-audit` | 账户密码 Session、RBAC、审批分离、机器主体、追加审计 | Task 1、Task 9 | 安全集成、越权、Session 和审计还原测试 | covered |
+| `requirement-skill-data-retention` | 范围化、版本化、可生效保留策略及默认值 | Task 10 | 策略单元、权限、审计和删除拒绝测试 | covered |
 
-## 16. 风险、待确认事项和不覆盖项
+## 18. 风险、待确认事项和不覆盖项
 
-### 16.1 风险
+### 18.1 风险
 
-- iflytek 的真实扩展点、数据模型和许可证/供应链边界尚未在本仓库验证；适配器 PoC 失败时需保留独立实现路径。
-- 错误率和评分的组织级数值阈值尚未给出；在配置缺失时阻断自动发布，避免隐式放行。
-- 公司、项目、环境之间的组织层级和重叠授权规则尚未有现成实现；实施时必须用明确的范围解析规则和冲突测试固定。
-- 永久保留和原始事件 365 天会影响存储成本；容量、加密、归档和删除执行责任需由各数据域补充。
-- 审计不可篡改的具体存储机制尚未确定，实施时必须完成恢复和篡改检测验证。
+- 基线仍为用户确认的 draft，若技术栈、目录或数据模型变化，必须升级基线并重新检查本设计。
+- iflytek 适配器的真实接口和许可证未知；PoC 失败时保留独立 Registry/Scanner/RBAC 接口。
+- 评分基线、样本有效性和灰度流量来源由评测/观测 Feature 提供；缺失时本 Feature 只能阻断，不能猜测。
+- 永久保留与原始事件 365 天可能造成容量和合规压力；容量、加密、归档、备份和删除执行责任待确认。
+- 公司/项目/环境的组织来源、范围变更和冲突授权规则需在实施前固定。
+- Session 安全参数、密码策略、CSRF、密钥管理和管理员初始化流程需安全评审。
 
-### 16.2 待确认事项
+### 18.2 待确认事项
 
-- 实施阶段选择的语言、框架、权威数据库、制品存储和搜索组件。
-- 组织规定的错误率和评分回退数值阈值，以及基线计算口径。
-- iflytek 模块复用的最终许可证、NOTICE、依赖和安全审查结论。
+- [ ] 正式公司反向域名包名替换 `com.km.skillhub`。
+- [ ] 对象存储、搜索索引、分析存储的产品、版本和部署方式。
+- [ ] PostgreSQL 备份、RPO/RTO、加密、容量和分区策略。
+- [ ] 组织范围同步来源、账号初始化和密码复杂度/锁定策略。
+- [ ] API 分页协议、错误码目录、前端组件库和浏览器支持范围。
 
-### 16.3 不覆盖项
+### 18.3 不覆盖项
 
-灰度流量调度、线上调用计数、安装切换、实例停用、Tracker 采集、评测执行和 Finding/候选生成不在本 Feature 内；本方案仅提供它们所需的版本、范围、策略、证据和审计契约。
+运行时执行、安装/回退执行、Tracker 和原始运行事件采集、评测 Runner、自动生成 Skill 内容、实际灰度流量切换和跨 Feature 的完整运营页面均不在本 Feature 实施范围。

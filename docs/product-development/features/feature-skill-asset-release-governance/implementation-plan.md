@@ -1,216 +1,240 @@
 ---
 title: Skill 资产与发布治理实施计划
-description: Skill 资产与发布治理方案的可执行实施任务和验证计划
+description: 按可运行 Slice 实现 Skill 资产、版本、发布门禁、权限、审计和保留治理
 audience:
   - product-development
 owner: product-development
 status: draft
-lastReviewed: 2026-09-01
+lastReviewed: 2026-09-02
 sourceType: manual
 ---
 
 # 实施计划：Skill 资产与发布治理
 
-> 状态：无效草稿。设计阶段基线检查未通过；在架构基线和实施标准确认前，本文件不得作为实施依据。
+> 计划版本：v2；对应需求 `requirement.md` v1 和设计 `design.md` v2。本计划在设计确认后执行，当前不代表已开始实现。
 
-## 0. 基线阻塞说明
+## 1. 实施前约束
 
-本计划依赖的架构和实施标准文档尚未建立或确认，因此当前任务路径、技术栈和验证命令均不能作为正式实施基线。
+- 当前仓库是 greenfield，没有可复用业务源码、构建文件、迁移历史、测试入口或真实 API。
+- 后端严格使用 JDK 8、Spring Boot 2.7.18、Spring MVC 5.3.31、Spring Security 5.7.11、MyBatis-Plus 3.5.5、Maven 3.8.8、PostgreSQL 15、Flyway 8.5.13 和 Redis Streams 6.2.14。
+- 前端使用 Vue 3、TypeScript、Vite、Vue Router 和 Pinia；组件、类型和注释遵循已确认标准。
+- 认证只实现账户密码 + BCrypt + 服务端 Session + HttpOnly/Secure/SameSite Cookie，不实现 OAuth2、统一单点登录、CLI Device Flow 或 API Token。
+- 版本、策略、决策、证据和审计不可原地修改；跨 Feature 只使用 `version_digest`，不使用 `latest`。
+- 对象存储、搜索、分析存储、容量、备份、RPO/RTO、正式包名和组织身份来源未确认；相关任务必须保留适配器边界，不得擅自选定供应商。
 
-## 1. 计划基线
+## 2. 文件到事实映射
 
-- 需求版本：v1，来源为当前 Feature 的 `requirement.md`。
-- 设计版本：v1，来源为当前 Feature 的 `design.md`。
-- 计划版本：v1。
-- 当前仓库状态：greenfield；以下 `src`、`tests`、`contracts` 路径均为拟创建路径，不代表现有文件。
-- 实施前置：先确定语言、框架、权威数据库、制品存储、搜索组件和真实测试命令；这些选择不能改变本计划中的领域契约和验收行为。
-
-## 2. 文件结构与职责
-
-| 操作 | 路径 | 职责 |
+| 事实/入口 | 目标文件 | 责任 |
 | --- | --- | --- |
-| Create | `src/asset-governance/domain/asset-models` | 资产、内容清单、来源和完整性结果 |
-| Create | `src/asset-governance/domain/version-models` | 不可变版本、摘要和差异模型 |
-| Create | `src/asset-governance/domain/lifecycle` | 生命周期状态和合法转移 |
-| Create | `src/asset-governance/domain/release-models` | 发布绑定、门禁证据和策略模型 |
-| Create | `src/asset-governance/domain/governance-models` | 角色、范围、审计和保留策略模型 |
-| Create | `src/asset-governance/application/asset-service` | 注册、导入、版本创建和目录用例编排 |
-| Create | `src/asset-governance/application/release-service` | 门禁计算、审批、发布绑定和撤回用例 |
-| Create | `src/asset-governance/application/policy-service` | 发布和保留策略版本化、生效和查询 |
-| Create | `src/asset-governance/application/authorization-service` | 范围 RBAC 和审批人分离校验 |
-| Create | `src/asset-governance/infrastructure/persistence` | 权威元数据、制品、证据、审计和索引持久化适配器 |
-| Create | `src/asset-governance/infrastructure/adapters/iflytek` | iflytek Registry/Scanner/RBAC 能力适配边界 |
-| Create | `contracts/asset-governance` | 安装、观测、评测 Feature 的跨域契约 |
-| Create | `tests/asset-governance` | 单元、集成、安全、契约和恢复测试 |
+| 应用启动、依赖和环境配置 | `backend/pom.xml`、`backend/src/main/java/com/km/skillhub/SkillHubApplication.java`、`backend/src/main/resources/application-*.yml` | 工程和运行基线 |
+| Session、账户和 RBAC | `backend/src/main/java/com/km/skillhub/config/SecurityConfig.java`、`governance/*`、`controller/session/*` | 登录和授权 |
+| 导入、来源、清单和版本 | `asset/*`、`version/*`、`integration/artifact/*` | 资产生命周期 |
+| PostgreSQL 表、约束和迁移 | `backend/src/main/resources/db/migration/V1__...sql` 至 `V5__...sql` | 权威治理数据 |
+| 门禁、策略、灰度和发布 | `gate/*`、`policy/*`、`release/*` | 决策和范围绑定 |
+| 审计和跨 Feature 事件 | `audit/*`、`integration/downstream/*`、`governance_event_outbox` Mapper | 追溯和可靠投递 |
+| Vue 页面、API 和类型 | `frontend/src/pages/asset-governance/*`、`frontend/src/modules/asset-governance/*` | 控制台交互 |
+| 后端测试 | `backend/src/test/java/com/km/skillhub/{service,mapper,integration,contract}/` | 规则、迁移和契约验证 |
+| 前端测试 | `frontend/tests/{unit,integration,contract,e2e}/` | 页面和契约验证 |
 
-上述路径在实现阶段可按已选技术栈增加扩展名或拆分文件，但不得改变职责、字段语义和 Slice 验收范围。
+以上路径来自 `backend-architecture.md` 和 `frontend-architecture.md` 的 greenfield 目录设计；创建前不得假设这些文件已经存在。
 
-## 3. 任务
+## 3. Slice 与任务顺序
 
-### Task 1：建立资产、元数据和版本领域闭环
+### Task 1：建立 JDK 8 工程与账户 Session 基线
 
-Slice：`slice-asset-version-domain`
-
-需求：`requirement-skill-asset-registration`、`requirement-skill-metadata-completeness`、`requirement-skill-version-immutability`、`requirement-skill-lifecycle-state`
-
-依赖：无；但依赖实施前工程基线已建立。
-
-文件：Create `src/asset-governance/domain/asset-models`、`src/asset-governance/domain/version-models`、`src/asset-governance/domain/lifecycle`、`src/asset-governance/application/asset-service`、`src/asset-governance/infrastructure/persistence`；Test `tests/asset-governance/asset-version-domain`。
-
-目标：授权用户可以导入可读且完整的 Skill，得到可追溯的草稿/候选版本；内容变化产生新版本，历史版本不能原地修改；状态变化符合状态机。
-
-实现：对来源、必要内容、内容清单、依赖和运行时矩阵执行显式检查；保存 `source_snapshot` 和 `version_digest`；用版本摘要作为写入幂等键；实现 `draft -> candidate -> published` 及下线、撤回、废弃所需的合法转移；导入失败保留失败原因但不得生成可发布版本。
-
-测试/验证类型：unit、integration、static。
-
-测试场景：正常导入；来源不可读；必要内容缺失；未知元数据；同一内容重复导入；已创建版本被修改；非法状态转移；下线版本被当作默认版本。
-
-测试文件或替代证据：`tests/asset-governance/asset-version-domain`；若工程测试框架尚未建立，先用领域模块的最小测试入口验证状态、摘要和失败结果，再记录实际命令。
-
-验证：运行工程基线确定后的领域测试命令，预期所有正常场景通过，失败和非法操作返回结构化原因；执行静态检查确认 `version_digest` 在创建后无更新路径。
-
-停止条件：导入失败仍能生成可发布版本、历史版本内容可被覆盖、状态机允许绕过候选或测试命令无法稳定复现时停止后续 Slice。
-
-回滚：删除本 Slice 新增的 greenfield 模块和测试入口；不删除已导入的永久制品或审计数据，数据恢复使用版本和状态迁移脚本。
-
-### Task 2：建立目录、版本差异和发布范围闭环
-
-Slice：`slice-catalog-release-scope`
-
-需求：`requirement-skill-catalog-search`、`requirement-skill-version-immutability`、`requirement-skill-lifecycle-state`、`requirement-skill-release-scope`
-
-依赖：Task 1。
-
-文件：Modify `src/asset-governance/application/asset-service`、`src/asset-governance/infrastructure/persistence`；Create `src/asset-governance/domain/release-models`、`src/asset-governance/application/release-service`、`tests/asset-governance/catalog-release-scope`。
-
-目标：用户只能在授权范围内搜索和查看 Skill；能够查询版本差异、发布目标、每个范围当前版本和发布时间；一个版本可绑定多个范围。
-
-实现：建立按名称、描述、标签、来源、运行时、状态和版本的查询条件；详情结果明确区分缺失/未知元数据；实现 `company/project/environment` 范围绑定、环境优先的当前版本解析和绑定幂等；只允许 `published` 版本成为 active binding；提供版本差异查询但不改变任何历史内容。
-
-测试/验证类型：integration、security、contract。
-
-测试场景：多条件搜索；不同版本和状态区分；越权搜索；多范围发布；范围重叠；同一请求重试；不可分发版本绑定；查询指定版本的内容差异。
-
-测试文件或替代证据：`tests/asset-governance/catalog-release-scope`、`contracts/asset-governance/release-binding`。
-
-验证：运行目录和范围集成测试，预期查询结果只包含授权对象；同一范围重复发布只保留一个有效 binding；契约校验拒绝草稿、下线、撤回和废弃版本。
-
-停止条件：范围优先级产生两个不可判定的当前版本、越权对象可查询或发布 binding 可指向不可分发状态时停止后续门禁实现。
-
-回滚：停止目录索引更新并撤销本 Slice 新增的 active binding；保留权威版本、已成功范围的审计和可恢复的索引快照。
-
-### Task 3：建立发布门禁和可配置发布策略
-
-Slice：`slice-release-gate-policy`
-
-需求：`requirement-skill-release-gate`、`requirement-skill-release-scope`
-
-依赖：Task 1、Task 2。
-
-文件：Modify `src/asset-governance/domain/release-models`、`src/asset-governance/application/release-service`；Create `src/asset-governance/application/policy-service`、`tests/asset-governance/release-gate-policy`、`contracts/asset-governance/gate-evidence`。
-
-目标：发布服务能够基于完整证据和生效策略生成可解释的自动发布、人工审批或阻断决策；策略和决策可以追溯到公司/项目/环境范围。
-
-实现：定义静态扫描、受控评测、风险、人工审核和灰度观察证据；校验证据关联的版本摘要、生成时间和有效期；实现默认策略：低风险白名单、无高危/严重问题、无权限或外部写操作变化、无新运行时兼容性变化、至少 30 个有效评测案例、回归结果和有效评分不低于基线；保存灰度 10%、观察 24 小时、至少 30 次调用和错误率/评分/高危回退条件；策略缺失、证据缺失或条件无法判断时阻断。
-
-测试/验证类型：unit、integration、contract。
-
-测试场景：完整低风险白名单自动发布；高风险进入人工审批；扫描失败；评测案例不足；评分低于基线；权限变化；外部写操作变化；新运行时兼容性变化；证据过期；策略不存在；策略版本切换；单范围部分失败。
-
-测试文件或替代证据：`tests/asset-governance/release-gate-policy`、`contracts/asset-governance/gate-evidence`。
-
-验证：运行门禁和策略测试，预期每个阻断结果包含缺失项、命中规则、策略版本和目标范围；自动发布只能命中完整白名单条件；实际灰度流量和回退动作由下游契约测试验证。
-
-停止条件：门禁可通过缺失证据、策略条件不可判断时放行、或门禁决策不能还原全部证据时停止发布绑定实现。
-
-回滚：将新策略标记为不可生效并恢复上一个已审核版本；撤销尚未生效的 binding；不修改历史证据和历史决策。
-
-### Task 4：建立 RBAC、审批人分离和治理审计
-
-Slice：`slice-governance-audit`
-
+Slice：`slice-account-session-governance`
 需求：`requirement-skill-governance-audit`
+依赖：无
+文件：Create `backend/pom.xml`、`backend/src/main/java/com/km/skillhub/SkillHubApplication.java`、`config/SecurityConfig.java`、`governance/controller/SessionController.java`、`governance/service/SessionService.java`、`governance/model/entity/PrincipalEntity.java`、`backend/src/test/java/com/km/skillhub/integration/SessionSecurityIntegrationTest.java`；Create `frontend/package.json`、`frontend/src/router/index.ts`、`frontend/src/stores/sessionStore.ts`、`frontend/src/pages/LoginPage.vue`。
 
-依赖：Task 2、Task 3。
+目标：用户可以用账户密码登录和退出；服务端创建 Session，越权请求得到稳定拒绝；系统不产生 Token/OAuth2 入口。
 
-文件：Create `src/asset-governance/domain/governance-models`、`src/asset-governance/application/authorization-service`、`src/asset-governance/infrastructure/persistence/audit`、`tests/asset-governance/governance-audit`。
+实现：按 Java 规范分离 Controller、Service、Mapper 和 DO/DTO/VO；BCrypt 保存密码哈希；Session Cookie 设置 HttpOnly、Secure、SameSite；登录失败统一错误，不回显账号是否存在；加入 CSRF、Session 失效和请求关联 ID；前端只保存当前会话状态，不保存长期凭据。
 
-目标：导入、版本创建、发布、下线、紧急撤回、安装/运行数据查看、评测执行和治理配置均有明确的范围权限和审计结果；人工申请人与审批人分离。
+测试/验证类型：`integration`、`security`、`static`。
+测试场景：正确密码、错误密码、过期 Session、缺少角色、跨范围访问、Cookie 属性、重复登录、登出后访问、检查依赖中无 OAuth2/Token 认证入口。
+测试文件或替代证据：`backend/src/test/java/com/km/skillhub/integration/SessionSecurityIntegrationTest.java`、`frontend/tests/integration/session.spec.ts`；依赖实现后执行。
+验证：`mvn -f backend/pom.xml -DskipTests=false test`；预期认证集成测试通过且依赖/配置检查没有被禁止认证方案。
+停止条件：Session、CSRF 或范围授权失败时停止后续业务模块。
+回滚：删除本 Task 新增的工程骨架和认证配置，恢复空仓库状态；不删除既有文档。
 
-实现：定义 `asset_contributor`、`reviewer`、`release_manager`、`governance_admin`、`auditor` 及范围授权；将权限校验放在关键用例入口；拒绝同一人工主体申请并审批；自动发布使用 `actor_type=service`；审计写入主体、时间、对象、前后状态、原因、范围和策略版本；为安装、运行观测、评测 Feature 提供授权和撤回事件契约。
+### Task 2：创建 PostgreSQL 15 治理模式和迁移入口
 
-测试/验证类型：integration、security、contract。
+Slice：`slice-governance-schema`
+需求：`requirement-skill-asset-registration`、`requirement-skill-metadata-completeness`、`requirement-skill-data-retention`
+依赖：Task 1
+文件：Create `backend/src/main/resources/db/migration/V1__create_governance_scope.sql`、`V2__create_skill_asset_version_import.sql`、`V3__create_release_gate_policy.sql`、`V4__create_authorization_audit.sql`、`V5__create_cross_feature_metadata.sql`；Create corresponding `model/entity/*Entity.java` and Mapper interfaces under `mapper/{asset,version,policy,release,governance,audit}/`；Create `backend/src/test/java/com/km/skillhub/mapper/GovernanceMigrationIntegrationTest.java`。
 
-测试场景：未授权导入；跨项目发布；越权查看运行数据；同一人工主体申请/审批；机器主体冒充人工；紧急撤回；部分范围撤回；审计状态还原；重复请求。
+目标：空 PostgreSQL 15 数据库可建立治理表、外键/逻辑关联、索引和追加式对象约束。
 
-测试文件或替代证据：`tests/asset-governance/governance-audit`、`contracts/asset-governance/governance-events`。
+实现：落地 `skill_asset`、`skill_import_attempt`、`skill_artifact`、`skill_version`、`skill_version_manifest`、运行时兼容、范围、角色、策略、绑定、决策、证据、审批、审计和 Outbox；使用 BIGINT identity、UTC 时区、VARCHAR 状态、JSONB 条件；为 `request_id`、`version_digest` 和 active binding 建立唯一约束；用部分唯一索引保证同一范围只有一个当前版本；禁止删除不可变表。
 
-验证：运行安全和审计测试，预期所有越权动作被拒且产生拒绝审计；给定审计序列可以还原对象状态变化；撤回契约携带范围、原因和执行结果字段。
+测试/验证类型：`migration`、`integration`、`static`。
+测试场景：空库顺序迁移、重复 request ID、重复摘要、两个当前 binding、缺失外键、追加表更新/删除权限、策略和保留记录。
+测试文件或替代证据：`GovernanceMigrationIntegrationTest.java`；需要 PostgreSQL 15 测试服务，未提供时标记 `unavailable`，不得标记通过。
+验证：`mvn -f backend/pom.xml -Dtest=GovernanceMigrationIntegrationTest test`；预期 Flyway 空库成功，约束拒绝非法数据。
+停止条件：迁移不能在空库执行或不变量无法由数据库约束表达时停止。
+回滚：在测试数据库销毁后重建；生产只执行经评审的前向兼容迁移，不修改已执行 Flyway 脚本。
 
-停止条件：关键操作存在绕过授权入口、机器主体可伪造人工审批、或审计缺少前后状态/范围时停止后续发布验收。
+### Task 3：实现资产导入、失败留痕和不可变版本
 
-回滚：禁用新增角色映射和未生效授权；保留已写入审计记录；恢复上一个权限策略版本。
+Slice：`slice-asset-import-version`
+需求：`requirement-skill-asset-registration`、`requirement-skill-metadata-completeness`、`requirement-skill-version-immutability`
+依赖：Task 2
+文件：Create `asset/controller/AssetImportController.java`、`asset/service/AssetImportService.java`、`asset/service/impl/AssetImportServiceImpl.java`、`asset/mapper/SkillImportAttemptMapper.java`、`asset/mapper/SkillAssetMapper.java`、`version/service/SkillVersionService.java`、`version/mapper/SkillVersionMapper.java`、`integration/artifact/ArtifactStore.java`、`model/dto/AssetImportRequest.java`、`model/vo/ImportAttemptVO.java`、`model/vo/SkillVersionVO.java`；Create `backend/src/test/java/com/km/skillhub/service/AssetImportServiceTest.java` and `integration/AssetImportIntegrationTest.java`。
 
-### Task 5：建立分层数据保留策略
+目标：授权用户可注册/导入 Skill；成功结果可查询；来源不可读、必要内容缺失或摘要失败时记录失败阶段和原因，不能生成可发布版本。
 
-Slice：`slice-retention-policy`
+实现：先写 `skill_import_attempt(STARTED)`，校验来源和必需内容，规范化清单/元数据后计算 SHA-256 `version_digest`，对象存储使用不可覆盖 URI；成功创建资产、制品、清单和 DRAFT/CANDIDATE 版本；失败在同一治理事务中写 FAILED、稳定失败码和脱敏原因；以 request ID 幂等；禁止更新既有版本字段，差异只读。
 
-需求：`requirement-skill-data-retention`、`requirement-skill-governance-audit`
+测试/验证类型：`unit`、`integration`。
+测试场景：合法导入、无权限、来源超时、不可读文件、缺少主描述/必需文件、未知许可/依赖/运行时、对象存储失败、重复 request ID、内容变化生成新 digest、修改旧版本被拒。
+测试文件或替代证据：`AssetImportServiceTest.java`、`AssetImportIntegrationTest.java`。
+验证：`mvn -f backend/pom.xml -Dtest=AssetImportServiceTest,AssetImportIntegrationTest test`；预期每个失败均有 ImportAttempt，且没有 PUBLISHED 版本。
+停止条件：任何失败路径生成可发布版本或重复请求产生第二个版本时停止。
+回滚：删除仅存在于测试范围的对象和记录；生产通过状态下线/废弃，不物理删除不可变制品和版本。
 
-依赖：Task 4。
+### Task 4：实现生命周期状态机和版本查询
 
-文件：Modify `src/asset-governance/domain/governance-models`、`src/asset-governance/application/policy-service`；Create `src/asset-governance/application/retention-service`、`contracts/asset-governance/retention-policy`、`tests/asset-governance/retention-policy`。
+Slice：`slice-version-lifecycle`
+需求：`requirement-skill-version-immutability`、`requirement-skill-lifecycle-state`
+依赖：Task 3
+文件：Create `version/domain/SkillLifecycle.java`、`version/service/LifecycleService.java`、`version/controller/SkillVersionController.java`、`version/model/VersionTransitionCommand.java`、`audit/service/AuditService.java`；Create `backend/src/test/java/com/km/skillhub/service/LifecycleServiceTest.java`、`integration/VersionImmutabilityIntegrationTest.java`。
 
-目标：治理管理员可以按公司/项目/环境查看、发布和调整保留策略；策略有版本、生效时间和审计；普通用户不能直接删除单条数据。
+目标：DRAFT、CANDIDATE、PUBLISHED、OFFLINE、EMERGENCY_REVOKED、DEPRECATED 转移规则明确，非法转移和默认分发过滤可验证。
 
-实现：建立数据类型、范围、保留期、审批人和生效时间模型；写入默认策略：制品/不可变版本/评测报告/发布决策/审计永久，原始运行事件 365 天，聚合指标永久；范围级策略按环境、项目、公司优先级解析；缩短保留期必须经过治理权限和人工审批；向运行观测和评测数据域提供查询/执行契约；删除接口只允许策略执行器调用。
+实现：将转移表作为明确枚举/领域规则；每次转移校验操作者、原因、证据和当前 row version；状态变更追加审计；查询返回版本摘要、清单、来源、差异和状态原因；OFFLINE/撤回/废弃不得被解析为默认分发版本。
 
-测试/验证类型：unit、integration、security、contract。
+测试/验证类型：`unit`、`integration`。
+测试场景：所有合法转移、门禁失败保持 CANDIDATE、非法回退、并发更新、撤回后查询、默认版本选择、缺失 digest 不绑定 latest。
+测试文件或替代证据：`LifecycleServiceTest.java`、`VersionImmutabilityIntegrationTest.java`。
+验证：`mvn -f backend/pom.xml -Dtest=LifecycleServiceTest,VersionImmutabilityIntegrationTest test`；预期状态和历史记录可还原。
+停止条件：历史内容可被更新或非法状态能进入默认分发时停止。
+回滚：恢复测试数据；生产使用新的状态决策修正，不直接改写历史转移记录。
 
-测试场景：默认策略；新策略未来生效；范围覆盖；缩短保留期；策略冲突；无权限调整；普通用户删除；删除任务失败；运行观测域读取策略。
+### Task 5：实现授权目录搜索和 Vue 资产页面
 
-测试文件或替代证据：`tests/asset-governance/retention-policy`、`contracts/asset-governance/retention-policy`。
+Slice：`slice-authorized-asset-catalog`
+需求：`requirement-skill-catalog-search`、`requirement-skill-metadata-completeness`
+依赖：Task 4
+文件：Create `catalog/controller/AssetCatalogController.java`、`catalog/service/AssetCatalogService.java`、`catalog/mapper/AssetCatalogMapper.java`、`integration/search/CatalogProjection.java`；Create `frontend/src/modules/asset-governance/api/assetApi.ts`、`types/asset.ts`、`components/AssetFilter.vue`、`components/AssetTable.vue`、`pages/asset-governance/AssetCatalogPage.vue`、`AssetDetailPage.vue`；Create `backend/src/test/java/com/km/skillhub/integration/AssetCatalogIntegrationTest.java`、`frontend/tests/integration/asset-catalog.spec.ts`。
 
-验证：运行策略和权限测试，预期新策略的版本、范围和生效时间可查询；无审计的删除全部失败；永久数据没有可用的普通删除路径。
+目标：用户可在授权范围内按名称、描述、标签、来源、运行时、状态和版本查询，并看到完整性、版本、发布、评测和安装关联的缺失状态。
 
-停止条件：策略调整可绕过审计、范围解析不确定或普通业务请求可以删除单条数据时停止数据域接入。
+实现：查询先解析 Session 的范围权限，再用分页和稳定排序查询权威/派生索引；搜索索引只能由 Outbox 重建；前端 API 类型与后端 VO 分离，显式处理 loading/empty/partial/error/forbidden；组件职责单一，筛选、表格、详情和状态展示分开；不得把 unknown 渲染为确定值。
 
-回滚：恢复上一个已审核的保留策略版本并暂停删除/归档执行；不得删除历史策略或永久数据。
+测试/验证类型：`integration`、`component`、`contract`。
+测试场景：多条件搜索、分页、空结果、投影延迟、范围越权、unknown/missing 字段、版本详情、长报告按需加载、重复刷新。
+测试文件或替代证据：`AssetCatalogIntegrationTest.java`、`frontend/tests/integration/asset-catalog.spec.ts`。
+验证：`mvn -f backend/pom.xml -Dtest=AssetCatalogIntegrationTest test`；`npm --prefix frontend run test`；预期无越权数据，列表不全量加载。
+停止条件：查询返回未授权资产或前端把缺失数据猜测成 latest 时停止。
+回滚：恢复上一查询/页面构建；不回滚 PostgreSQL 权威版本状态。
 
-### Task 6：完成跨 Feature 契约和最小端到端验收
+### Task 6：实现公司/项目/环境发布范围和并发绑定
 
-Slice：`slice-governance-integration-contract`
+Slice：`slice-release-scope-binding`
+需求：`requirement-skill-release-scope`
+依赖：Task 4
+文件：Create `release/controller/ReleaseBindingController.java`、`release/service/ReleaseScopeService.java`、`release/mapper/ReleaseBindingMapper.java`、`governance/service/ScopeResolutionService.java`、`release/model/ReleaseTarget.java`；Create `backend/src/test/java/com/km/skillhub/integration/ReleaseScopeIntegrationTest.java`、`contract/ReleaseBindingContractTest.java`。
 
-需求：`requirement-skill-release-gate`、`requirement-skill-governance-audit`、`requirement-skill-lifecycle-state`、`requirement-skill-release-scope`
+目标：已通过门禁的版本可以绑定到公司、项目和环境范围；同一范围只有一个当前版本，返回逐范围结果。
 
-依赖：Task 1 至 Task 5。
+实现：校验目标范围和版本为 PUBLISHED/允许状态，按环境 > 项目 > 公司解析策略；使用事务锁、row version 和部分唯一索引更新旧 binding/插入新 binding；每个目标单独记录成功/失败和审计；范围冲突、权限不足和版本缺失均阻断，不使用 latest。
 
-文件：Modify `contracts/asset-governance`；Create `tests/asset-governance/end-to-end-governance`、`src/asset-governance/infrastructure/adapters/iflytek`。
+测试/验证类型：`integration`、`contract`。
+测试场景：单范围发布、多范围部分失败、同一范围并发、越权范围、父子范围策略、撤回后新增绑定、重复请求。
+测试文件或替代证据：`ReleaseScopeIntegrationTest.java`、`ReleaseBindingContractTest.java`。
+验证：`mvn -f backend/pom.xml -Dtest=ReleaseScopeIntegrationTest,ReleaseBindingContractTest test`；预期没有两个 active binding，失败范围不污染成功范围。
+停止条件：并发下出现两个当前版本或部分失败被返回为整体成功时停止。
+回滚：撤销未生效 binding 并恢复旧 current binding；保留发布决策和审计。
 
-目标：从导入、版本创建、证据门禁、范围发布到撤回的最小链路可运行；安装、运行观测和评测 Feature 可以只依靠稳定契约获取版本和治理结果。
+### Task 7：实现策略版本、证据接入和门禁决策
 
-实现：固定版本摘要、发布 binding、门禁证据、撤回事件、灰度观察结果和保留策略的契约；适配器只实现外部 Registry/Scanner 的读写映射，所有写入经过权威治理服务；构造一条包含正常发布、门禁阻断、部分范围失败和紧急撤回的端到端测试链路。
+Slice：`slice-release-gate-decision`
+需求：`requirement-skill-release-gate`
+依赖：Task 6
+文件：Create `gate/controller/GateEvidenceController.java`、`gate/service/GateDecisionService.java`、`gate/domain/GateRuleEvaluator.java`、`gate/mapper/GateEvidenceMapper.java`、`policy/service/PolicyResolutionService.java`、`policy/mapper/ReleasePolicyMapper.java`、`release/model/ReleaseDecisionEntity.java`；Create `backend/src/test/java/com/km/skillhub/service/GateRuleEvaluatorTest.java`、`integration/ReleaseGateIntegrationTest.java`、`contract/EvidenceContractTest.java`。
 
-测试/验证类型：contract、integration、e2e、manual。
+目标：发布前必须校验静态扫描、评测、风险、审核和适用灰度证据；缺失、失败、过期、摘要不匹配或条件不可判断时阻断。
 
-测试场景：正常发布并被下游查询；缺少版本关联；使用 latest 补齐被拒；扫描失败阻断；灰度证据回写；高危撤回通知；多范围部分失败；策略回滚。
+实现：外部证据先校验来源、version digest、evidence digest、条件和有效期，再关联决策；策略按环境/项目/公司解析并固化快照；自动发布只允许低风险白名单，且满足无高危/严重问题、无权限/外部写操作变化、无新运行时兼容变化、至少 30 个有效案例、回归和评分不低于基线；其他情况为 BLOCKED/PENDING_APPROVAL；审批人分离由 Service 和数据库约束共同校验。
 
-测试文件或替代证据：`tests/asset-governance/end-to-end-governance`；iflytek 适配器需要外部实例时，使用固定 mock 契约和人工 PoC 记录，不能把 mock 结果宣称为上游兼容性已验证。
+测试/验证类型：`unit`、`integration`、`contract`。
+测试场景：全证据通过、证据缺失/过期/失败、摘要篡改、策略冲突、样本不足、评分下降、高风险变化、重复决策、审批申请人等于审批人。
+测试文件或替代证据：`GateRuleEvaluatorTest.java`、`ReleaseGateIntegrationTest.java`、`EvidenceContractTest.java`。
+验证：`mvn -f backend/pom.xml -Dtest=GateRuleEvaluatorTest,ReleaseGateIntegrationTest,EvidenceContractTest test`；预期阻断原因和策略版本可查询。
+停止条件：无证据仍可 APPROVED、证据跨版本复用或审批分离失效时停止。
+回滚：将未生效决策标记 REJECTED/BLOCKED；不删除证据和历史策略。
 
-验证：运行全部 Feature 契约和本 Feature 端到端测试；预期每条结果均能定位到不可变版本、范围、策略、证据和审计记录；执行 `git diff --check` 检查文档与契约变更格式。
+### Task 8：实现灰度观察、回退决策和下游事件契约
 
-停止条件：跨 Feature 字段语义不一致、撤回无法携带影响范围、或端到端结果无法还原发布决策时停止进入代码评审和发布检查。
+Slice：`slice-gray-observation-rollback-contract`
+需求：`requirement-skill-release-gate`、`requirement-skill-release-scope`
+依赖：Task 7
+文件：Create `gate/service/GrayObservationService.java`、`release/service/RollbackDecisionService.java`、`integration/downstream/InstallationReleaseEventPublisher.java`、`integration/downstream/RuntimeEvidenceContract.java`、`integration/downstream/EvaluationEvidenceContract.java`、`audit/model/ReleaseEvidenceSnapshot.java`；Create `backend/src/test/java/com/km/skillhub/service/GrayObservationServiceTest.java`、`integration/OutboxDeliveryIntegrationTest.java`、`contract/CrossFeatureVersionContractTest.java`。
 
-回滚：停用适配器和新契约版本，恢复上一个契约版本；撤销未生效绑定；保留历史版本、证据、决策和审计数据。
+目标：按可配置参数产生灰度观察决策，观察达标才形成全量绑定；触发阈值时产生回退/撤回意图并可靠通知下游。
 
-## 4. 任务顺序与质量门
+实现：默认灰度 10% 且向上取整至少 1 个实例，观察 24 小时且至少 30 次有效调用；错误率比基线增加 2 个百分点、相对增加 20%、基线为 0 时达到 2%、评分下降 5 个百分点或出现高危/严重问题时触发回退；门禁通过但观察未完成写 `PENDING_GRAY`；保存基线、分母、阈值、样本、策略版本和证据；Outbox 事务写入 Redis Streams，消费者按 event ID 幂等重试；事件中只引用明确 `version_digest`。
 
-执行顺序为 Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5 -> Task 6。每个 Slice 必须先有失败测试或最小验证条件，再实现最小行为并运行定向验证；失败时按任务停止条件停留在当前 Slice，不跨任务掩盖问题。
+测试/验证类型：`unit`、`integration`、`contract`、`manual`。
+测试场景：实例数 0/1/小数比例、观察未达样本、24 小时边界、三类错误率阈值、评分阈值、高危立即回退、重复事件、Redis 超时/积压、下游部分失败。
+测试文件或替代证据：`GrayObservationServiceTest.java`、`OutboxDeliveryIntegrationTest.java`、`CrossFeatureVersionContractTest.java`；真实 Redis/下游不可用时用协议级替代证据并标记限制。
+验证：`mvn -f backend/pom.xml -Dtest=GrayObservationServiceTest,OutboxDeliveryIntegrationTest,CrossFeatureVersionContractTest test`；预期 PENDING_GRAY 不被当作全量发布，回退原因完整且事件不重复。
+停止条件：回退条件不稳定、PENDING_GRAY 能被安装 Feature 当成全量版本或重复消费重复计账时停止。
+回滚：暂停自动发布/事件消费者，恢复上一策略版本；已提交的审计和决策保留。
 
-进入代码评审前必须满足：
+### Task 9：实现 RBAC、审批人分离、审计和控制台治理页面
 
-- 九条语义需求都至少有实现任务和验证项。
-- 所有发布、撤回和保留策略均有版本、生效时间、范围和审计。
-- 所有下游关联均使用不可变版本摘要，缺失关联不会绑定 latest。
-- 所有门禁失败、策略缺失、权限拒绝和部分范围失败都有结构化结果。
-- 绿色工程基线、真实构建命令和测试入口已建立并记录。
+Slice：`slice-rbac-audit-console`
+需求：`requirement-skill-governance-audit`
+依赖：Task 7、Task 8
+文件：Create `governance/service/AuthorizationService.java`、`governance/service/ApprovalSeparationService.java`、`audit/controller/AuditController.java`、`audit/service/AuditQueryService.java`、`audit/mapper/AuditLogMapper.java`；Create `frontend/src/modules/asset-governance/api/governanceApi.ts`、`types/governance.ts`、`components/GateEvidencePanel.vue`、`components/ScopeResultTable.vue`、`components/AuditTimeline.vue`、`pages/asset-governance/ReleaseDecisionPage.vue`、`PolicyPage.vue`、`AuditPage.vue`；Create `backend/src/test/java/com/km/skillhub/integration/AuthorizationAuditIntegrationTest.java`、`frontend/tests/e2e/governance-flow.spec.ts`。
+
+目标：角色和范围控制导入、版本、发布、下线、撤回、评测证据和治理配置；关键操作可查询主体、时间、前后状态、原因和策略版本。
+
+实现：后端每次写操作重新鉴权；人工申请人与审批人不得相同；机器主体使用明确 actor type；审计追加写入且按对象/范围/主体/时间分页；前端将证据、逐范围结果、审批分离和审计关联拆为单一职责组件，显式展示 forbidden/partial/error；高风险操作二次确认。
+
+测试/验证类型：`integration`、`e2e`、`security`。
+测试场景：角色矩阵、公司/项目/环境继承、越权、申请人审批自己、机器自动发布、审计前后状态、审计分页、部分成功、紧急撤回确认。
+测试文件或替代证据：`AuthorizationAuditIntegrationTest.java`、`frontend/tests/e2e/governance-flow.spec.ts`。
+验证：`mvn -f backend/pom.xml -Dtest=AuthorizationAuditIntegrationTest test`；`npm --prefix frontend run test:e2e`；预期拒绝结果和审计记录一致。
+停止条件：任何越权写入、审批人分离失效或前端把部分失败显示成整体成功时停止。
+回滚：恢复上一前端构建和权限策略版本；不删除审计记录。
+
+### Task 10：实现保留策略版本和最终设计验证
+
+Slice：`slice-configurable-retention-policy`
+需求：`requirement-skill-data-retention`
+依赖：Task 2、Task 9
+文件：Create `policy/service/RetentionPolicyService.java`、`policy/controller/RetentionPolicyController.java`、`policy/mapper/RetentionPolicyMapper.java`、`policy/model/RetentionPolicyVersionEntity.java`、`backend/src/test/java/com/km/skillhub/service/RetentionPolicyServiceTest.java`、`integration/RetentionPolicyIntegrationTest.java`；Update `docs/product-development/features/feature-skill-asset-release-governance/design.md` and `implementation-plan.md` only when verified behavior changes.
+
+目标：管理员可按公司/项目/环境配置并版本化数据保留规则；默认制品/不可变版本/评测报告/发布决策/审计永久保留，原始运行事件 365 天，聚合指标永久保留。
+
+实现：按数据类别和范围解析策略，环境 > 项目 > 公司；修改插入新版本、设置生效时间、审批主体和审计；缩短策略前执行影响检查，删除/归档任务使用受限主体并记录批次；永久数据无普通删除 API；本 Feature 只提供运行观测域可消费的保留契约。
+
+测试/验证类型：`unit`、`integration`、`migration`。
+测试场景：默认值、范围覆盖、同级冲突、未来生效、缩短策略无权限、旧策略不可改、永久数据删除拒绝、原始事件 365 天契约。
+测试文件或替代证据：`RetentionPolicyServiceTest.java`、`RetentionPolicyIntegrationTest.java`；真实删除任务尚未属于本 Feature，使用策略/权限/审计替代证据。
+验证：`mvn -f backend/pom.xml -Dtest=RetentionPolicyServiceTest,RetentionPolicyIntegrationTest test`；预期策略版本不可更新，调整有审计，永久类别没有删除入口。
+停止条件：策略修改覆盖历史、普通用户可删除永久数据或未配置规则被隐式放行时停止。
+回滚：恢复上一已审核策略版本并暂停删除任务；保留新版本和失败审计。
+
+## 4. Slice 完成门槛
+
+每个 Slice 必须完成：
+
+1. 需求、设计、计划中的语义化 ID 一致。
+2. 正常、异常、边界和重复请求场景至少有一条自动化或有理由的替代验证。
+3. PostgreSQL/Redis/对象存储等依赖不可用时记录 `unavailable` 和环境失败原因，不标记 `pass`。
+4. `version_digest`、策略版本、决策 ID、审计 ID 和 request ID 可在结果中完整关联。
+5. `git diff --check`、路径检查、依赖/版本检查和对应测试通过后才可进入下一个 Slice。
+6. 发现需求变化、公共 API 变化、跨 Feature 责任不清或设计无法实现时停止，并回到对应阶段确认。
+
+## 5. 计划风险和待确认项
+
+- `com.km.skillhub` 只是架构基线中的包名模板，正式公司反向域名确认前不得发布。
+- 对象存储、搜索、分析存储、备份、容量、分区、RPO/RTO 和灾备缺少真实环境依据；相关任务只能实现接口和替代测试。
+- iflytek Registry/Scanner/RBAC 的真实版本、扩展点、许可证和供应链尚未验证；适配器 PoC 失败不应阻塞独立领域实现。
+- 评测有效案例、评分基线和运行事件质量由其他 Feature 提供；条件缺失时本 Feature 必须阻断自动发布。
+- 任何部署、合并、发布、公共 API 变更和真实数据迁移都需要单独人工确认，不由本计划自动授权。

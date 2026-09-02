@@ -19,7 +19,7 @@ sourceType: manual
 
 | 项目 | 内容 |
 | --- | --- |
-| 基线版本 | v0.4-draft |
+| 基线版本 | v0.5-draft |
 | 适用产品 | SKILL HUB，公司内部私有化部署 |
 | 适用 Feature | 资产与发布治理、安装与回退、运行时观测、评测与持续演进 |
 | 事务数据库 | PostgreSQL 15 |
@@ -30,7 +30,7 @@ sourceType: manual
 | 异步任务 | Redis Streams 6.2.14，消费幂等、失败重试和积压可观测 |
 | 高吞吐运行数据 | 独立分析存储，候选为 ClickHouse；具体组件待确认 |
 | 制品和大报告 | 不可变对象存储；具体组件待确认 |
-| 确认状态 | draft，待确认容量、部署、备份和数据安全基线 |
+| 确认状态 | draft，已确认 PostgreSQL 15、核心治理模型和保留默认值；容量、部署、备份和数据安全参数待确认 |
 | 维护责任 | product-development |
 
 当前仓库没有业务源码、数据库或迁移历史。以下表和路径是目标设计，不是已有数据库事实。
@@ -100,6 +100,7 @@ sourceType: manual
 | 表 | 用途 | 关键唯一约束/索引 |
 | --- | --- | --- |
 | `skill_asset` | Skill 稳定身份和当前资产状态 | `uk_asset_key`；`idx_owner_scope_status` |
+| `skill_import_attempt` | 每次注册/导入请求及成功或失败留痕 | `uk_import_request_id`；`idx_import_asset_time` |
 | `skill_artifact` | 制品、来源快照和对象存储定位 | `uk_artifact_digest`；`idx_asset_id` |
 | `skill_version` | 不可变内容版本 | `uk_asset_version_label`、`uk_version_digest`；`idx_asset_state` |
 | `skill_version_manifest` | 版本内容清单和完整性结果 | `uk_version_manifest`；`idx_required_read_status` |
@@ -162,6 +163,25 @@ sourceType: manual
 | `row_version` | BIGINT | 是 | 乐观锁 |
 
 索引：`uk_asset_key`；`idx_asset_owner_status(owner_scope_id,status)`；目录全文检索使用 `name`、`description` 和标签的派生索引。
+
+### 5.1.1 `skill_import_attempt`
+
+每次注册或导入请求都必须先形成导入尝试记录，成功和失败均保留；失败记录不能生成可发布版本。
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | BIGINT | 是 | 主键 |
+| `request_id` | VARCHAR(128) | 是 | 请求幂等键，唯一 |
+| `asset_id` | BIGINT | 否 | 成功识别后的资产；失败前可能为空 |
+| `source_type` / `source_locator` | VARCHAR(32) / VARCHAR(1024) | 是 | 来源类型和脱敏后的定位 |
+| `status` | VARCHAR(32) | 是 | `STARTED`、`SUCCEEDED`、`FAILED` |
+| `failure_stage` | VARCHAR(32) | 否 | 读取、清单、元数据、摘要或持久化阶段 |
+| `failure_code` | VARCHAR(64) | 否 | 稳定错误码 |
+| `failure_reason` | VARCHAR(2048) | 否 | 可定位且已脱敏的失败原因 |
+| `artifact_digest` | CHAR(64) | 否 | 成功生成的制品摘要 |
+| `created_by` / `created_at` | VARCHAR(128) / TIMESTAMP(3) WITH TIME ZONE | 是 | 请求主体和时间 |
+
+同一 `request_id` 重试返回原导入结果；不得因重复请求生成重复版本。失败阶段和原因必须可查询，不能仅写入日志。
 
 ### 5.2 `skill_version`
 
@@ -267,7 +287,7 @@ CREATE UNIQUE INDEX uk_binding_scope_asset_current
 | `conditions` | JSONB | 运行时、模型、案例、样本和环境条件 |
 | `generated_at` / `expires_at` | TIMESTAMP(3) WITH TIME ZONE | 生成和失效时间 |
 
-`release_decision` 至少包含 `version_digest`、目标范围、`policy_version`、决策状态（`BLOCKED`、`PENDING_APPROVAL`、`APPROVED`、`REJECTED`、`REVOKED`）、命中规则、阻断原因、请求幂等键和决策时间。`release_decision_evidence` 通过 `decision_id + evidence_id` 关联全部证据。
+`release_decision` 至少包含 `version_digest`、目标范围、`policy_version`、决策状态（`BLOCKED`、`PENDING_APPROVAL`、`PENDING_GRAY`、`APPROVED`、`REJECTED`、`REVOKED`）、发布模式、命中规则、阻断原因、请求幂等键和决策时间。`PENDING_GRAY` 表示门禁已通过但观察窗口尚未完成，不得被下游当作全量发布；`release_decision_evidence` 通过 `decision_id + evidence_id` 关联全部证据。
 
 `approval_record` 至少包含 `decision_id`、申请主体、审批主体、审批结果、意见、审批时间和主体类型。数据库和 Service 层都必须拒绝同一人工主体同时作为申请人和审批人；自动发布不得写入人工审批记录。
 
@@ -334,6 +354,6 @@ backend/src/main/resources/db/migration/
 - 版本、策略、决策和审计不能被普通更新或删除；重复发布和重复事件不重复记账。
 - 同一范围不会产生两个当前版本；缺失版本关联不会绑定 `latest`。
 - 迁移可在空库执行，恢复演练不会覆盖历史版本和永久数据。
-- 待确认：PostgreSQL 15 JDBC 驱动/Flyway/MyBatis-Plus 准确版本、分析存储、对象存储、容量增长、RPO/RTO、分区分表、身份 ID 和正式 Java 包名。
+- 待确认：分析存储、对象存储、容量增长、RPO/RTO、分区分表、身份 ID 和正式 Java 包名；PostgreSQL JDBC 42.2.27、Flyway 8.5.13 和 MyBatis-Plus 3.5.5 已纳入 JDK 8 兼容基线。
 
 本规范由 `product-development` 维护。数据库选型、核心表、字段语义、索引策略或保留规则发生变化时，必须升级规范版本并同步检查架构、Feature 设计、实施计划和迁移脚本。

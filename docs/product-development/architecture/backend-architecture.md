@@ -23,7 +23,7 @@ sourceType: manual
 | 核心框架 | Spring Boot 2.7.18 模块化单体 + Spring MVC 5.3.31 |
 | 安全框架 | Spring Security 5.7.11 |
 | 维护责任 | product-development |
-| 确认状态 | draft，JDK 8、Spring Boot 2.7.18、Spring Security 5.7.11 和 PostgreSQL 15 已确认，其他版本和实现标准待确认 |
+| 确认状态 | draft，用户已确认 JDK 8、列出的 Java 8 兼容技术版本、PostgreSQL 15、账户密码 Session 和本文件作为设计输入；正式包名、部署拓扑、容量和备份参数待确认 |
 
 本文件是设计阶段架构基线，不是现有代码结构说明。当前仓库没有后端源码、构建文件、数据库模型或测试入口。
 
