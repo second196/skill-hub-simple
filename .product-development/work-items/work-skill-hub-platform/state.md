@@ -13,8 +13,8 @@ feature_dependencies: asset-release -> installation-recovery -> runtime-observab
 requirement_mapping: docs/product-development/work-items/work-skill-hub-platform/decomposition.md
 cross_feature_contracts: docs/product-development/work-items/work-skill-hub-platform/index.md
 overall_acceptance: docs/product-development/work-items/work-skill-hub-platform/index.md#4
-current_phase: requirement
-active_change: CR-003
+current_phase: design
+active_change: CR-006
 confirmed_by: user
 confirmed_at: 2026-09-01
 split_confirmed_by: user
@@ -24,7 +24,10 @@ split_confirmed_at: 2026-09-01
 
 - Facts, boundaries, recommendations, and pending items were extracted from the research report.
 - Four Feature IDs and their dependency relationships were confirmed by the user.
-- Four formal Feature requirement.md files have been created as v1 drafts. Design and implementation have not started.
+- Four formal Feature requirement.md files have been created; `feature-skill-asset-release-governance` has completed its confirmed implementation, and `feature-skill-installation-recovery` has entered design with confirmed requirement v1 and v1-draft design/plan.
+- Runtime observability and evaluation/evolution remain at requirement stage; their design has not started.
+- `feature-skill-installation-recovery` design v1 and implementation plan v1 have been confirmed; implementation has not started.
+- `feature-skill-installation-recovery` implementation has started at Task 1; other Features remain unchanged.
 
 ## Pending confirmation
 
@@ -32,6 +35,10 @@ split_confirmed_at: 2026-09-01
 - [x] Confirm first-release runtime scope; runtime matrix remains configurable.
 - [x] Confirm default rules for automatic release, canary, rollback, and data retention; all remain configurable.
 - [x] Confirm creation of formal requirement.md files for all four Features.
+- [x] Confirm installation recovery requirement v1 and its execution boundary.
+- [ ] Confirm installation recovery design.md and implementation-plan.md.
+- [x] Confirm installation recovery design.md and implementation-plan.md.
+- [ ] Complete installation recovery implementation and verification.
 
 ## Verification status
 

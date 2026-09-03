@@ -4,7 +4,7 @@ description: Skill 与 Tracker 的获取、安装、版本切换、失败恢复�
 audience:
   - product-development
 owner: product-development
-status: draft
+status: confirmed
 lastReviewed: 2026-09-01
 sourceType: manual
 ---
@@ -101,4 +101,6 @@ sourceType: manual
 
 ## 5. 需求评审记录
 
-暂无人工评审记录。
+| 日期 | 评审人 | 结论 |
+| --- | --- | --- |
+| 2026-09-02 | 用户 | 确认 `v1` 作为设计输入；确认采用“后端编排、运行时适配器实际安装、Vue 控制台展示”的边界。 |

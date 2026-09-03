@@ -41,6 +41,22 @@ decomposition_status: confirmed
 
 ## 3. Feature 与需求映射
 
+### 3.0 CR-015 增量映射
+
+用户确认参考项目对齐增量继续归属 `feature-skill-asset-release-governance`，不新增 Feature，不改变安装、运行观测和评测 Feature 的责任边界。
+
+| 需求 | 对齐目标 | 验收重点 | 状态 |
+| --- | --- | --- | --- |
+| `requirement-skill-package-content` | 多文件 Skill 包和内容清单 | 真实包可导入、失败可追溯、文件可浏览/下载 | confirmed |
+| `requirement-skill-semantic-version-tags` | 语义化版本和 `latest/stable/beta` | 标签指向具体 digest，禁用版本不能分发 | confirmed |
+| `requirement-skill-discovery-search` | Skill 发现和筛选 | 授权范围、稳定分页、空/延迟状态 | confirmed |
+| `requirement-skill-file-browse-download` | 文件目录、预览和下载 | 路径安全、版本明确、越权拒绝 | confirmed |
+| `requirement-skill-version-comparison` | 版本比较 | 同资产双 digest 的元数据、文件和文本差异 | confirmed |
+| `requirement-skill-publish-review-lifecycle` | 发布审核和生命周期工作台 | 审批人分离、门禁、撤回/归档/恢复 | confirmed |
+| `requirement-skill-namespace-governance` | 命名空间和成员角色 | Owner/Admin/Member 与范围权限联动 | confirmed |
+| `requirement-governance-account-management` | 管理员账户管理 | 停用会话失效、普通用户无权管理 | confirmed |
+| `requirement-skill-governance-console-branding` | 参考项目同类信息架构和企业主题 | 中文界面、品牌 token、响应式可用 | confirmed |
+
 ### 3.1 `feature-skill-asset-release-governance`
 
 | 需求 | 来源证据 | 可观察行为与验收条件 | 状态 |

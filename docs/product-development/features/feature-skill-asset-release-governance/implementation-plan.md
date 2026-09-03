@@ -4,14 +4,14 @@ description: 按可运行 Slice 实现 Skill 资产、版本、发布门禁、�
 audience:
   - product-development
 owner: product-development
-status: draft
+status: active
 lastReviewed: 2026-09-02
 sourceType: manual
 ---
 
 # 实施计划：Skill 资产与发布治理
 
-> 计划版本：v2；对应需求 `requirement.md` v1 和设计 `design.md` v2。本计划在设计确认后执行，当前不代表已开始实现。
+> 当前实施计划版本：v5；对应需求 `requirement.md` v4 和设计 `design.md` v5。用户已确认按 CR-017 增量继续实现。
 
 ## 1. 实施前约束
 
@@ -20,7 +20,8 @@ sourceType: manual
 - 前端使用 Vue 3、TypeScript、Vite、Vue Router 和 Pinia；组件、类型和注释遵循已确认标准。
 - 认证只实现账户密码 + BCrypt + 服务端 Session + HttpOnly/Secure/SameSite Cookie，不实现 OAuth2、统一单点登录、CLI Device Flow 或 API Token。
 - 版本、策略、决策、证据和审计不可原地修改；跨 Feature 只使用 `version_digest`，不使用 `latest`。
-- 对象存储、搜索、分析存储、容量、备份、RPO/RTO、正式包名和组织身份来源未确认；相关任务必须保留适配器边界，不得擅自选定供应商。
+- 制品使用可替换的本地 `ArtifactStore` 实现，不引入 S3；搜索优先使用 PostgreSQL 可重建查询/投影，不擅自选定外部搜索供应商。
+- 单个包大小、制品根目录、容量、备份、RPO/RTO、正式包名、官网精确品牌色和组织身份来源未确认；相关任务必须保留配置和适配器边界。
 
 ## 2. 文件到事实映射
 
@@ -117,7 +118,7 @@ Slice：`slice-version-lifecycle`
 Slice：`slice-authorized-asset-catalog`
 需求：`requirement-skill-catalog-search`、`requirement-skill-metadata-completeness`
 依赖：Task 4
-文件：Create `catalog/controller/AssetCatalogController.java`、`catalog/service/AssetCatalogService.java`、`catalog/mapper/AssetCatalogMapper.java`、`integration/search/CatalogProjection.java`；Create `frontend/src/modules/asset-governance/api/assetApi.ts`、`types/asset.ts`、`components/AssetFilter.vue`、`components/AssetTable.vue`、`pages/asset-governance/AssetCatalogPage.vue`、`AssetDetailPage.vue`；Create `backend/src/test/java/com/km/skillhub/integration/AssetCatalogIntegrationTest.java`、`frontend/tests/integration/asset-catalog.spec.ts`。
+文件：Create `catalog/controller/AssetCatalogController.java`、`catalog/service/AssetCatalogService.java`、`catalog/mapper/AssetCatalogMapper.java`、`catalog/model/vo/AssetDetailVO.java`、`integration/search/CatalogProjection.java`；Update `version/mapper/SkillVersionMapper.java` for authorized version lists; Create `frontend/src/modules/asset-governance/api/assetApi.ts`、`types/asset.ts`、`components/AssetFilter.vue`、`components/AssetTable.vue`、`components/AssetImportForm.vue`、`components/ImportResultPanel.vue`、`components/VersionList.vue`、`pages/asset-governance/AssetCatalogPage.vue`、`AssetImportPage.vue`、`AssetDetailPage.vue`、`VersionDetailPage.vue` and `router/index.ts`; Create `backend/src/test/java/com/km/skillhub/integration/AssetCatalogIntegrationTest.java`、`frontend/tests/integration/asset-catalog.spec.ts`。
 
 目标：用户可在授权范围内按名称、描述、标签、来源、运行时、状态和版本查询，并看到完整性、版本、发布、评测和安装关联的缺失状态。
 
@@ -238,3 +239,314 @@ Slice：`slice-configurable-retention-policy`
 - iflytek Registry/Scanner/RBAC 的真实版本、扩展点、许可证和供应链尚未验证；适配器 PoC 失败不应阻塞独立领域实现。
 - 评测有效案例、评分基线和运行事件质量由其他 Feature 提供；条件缺失时本 Feature 必须阻断自动发布。
 - 任何部署、合并、发布、公共 API 变更和真实数据迁移都需要单独人工确认，不由本计划自动授权。
+## 19. CR-012 增量实施说明
+
+Add `backend/src/main/resources/db/migration/V7__seed_default_governance_accounts.sql` and `backend/src/test/java/com/km/skillhub/integration/DefaultAccountSeedIntegrationTest.java`. The migration creates `admin/admin123` and `user/user123` as BCrypt-backed, enabled accounts, assigns the system governance scope and RBAC roles, and does not overwrite existing passwords. The integration test verifies both password hashes and role bindings against PostgreSQL 15.
+
+## 20. CR-015 增量实施计划
+
+### Task 11：Skill 包导入、本地制品读取和文件清单
+
+Slice：`slice-skill-package-content`
+
+需求：`requirement-skill-package-content`、`requirement-skill-file-browse-download`
+
+文件：Update `asset/*` and `integration/artifact/*`; create `content/controller/*`、`content/service/*`、`content/model/*`; create Flyway `V10__align_skillhub_registry_governance.sql`; add package import, manifest, path traversal, local file read and download tests.
+
+目标：支持真实多文件 Skill 包导入、文件清单、文本预览、单文件下载和版本包下载；失败阶段均有导入留痕。
+
+验证：`mvn -f backend/pom.xml -Dtest=SkillPackageImportServiceTest,ArtifactContentServiceTest test`；`npm --prefix frontend run test -- --run`。包解析、非法路径、摘要不匹配、越权和大文件边界必须有测试；本地制品根目录使用配置项，不引入 S3。
+
+回滚：生产只执行前向迁移；异常制品标记失败或下线，不删除不可变版本；代码回退到上一个 ArtifactStore 实现。
+
+### Task 12：Skill 发现搜索、命名空间详情和元数据展示
+
+Slice：`slice-skill-discovery-search`
+
+需求：`requirement-skill-discovery-search`、`requirement-skill-namespace-governance`、`requirement-skill-metadata-completeness`
+
+文件：Update `catalog/*`; create `discovery/*`、`namespace/*`; extend mapper/query types and catalog frontend modules; add authorized search, namespace, member and detail contract tests.
+
+目标：按名称、描述、标签、命名空间、状态和更新时间稳定分页查询；用户只能看到有权限的资产和命名空间；详情展示来源、许可、依赖、运行时和缺失状态。
+
+验证：`mvn -f backend/pom.xml -Dtest=SkillDiscoveryIntegrationTest,NamespaceAuthorizationTest test`；`npm --prefix frontend run test`；验证空结果、索引延迟、越权、成员角色和分页稳定性。
+
+回滚：保留既有 `/api/v1/assets` 查询契约，新增发现接口可独立关闭；不删除命名空间历史和授权审计。
+
+### Task 13：语义化版本、标签和版本比较
+
+Slice：`slice-version-tags-comparison`
+
+需求：`requirement-skill-semantic-version-tags`、`requirement-skill-version-comparison`
+
+文件：Update `version/*`、`catalog/*`; create tag history mapper/service and comparison VO; add `/space/:namespace/:slug/versions/compare` frontend page and tests.
+
+目标：支持语义化版本、`latest/stable/beta` 标签解析和明确 digest 的文件/元数据比较；不可分发状态自动解除标签目标。
+
+验证：`mvn -f backend/pom.xml -Dtest=SemanticVersionServiceTest,VersionComparisonServiceTest test`；前端版本比较组件测试和生产构建；验证非法版本、跨资产比较、撤回后标签解析和二进制文件差异。
+
+回滚：标签变更只能通过新的历史记录修正；版本内容、digest 和既有生命周期记录不回写。
+
+### Task 14：发布审核和生命周期工作台
+
+Slice：`slice-publish-review-lifecycle`
+
+需求：`requirement-skill-publish-review-lifecycle`、`requirement-skill-release-gate`、`requirement-skill-governance-audit`
+
+文件：Update `release/*`、`gate/*`、`audit/*`; create `review/*`; add publish/review pages, service tests and approval separation integration tests.
+
+目标：候选版本可以提交审核；审核人可查看文件、门禁、风险并通过/拒绝/撤回；归档、恢复和重新发布遵循已有状态机、门禁和审计。
+
+验证：`mvn -f backend/pom.xml -Dtest=ReviewLifecycleServiceTest,ApprovalSeparationIntegrationTest test`；前端审核工作台测试；验证申请人不能审批、缺证阻断、撤回范围可见和恢复不绕过门禁。
+
+回滚：恢复上一已审核发布绑定，保留审核、决策和审计记录；不物理删除版本。
+
+### Task 15：管理员账户、命名空间、标签和审计页面
+
+Slice：`slice-admin-governance-console`
+
+需求：`requirement-governance-account-management`、`requirement-skill-namespace-governance`、`requirement-skill-governance-console-branding`
+
+文件：Update `governance/*`、`audit/*`; create `admin/*`; add `/admin/accounts`、`/admin/namespaces`、`/admin/labels` and dashboard namespace/member routes; add authorization and UI tests.
+
+目标：管理员可管理账户状态、命名空间、成员、标签和审计；停用账户下一次鉴权失效；普通用户无法进入管理员写操作。
+
+验证：`mvn -f backend/pom.xml -Dtest=AdminGovernanceAuthorizationTest,DisabledAccountSessionTest test`；`npm --prefix frontend run test`；验证管理员/普通用户权限和审计完整性。
+
+回滚：恢复上一个前端路由和权限策略；保留停用、成员、标签和审计历史。
+
+### Task 16：参考项目交互结构和公司品牌主题
+
+Slice：`slice-branded-discovery-console`
+
+需求：`requirement-skill-governance-console-branding`
+
+文件：Update `frontend/src/router/index.ts`、`frontend/src/styles.css`、`frontend/src/App.vue`; create `pages/discovery`、`pages/skill`、`pages/namespace`、`pages/review`、`pages/admin`; add display-text and responsive route tests.
+
+目标：形成参考项目同类的发现/详情/版本/治理信息架构，全部界面文案为中文；品牌色集中为可配置 CSS token，桌面和移动布局可用。
+
+验证：`npm --prefix frontend run test`；`npm --prefix frontend run build`；`git diff --check`；官网精确色值不可验证时，记录为 `unavailable`，不把默认 token 说明为官网事实。
+
+回滚：恢复上一版路由和样式 token，不影响后端数据和治理状态。
+
+### Task 17：增量整体契约验证
+
+Slice：`slice-skillhub-alignment-contract`
+
+需求：全部 CR-015 增量需求
+
+文件：Create/update backend integration and frontend contract/e2e tests; update `state.md` with each task result.
+
+目标：从登录、发现、上传、详情、文件预览、版本比较、审核、发布、命名空间和管理员治理串联验证，不验证被明确排除的 OAuth、S3、微服务和社交功能。
+
+验证：后端定向 Maven 测试、前端 Vitest、生产构建、路由检查、迁移验证和 `git diff --check`；Redis 不可用时只将受影响 Outbox 测试标记 `unavailable`，不得掩盖其他失败。
+
+停止条件：任何越权返回、版本不可变性破坏、文件路径穿越、审批人分离失效、中文界面回退为英文或品牌样式溢出时停止并回退到对应 Slice。
+
+### Task 18：企业级应用壳和导航
+
+Slice：slice-enterprise-console-shell
+
+需求：requirement-skill-governance-console-branding
+
+依赖：Task 16
+
+文件：更新 frontend/src/components/AppShell.vue、frontend/src/router/index.ts、frontend/src/styles.css；必要时在 frontend/src/components/layout/ 创建共享布局组件，并更新壳层和路由测试。
+
+目标：桌面端展示左侧分组导航、顶部工作栏和面包屑，移动端可通过抽屉访问同一导航；保留旧业务路由和服务端 Session。
+
+验证：npm --prefix frontend run test、npm --prefix frontend run build、浏览器桌面/移动截图与导航交互检查。
+
+回滚：恢复上一版应用壳和主题样式，不影响后端和治理数据。
+
+### Task 19：公共页面视觉和工作概览
+
+Slice：slice-enterprise-console-pages
+
+需求：requirement-skill-governance-console-branding、requirement-skill-catalog-search、requirement-skill-publish-review-lifecycle
+
+依赖：Task 18
+
+文件：更新 frontend/src/styles.css 和 frontend/src/pages/ 下受影响页面；已有接口可以支持摘要且不需要新增后端契约时，创建 frontend/src/pages/dashboard/DashboardPage.vue。
+
+目标：资产、发现、版本、审核、发布、安装和系统管理页面统一使用页面标题、筛选工具栏、表格/详情、状态反馈和高风险操作确认布局；工作概览只聚合已有查询结果。
+
+验证：页面组件测试、前端类型检查、生产构建、主要路由访问和响应式布局检查。
+
+回滚：按页面恢复旧模板和样式；不得回滚或修改既有业务接口。
+
+### Task 20：全量中文化和企业化验收
+
+Slice：slice-enterprise-console-localization-verification
+
+需求：requirement-skill-governance-console-branding、requirement-skill-governance-audit
+
+依赖：Task 19
+
+文件：更新用户可见标签、显示文本映射和 frontend/tests/；增加路由/中文文案检查和浏览器证据。
+
+目标：功能文案、错误提示、状态标签、操作按钮、空状态和权限提示统一为中文；技术标识、路由和摘要值保持接口兼容。
+
+验证：npm --prefix frontend run test、npm --prefix frontend run build、git diff --check、浏览器截图和关键流程人工交互验证。
+
+停止条件：发现乱码、英文功能文案、导航不可达、移动端内容重叠、关键操作越权或 API 契约变化时停止。
+
+## 21. 本轮实施检查点
+
+- Task 11-13 已落地：真实 ZIP 导入、本地制品读取、文件清单、授权发现、命名空间查询、语义化版本标签和摘要比较。
+- Task 14 已落地最小闭环：审核申请、审核队列、通过/拒绝/撤回、申请人与审核人分离；审核通过不会绕过发布门禁。
+- Task 15 已落地管理员闭环：账户启停、命名空间成员增删/角色调整、版本标签查询和移除；所有写操作追加审计。
+- Task 16 已落地：统一中文工作台导航、发现/资产/审核/安装/治理/管理入口、企业蓝色 CSS token 和移动端布局。
+- Task 17 定向验证已通过，完整浏览器 E2E 尚未配置；官网精确色值仍为 `unavailable`，不宣称 token 与官网精确一致。
+
+## 22. CR-017 API Token 增量实施计划
+
+> 增量计划版本：v5；对应需求 `requirement.md` v4 和设计 `design.md` v5。用户已明确授权在当前工程实现，暂不实现 CLI。
+
+### Task 21：Token 数据模型和生命周期服务
+
+Slice：`slice-api-token-lifecycle`
+
+需求：`requirement-skill-api-token-access`
+
+文件：新增 `backend/src/main/resources/db/migration/V11__create_api_token.sql`、`backend/src/main/java/com/km/skillhub/token/model/`、`token/mapper/ApiTokenMapper.java`、`token/service/ApiTokenService.java` 和 `token/controller/ApiTokenController.java`；新增服务/迁移定向测试。
+
+目标：创建 Token 时只持久化摘要；支持当前账号 Token 列表、过期时间更新和不可逆撤销；名称、作用域和过期时间校验失败返回稳定错误。
+
+验证：JDK 8 Maven 定向测试、Flyway V11 迁移检查、Token 原文不落库查询和 Token 生命周期接口测试。
+
+回滚：停止应用后回退应用代码并保留前向兼容的 `api_token` 表；不得修改既有迁移。
+
+### Task 22：Bearer 认证和作用域隔离
+
+Slice：`slice-api-token-bearer-scope`
+
+需求：`requirement-skill-api-token-access`、`requirement-skill-asset-registration`、`requirement-skill-catalog-search`
+
+文件：新增 `backend/src/main/java/com/km/skillhub/token/security/ApiTokenAuthenticationFilter.java`、`ApiTokenScopeFilter.java` 及认证测试；更新 `backend/src/main/java/com/km/skillhub/config/SecurityConfig.java`。
+
+目标：Bearer Token 可调用既有资产读取和 ZIP 导入接口；缺少/错误/过期/撤销 Token 为 401，作用域不足为 403；Session 请求仍要求网页写操作 CSRF，Bearer 写请求不依赖 Cookie CSRF。
+
+验证：Spring MockMvc Bearer 契约测试、Session CSRF 回归测试、作用域矩阵测试和账号停用测试。
+
+回滚：移除新增过滤器注册和作用域限制，保留 Token 表与服务层以便前向兼容。
+
+## 6. CR-020 参考 SkillHub 前端对齐增量
+
+### Task 25：主导航、控制台、我的技能、发布和访问凭证
+
+Slice：`slice-reference-dashboard-publish`
+
+需求：`requirement-skill-governance-console-branding`、`requirement-skill-catalog-search`、`requirement-skill-package-content`、`requirement-skill-api-token-access`
+
+文件：更新 `frontend/src/components/layout/SideNavigation.vue`、`frontend/src/components/AppShell.vue`、`frontend/src/pages/dashboard/DashboardPage.vue`、`frontend/src/pages/account/TokenManagementPage.vue`、`frontend/src/router/index.ts`；新增 `frontend/src/pages/dashboard/MySkillsPage.vue`、`frontend/src/pages/dashboard/PublishPage.vue`。
+
+目标：侧边栏文字与参考项目一致，具备控制台、我的技能、发布、我的命名空间、治理中心、审核管理、访问凭证和设置入口；我的技能使用状态 Tab 和确认弹窗，发布使用命名空间/可见性/ZIP/发布前检查/风险确认链路，访问凭证保持既有真实 API。
+
+验证：`npm --prefix frontend run test`、`npm --prefix frontend run build`、路由静态检查、`git diff --check`。
+
+回滚：移除新增页面和路由，恢复旧导航入口；不修改后端 API、认证、Token 数据和资产治理状态。
+
+### Task 26：搜索、技能详情、文件浏览、版本比较和审核交互
+
+Slice：`slice-reference-skill-review-interaction`
+
+需求：`requirement-skill-catalog-search`、`requirement-skill-file-browse-download`、`requirement-skill-version-comparison`、`requirement-skill-publish-review-lifecycle`
+
+文件：更新 `frontend/src/pages/discovery/SkillSearchPage.vue`、`frontend/src/pages/skill/SkillDetailPage.vue`、`frontend/src/pages/skill/SkillVersionComparePage.vue`、`frontend/src/pages/review/ReviewWorkbenchPage.vue`、`frontend/src/modules/discovery/api.ts`；新增统一弹窗/文件预览所需的 Vue 组件和测试。
+
+目标：搜索支持排序、标签、命名空间、结果计数和分页；详情支持 README、文件树、预览弹窗、下载、安装命令和生命周期操作；版本比较兼容参考路径；审核支持分类/状态 Tab、详情查看、意见弹窗和确认弹窗。不得出现收藏、评分或举报入口。
+
+验证：前端页面组件测试、搜索参数测试、文件预览异常测试、`npm --prefix frontend run build`、`git diff --check`。
+
+回滚：恢复旧页面实现，保留现有后端内容和审核接口。
+
+### Task 27：命名空间、治理中心、管理拆分和设置
+
+Slice：`slice-reference-governance-settings`
+
+需求：`requirement-skill-namespace-governance`、`requirement-governance-account-management`、`requirement-skill-governance-console-branding`
+
+文件：新增命名空间列表/成员/审核、治理中心、管理员用户/命名空间/标签/审计和安全/个人/通知设置页面；更新 `frontend/src/router/index.ts`、导航和面包屑；扩展管理员 API 与可验证的只读状态映射。
+
+目标：补齐参考项目页面入口和布局；已有后端能力使用真实调用，缺少写接口的设置或资料能力展示中文的未开放状态，不伪造提交成功；所有危险操作使用确认弹窗，保留 `/admin`、`/reviews` 等当前路由兼容。
+
+验证：页面路由和权限静态检查、组件交互测试、`npm --prefix frontend run test`、`npm --prefix frontend run build`。
+
+回滚：移除新增页面路由，旧管理页和治理页继续可访问；不修改 PostgreSQL 迁移。
+
+### Task 28：对齐增量回归验证
+
+Slice：`slice-reference-console-verification`
+
+需求：CR-020 涉及的全部需求。
+
+验证：前端单元测试、生产构建、`git diff --check`；浏览器截图/交互验证在 Playwright 可用时执行，否则标记 `unavailable`，不将静态阅读写成通过。
+
+停止条件：排除项重新出现、中文界面出现未映射英文、真实接口契约错误、弹窗动作绕过权限或危险操作无确认。
+
+### Task 23：Vue Token 管理控制台
+
+Slice：`slice-api-token-console`
+
+需求：`requirement-skill-api-token-access`、`requirement-skill-governance-console-branding`
+
+文件：新增 `frontend/src/modules/token/api/tokenApi.ts`、`frontend/src/modules/token/types/token.ts`、`frontend/src/pages/account/TokenManagementPage.vue`；更新 `frontend/src/router/index.ts`、`frontend/src/components/layout/SideNavigation.vue`、`frontend/src/components/AppShell.vue`、相关样式和前端测试。
+
+目标：在 `/account/tokens` 按参考 SkillHub 的页面结构提供全中文 Token 清单；侧边栏入口使用 `访问凭证`，页面使用 `Token 管理` 页面头部、`API Tokens` 清单卡片、`创建新 Token` 创建弹窗、一次性原文展示/复制、期限编辑弹窗和删除二次确认，保留作用域与状态辅助信息，并沿用企业蓝色控制台布局和 Session CSRF。业务文案使用“访问凭证”，凭证本体统一称为 API Token，不使用“Token 密码”或“API 密钥”。
+
+验证：`npm --prefix frontend run test`、`npm --prefix frontend run build`、Token 页面类型与路由检查。
+
+回滚：恢复 Token 页面路由和导航，不影响后端 Token 元数据。
+
+### Task 24：CR-017 整体契约验证
+
+Slice：`slice-api-token-contract-verification`
+
+需求：`requirement-skill-api-token-access` 及其关联资产读取/导入需求
+
+目标：串联创建 Token、一次性读取、Bearer 读取资产、Bearer 导入 ZIP、作用域拒绝、过期/撤销拒绝和网页 Session 回归。
+
+验证：后端定向 Maven 测试、前端 Vitest、生产构建、`git diff --check`、Flyway 迁移检查；Redis 相关既有环境失败单独记录，不与 Token 功能结论混淆。
+
+停止条件：Token 原文持久化或出现在日志、作用域越权、Session CSRF 回归、账号停用后 Bearer 仍可用、前端 Token 误显示历史原文时停止。
+
+## 7. CR-021 侧边栏收敛与页签承载实施计划
+
+### Task 30：企业侧边栏入口收敛
+
+Slice：`slice-enterprise-sidebar-convergence`
+
+需求：`requirement-skill-governance-console-branding`
+
+文件：更新 `frontend/src/components/layout/SideNavigation.vue`、`frontend/src/styles.css`、`frontend/src/components/AppShell.vue`。
+
+目标：移除导航项前置单字文字，保留高频入口，合并治理、系统管理和设置的低频入口，并隐藏侧边栏滚动条视觉；桌面端和移动抽屉均保持可访问。
+
+验证：侧边栏静态入口检查、全中文文案检查、`npm --prefix frontend run build`、`git diff --check`。
+
+回滚：恢复 CR-020 侧边栏模板和样式，不影响业务页面、API、权限和数据。
+
+### Task 31：聚合页面页签承载
+
+Slice：`slice-governance-admin-settings-tabs`
+
+需求：`requirement-skill-governance-console-branding`、`requirement-skill-governance-audit`、`requirement-governance-account-management`
+
+文件：新增 `frontend/src/components/ui/PageTabs.vue`；更新治理中心、审核、发布策略、审计、系统管理、用户管理、命名空间管理、标签管理和设置页面，以及 `frontend/src/router/index.ts`。
+
+目标：治理中心、系统管理和设置通过查询参数提供可复制链接的页签切换；旧路由继续可达；现有加载、错误、确认弹窗和权限行为保持不变，不伪造未开放接口。
+
+验证：页签路由静态检查、前端组件测试、`npm --prefix frontend run test`、`npm --prefix frontend run build`。
+
+回滚：去除聚合页签入口，保留原页面路由；不修改后端契约和 PostgreSQL 迁移。
+
+### Task 32：对齐增量回归验证
+
+Slice：`slice-sidebar-tabs-regression`
+
+需求：CR-021 涉及的全部需求。
+
+验证：导航排除项检查、页签切换和深链接检查、`npm --prefix frontend run test`、`npm --prefix frontend run build`、`git diff --check`；浏览器截图和真实点击验证在 Playwright 不可用时记录为 `unavailable`。
+
+停止条件：侧边栏出现排除项、合并页面无法访问原功能、页签刷新丢失、中文文案回退为英文或移动端内容重叠。

@@ -1,0 +1,24 @@
+# ===== 通用 =====
+.DS_Store
+*.local
+.env.*
+docs/superpowers/
+# ===== Claude Code =====
+.claude/
+
+# ===== 前端 (frontend/) =====
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ===== 后端 (backend/) =====
+backend/target/
+backend/tmp/
+backend/*.class
+backend/.settings/
+backend/.classpath
+backend/.project
+backend/.factorypath
+backend/.idea/
+backend/*.iml
+backend/dependency-reduced-pom.xml

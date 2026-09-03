@@ -4,14 +4,14 @@ description: Skill 资产登记、不可变版本、授权发布、门禁、审�
 audience:
   - product-development
 owner: product-development
-status: draft
+status: active
 lastReviewed: 2026-09-02
 sourceType: manual
 ---
 
 # 方案：Skill 资产与发布治理
 
-> 设计版本：v2。本文已依据用户确认的架构与实施基线形成，需在进入 implementation 前再次确认方案、风险和实施计划。
+> 设计版本：v4（包含已确认的 CR-015、CR-016 增量）。CR-017 API Token 增量将当前实施设计提升为 v5；方案、风险和实施计划已由用户确认，可作为后续 implementation 的设计依据。
 
 ## 1. 目标与非目标
 
@@ -38,12 +38,12 @@ sourceType: manual
 
 | 依据 | 版本/范围 | 用途 |
 | --- | --- | --- |
-| `docs/product-development/features/feature-skill-asset-release-governance/requirement.md` | v1 | 本 Feature 的 9 条确认需求 |
+| `docs/product-development/features/feature-skill-asset-release-governance/requirement.md` | v4 | 本 Feature 的原始需求、CR-015 对齐增量和 CR-017 API Token 增量 |
 | `docs/product-development/work-items/work-skill-hub-platform/decomposition.md` | confirmed | Feature 边界、跨 Feature 契约和需求映射 |
 | `docs/research/skill-hub-research.md` | 3.1、4.3、5.1、6.2、6.4、7.3、8.1 | Registry、审核、扫描、发布和保留的调研事实 |
 | `.product-development/features/feature-skill-asset-release-governance/state.md` | CR-008 后 | 当前阶段、确认决策和 greenfield 事实 |
 
-设计版本和实施计划版本均为 v2。跨 Feature 关联统一使用不可变 `version_digest`；缺失关联必须显式标记，禁止用 `latest` 补齐。
+当前实施设计版本为 v5，实施计划版本为 v5。跨 Feature 关联统一使用不可变 `version_digest`；缺失关联必须显式标记，禁止用 `latest` 补齐。
 
 ## 3. 架构和实施基线
 
@@ -451,9 +451,288 @@ backend/src/main/resources/db/migration/
 - [ ] 正式公司反向域名包名替换 `com.km.skillhub`。
 - [ ] 对象存储、搜索索引、分析存储的产品、版本和部署方式。
 - [ ] PostgreSQL 备份、RPO/RTO、加密、容量和分区策略。
-- [ ] 组织范围同步来源、账号初始化和密码复杂度/锁定策略。
+- [ ] 组织范围同步来源、密码复杂度和锁定策略。
 - [ ] API 分页协议、错误码目录、前端组件库和浏览器支持范围。
 
 ### 18.3 不覆盖项
 
 运行时执行、安装/回退执行、Tracker 和原始运行事件采集、评测 Runner、自动生成 Skill 内容、实际灰度流量切换和跨 Feature 的完整运营页面均不在本 Feature 实施范围。
+## 19. CR-012 Incremental Design: Default Accounts
+
+Flyway `V7__seed_default_governance_accounts.sql` creates the first-run accounts and their RBAC bindings:
+
+- `admin`: system governance administrator in the `COMPANY/skillhub` scope, with asset, review, release, policy and audit roles.
+- `user`: ordinary asset contributor in the same scope.
+- Passwords are stored only as BCrypt hashes. The migration uses conflict-safe inserts and does not overwrite an existing account password.
+
+## 20. CR-015 增量设计：参考项目能力对齐
+
+### 20.1 对齐边界
+
+本增量以参考项目的业务交互和治理能力为参照，保留当前项目的模块化单体、账户密码 Session、PostgreSQL 15、Redis Streams 和本地制品存储约束。参考项目的 React、OAuth/Token 认证、S3 实现和微服务拆分不进入本设计。
+
+| 对齐能力 | 当前设计落位 | 明确不复制 |
+| --- | --- | --- |
+| Skill 发现、全文搜索、筛选和分页 | `catalog` 扩展发现查询与 PostgreSQL 派生索引 | 不引入外部搜索供应商 |
+| Skill 详情、版本列表、文件浏览和下载 | `catalog`、`content`、`integration.artifact` | 不引入 S3；制品使用可替换本地存储 |
+| 语义化版本、`latest/stable/beta` 标签、版本比较 | `version` 扩展标签和只读比较服务 | 标签不能绕过生命周期和门禁 |
+| 发布、审核、撤回、归档和恢复 | `release`、`gate`、新增 `review` | 运行时流量切换仍由下游负责 |
+| 命名空间及 Owner/Admin/Member | `namespace` 和 `governance` | 不建设 SaaS 租户隔离 |
+| 管理员用户、命名空间、标签和审计 | `governance`、`audit`、新增 `admin` 查询接口 | 不增加 Token/CLI 身份认证 |
+
+收藏、评分、订阅、通知以及参考项目中面向其生态的个人设置不在本次增量范围内。
+
+### 20.2 后端模块扩展
+
+在现有 `com.km.skillhub` 模块化单体中新增以下边界，依赖方向仍为 `controller -> service -> mapper`：
+
+```text
+backend/src/main/java/com/km/skillhub/
+├─ namespace/{controller,model,service,mapper}/
+├─ content/{controller,model,service}/
+├─ review/{controller,model,service,mapper}/
+├─ discovery/{model,service,mapper}/
+└─ admin/{controller,model,service}/
+```
+
+- `namespace` 负责命名空间、成员和 Owner/Admin/Member 角色；资产查询必须通过命名空间和既有范围权限双重校验。
+- `content` 负责包内文件清单、文本预览、单文件下载和版本包下载；不得把用户提供的路径直接拼接到文件系统路径。
+- `discovery` 负责授权后的关键词、标签、命名空间、状态、版本和更新时间查询；搜索投影只能作为派生读模型，不能写入权威生命周期。
+- `review` 负责候选版本的提交、通过、拒绝、撤回和重新发布申请；审批人必须不同于申请人，并复用既有门禁证据。
+- `admin` 负责账户、命名空间、标签和审计的管理员查询/变更；权限检查在服务端完成，前端仅隐藏无权限操作。
+
+### 20.3 公共接口和契约
+
+所有写接口继续要求服务端 Session 和 CSRF；所有读接口都执行范围授权。保留现有 `/api/v1/assets` 治理接口，同时增加以下接口：
+
+```text
+GET  /api/v1/skills/search
+GET  /api/v1/skills/{namespace}/{slug}
+GET  /api/v1/skills/{namespace}/{slug}/versions
+GET  /api/v1/skills/{namespace}/{slug}/versions/{versionDigest}/files
+GET  /api/v1/skills/{namespace}/{slug}/versions/{versionDigest}/file?path=...
+GET  /api/v1/skills/{namespace}/{slug}/versions/{versionDigest}/download
+GET  /api/v1/skills/{namespace}/{slug}/versions/compare?from=...&to=...
+POST /api/v1/assets/imports/package
+POST /api/v1/reviews
+POST /api/v1/reviews/{reviewId}/approve
+POST /api/v1/reviews/{reviewId}/reject
+POST /api/v1/reviews/{reviewId}/withdraw
+GET  /api/v1/namespaces
+GET  /api/v1/namespaces/{namespaceKey}/members
+POST /api/v1/namespaces/{namespaceKey}/members
+PUT  /api/v1/namespaces/{namespaceKey}/members/{principalId}/role
+GET  /api/v1/admin/accounts
+PUT  /api/v1/admin/accounts/{principalId}/status
+```
+
+`POST /api/v1/assets/imports/package` 支持 multipart Skill 包，并保留原有 JSON 导入接口用于兼容已有控制台和自动化测试。导入响应必须返回 `requestId`、`assetId`、`versionDigest`、文件完整性结果和失败留痕；不返回密码、内部文件系统绝对路径或未经授权的制品地址。
+
+### 20.4 PostgreSQL 15 增量模型
+
+新增 Flyway `V10__align_skillhub_registry_governance.sql`，不修改已执行的 V1-V9。主要增量如下：
+
+| 表/变更 | 作用 | 关键约束 |
+| --- | --- | --- |
+| `skill_namespace` | 命名空间身份、显示名、状态和所属治理范围 | `namespace_key` 唯一；状态变更审计 |
+| `skill_namespace_member` | 命名空间成员和角色 | `(namespace_id, principal_id)` 唯一；角色限定 Owner/Admin/Member |
+| `skill_asset.namespace_id`, `skill_asset.slug` | 将资产映射到命名空间 | `(namespace_id, slug)` 唯一；历史资产迁移到默认命名空间 |
+| `skill_version_file` | 文件路径、类型、大小、摘要和制品相对引用 | `(version_id, path)` 唯一；路径不能为绝对路径或包含 `..` |
+| `skill_version_tag` | 当前标签到具体版本的指向 | `(asset_id, tag_name)` 唯一；只允许指向可分发版本 |
+| `skill_version_tag_history` | 标签变更历史 | 追加写入；必须关联操作主体和前后 digest |
+| `skill_review_task` | 版本审核申请、审核人、状态和意见 | 同一版本最多一个待处理申请；申请人不能审批 |
+| `skill_asset` 元数据字段 | 许可、运行时、标签和搜索展示信息 | 缺失值保持 `UNKNOWN`，不自动猜测 |
+
+文件正文不写入 PostgreSQL。`skill_version_file` 保存相对对象键，默认由本地 `skillhub.artifact.root` 配置决定；存储接口保持 `ArtifactStore`，后续可替换实现但本轮不选择 S3。文件读写均通过版本摘要和已校验清单定位。
+
+### 20.5 版本和标签规则
+
+- 版本号按 `MAJOR.MINOR.PATCH`，允许预发布标识；无效格式拒绝导入或发布。
+- `latest` 解析为该资产最新的 `PUBLISHED` 版本，解析结果立即转换为具体 `versionDigest` 后再进入下游契约。
+- `stable` 和 `beta` 等自定义标签只能绑定 `CANDIDATE` 或 `PUBLISHED` 中符合策略的版本；撤回、下线和废弃时自动解除可分发指向并写入历史。
+- 版本比较服务只接受同一资产的两个明确 digest，返回元数据差异、文件状态和文本 diff；二进制只返回摘要和大小变化。
+
+### 20.6 前端信息架构和品牌主题
+
+前端继续使用 Vue 3 和 TypeScript，新增页面与参考项目保持同类信息架构，但不复制其 React 实现：
+
+```text
+frontend/src/pages/
+├─ discovery/SkillSearchPage.vue
+├─ skill/SkillDetailPage.vue
+├─ skill/SkillVersionComparePage.vue
+├─ namespace/NamespacePage.vue
+├─ review/ReviewListPage.vue
+├─ review/ReviewDetailPage.vue
+└─ admin/{AccountPage,NamespacePage,LabelPage}.vue
+```
+
+路由新增 `/search`、`/space/:namespace/:slug`、`/space/:namespace/:slug/versions/compare`、`/dashboard/reviews`、`/dashboard/reviews/:reviewId`、`/dashboard/namespaces`、`/dashboard/namespaces/:namespaceKey/members`、`/admin/accounts`、`/admin/namespaces` 和 `/admin/labels`，既有治理路由继续保留。
+
+官网当前无法在设计环境完成可靠读取，因此精确品牌色标记为待确认；本轮使用集中式、可替换的企业品牌 token：`--brand-primary: #005BAC`、`--brand-deep: #003B70`、`--brand-accent: #1677C8`。页面采用企业蓝作为主操作色，深蓝作为导航/标题强调色，红/黄/绿仅用于风险和状态语义；所有功能文案、错误文案和状态文案使用中文。品牌 token 只放在 `frontend/src/styles.css`，不散落在组件内。
+
+### 20.7 失败处理和安全边界
+
+- 包解析、文件存储、清单生成和数据库写入任一阶段失败，都必须更新 `skill_import_attempt` 并阻止候选版本发布。
+- 下载和预览前先验证 Session、范围、版本生命周期和清单路径；文件不存在、摘要不匹配或制品已损坏时返回稳定业务错误并写审计。
+- 搜索索引不可用时允许回退到 PostgreSQL 的受限查询；回退不可绕过授权，也不可把索引延迟渲染为“无数据”。
+- 管理员停用账户后，当前 Session 在下一次请求鉴权时失效；账户、成员、标签和审核操作均追加审计。
+- 外部请求、制品大小、分页大小和预览长度使用配置上限；具体容量、备份、RPO/RTO 仍保留为待确认项。
+
+### 20.8 CR-015 设计验证和待确认项
+
+设计覆盖 `requirement-skill-package-content`、`requirement-skill-semantic-version-tags`、`requirement-skill-discovery-search`、`requirement-skill-file-browse-download`、`requirement-skill-version-comparison`、`requirement-skill-publish-review-lifecycle`、`requirement-skill-namespace-governance`、`requirement-governance-account-management` 和 `requirement-skill-governance-console-branding`。实施前需要验证：
+
+- 参考项目的页面和接口行为与当前业务术语的最终映射；
+- 官网精确品牌色、Logo 资源和字体授权；
+- 本地制品根目录、最大包大小、备份和清理策略；
+- PostgreSQL 全文搜索规模是否满足首期性能目标；不足时再评估可重建搜索适配器；
+- 命名空间与现有公司/项目/环境治理范围的组织来源。
+
+## 22. CR-016 企业级前端控制台设计
+
+### 22.1 目标和边界
+
+本增量只升级现有 Vue 控制台的应用壳、页面布局、公共交互和中文显示，不改变后端接口、Session、权限、生命周期、制品存储或安装治理边界。所有用户可见功能文案使用中文，路由、API 路径、代码标识和摘要值继续遵循既有契约。
+
+### 22.2 应用壳和导航
+
+桌面端采用“左侧固定一级导航 + 顶部工作栏 + 中央内容区”；移动端将左侧导航折叠为可关闭抽屉。左侧导航按用户目标分组：工作台、技能中心、治理中心、运行管理和系统管理。系统管理菜单由服务端能力结果控制，隐藏入口不替代服务端鉴权。
+
+顶部工作栏展示面包屑、全局技能搜索入口、当前账户和退出操作。品牌区域显示“KM 技能中心”和“资产、发布与运行治理”，不在功能文案中使用英文产品词。
+
+### 22.3 页面布局
+
+| 页面 | 结构和交互 |
+| --- | --- |
+| 工作概览 | 统计摘要、待处理审核、最近导入、异常安装和最近治理事件；摘要只聚合已有接口结果 |
+| 技能发现 | 搜索框、命名空间/状态/标签/更新时间筛选、结果列表、分页和加载/空/错误/无权限状态 |
+| 资产目录 | 页面级上传入口、筛选工具栏、资产表格、生命周期徽标、刷新和分页 |
+| 上传技能 | 左侧导入表单，右侧校验、进度和导入结果；失败必须保留失败阶段和原因 |
+| 资产详情 | 资产头部、概览/版本/发布范围/审计页签；版本页签进入版本详情 |
+| 版本详情 | 版本头部、生命周期时间线、元数据、文件清单、预览、门禁证据和固定操作区 |
+| 审核工作台 | 左侧审核队列、右侧审核详情；通过/拒绝/撤回使用原因输入和二次确认 |
+| 发布决策 | 版本确认、门禁检查、发布范围、灰度观察和结果步骤展示；逐范围显示结果 |
+| 发布策略/审计 | 策略表单和版本记录；审计使用筛选表格、详情抽屉和关联请求标识 |
+| 安装管理 | 安装实例列表、运行跟踪器状态、健康状态、失败阶段、版本切换和回退操作 |
+| 系统管理 | 账户、命名空间、标签采用页签切换，避免长页面堆叠多个管理域 |
+
+### 22.4 公共组件和状态
+
+公共层新增或整理 SideNavigation、TopBar、Breadcrumbs、PageHeader、FilterToolbar、DataTable、StatusBadge、EmptyState、ErrorState、ConfirmDialog、DrawerPanel、Timeline 和 Pagination。页面只负责编排和用户事件，数据请求和领域映射仍留在模块 API、服务和组合式逻辑中。
+
+所有查询统一表达加载中、成功、空数据、部分成功、失败、无权限和数据过期；关键写操作表达请求中、成功、失败和重复提交。颜色不是唯一状态表达方式，状态必须同时包含中文文字和可识别图标或标记。
+
+### 22.5 品牌和视觉令牌
+
+沿用可替换的公司蓝色令牌：--brand-primary: #005BAC、--brand-deep: #003B70、--brand-accent: #1677C8、--brand-soft: #EAF4FC。左侧导航使用深蓝，内容区使用浅灰背景和白色工作面，采用不超过 6px 的圆角、细边框和轻阴影；不使用渐变、装饰光斑或营销式英雄区块。官网精确色值和 Logo 资源仍保留为待确认项，令牌必须集中维护。
+
+### 22.6 目录和兼容策略
+
+应用壳落位于 frontend/src/components/layout/，公共交互组件落位于 frontend/src/components/ui/，业务组件继续位于各 Feature 的 frontend/src/modules/。保留现有业务路由，新增工作概览路由时保留 /assets 等旧入口可直接访问；不因视觉重构删除已有 API、权限和状态流转。
+
+### 22.7 CR-016 验证范围
+
+- 验证桌面端和移动端导航、抽屉、面包屑、页面宽度和文本不重叠；
+- 验证主要页面的加载、空数据、失败、无权限和写操作反馈；
+- 检查所有用户可见功能文案无中英文混排和乱码，技术摘要值除外；
+- 执行前端单元测试、类型检查、生产构建、路由检查和浏览器截图/交互验证；
+- CR-016 本身不新增 OAuth2、统一单点登录、API Token、S3、微服务或运行时业务能力；API Token 已由后续 CR-017 单独定义。
+
+## 23. CR-017 API Token 访问设计
+
+### 23.1 设计边界
+
+CR-017 在保留账户密码、服务端 Session 和网页 CSRF 的前提下，为自动化客户端增加独立 Bearer Token 认证。Token 只作为身份和作用域凭据，不负责压缩 Skill、不保存到 Skill 包，也不引入 CLI、OAuth2、统一单点登录、S3 或微服务。
+
+### 23.2 数据模型和密钥处理
+
+新增 PostgreSQL 15 迁移 `V11__create_api_token.sql` 和表 `api_token`。表保存账号、名称、`sk_` 前缀、SHA-256 十六进制摘要、JSONB 作用域、创建/过期/最后使用/撤销时间；`token_hash` 唯一，未撤销 Token 的账号内名称唯一。Token 原文由服务端使用安全随机数生成，只在创建响应中返回一次，禁止日志记录和再次查询恢复。
+
+### 23.3 认证和作用域流程
+
+`ApiTokenAuthenticationFilter` 在匿名认证前读取 `Authorization` 请求头，只有 Bearer 格式参与 Token 查询。服务端按摘要查询 Token，校验撤销时间、过期时间和账号启用状态后创建带 `SCOPE_*` 权限的 Spring Authentication，并更新最后使用时间；不存在、过期、撤销或账号停用统一返回 401。`ApiTokenScopeFilter` 只约束 Bearer 请求，Session 请求继续按既有角色和范围授权执行。
+
+作用域与路由映射如下：
+
+| 作用域 | 路由范围 |
+| --- | --- |
+| `skill:read` | `GET /api/v1/assets/**`，包括目录、详情、版本、文件和制品下载 |
+| `skill:publish` | `POST /api/v1/assets/imports`、`POST /api/v1/assets/imports/package` |
+| `token:manage` | `GET/POST /api/v1/tokens/**`、`PUT /api/v1/tokens/{id}/expiration`、`DELETE /api/v1/tokens/{id}` |
+
+作用域过滤器不替代既有资产范围权限：Bearer 身份必须同时满足 Token 作用域和当前账号的资产/治理范围授权。Token 管理接口只允许管理当前主体的 Token。
+
+### 23.4 Token 管理接口
+
+```text
+POST /api/v1/tokens
+GET  /api/v1/tokens
+PUT  /api/v1/tokens/{id}/expiration
+DELETE /api/v1/tokens/{id}
+```
+
+创建请求支持名称、作用域和可选 `expiresAt`；作用域只能从 `skill:read`、`skill:publish`、`token:manage` 中选择。创建响应包含一次性完整 Token，列表只返回前缀、元数据和状态。过期时间更新支持延长、缩短或清除过期时间，撤销为不可逆操作。所有写操作使用 Session 的 CSRF 校验；Bearer 调用通过 `token:manage` 作用域访问时不要求 Cookie CSRF。
+
+### 23.5 前端管理页面
+
+新增 `/account/tokens` 页面和 `frontend/src/modules/token/` Feature 模块。页面按参考 SkillHub 的令牌管理信息架构实现：侧边栏入口使用 `访问凭证`，顶部提供返回工作台、`Token 管理` 标题和 `管理 CLI 和 API 使用的访问凭证` 副标题；主体为 `API Tokens` 清单卡片，创建入口为 `创建新 Token` 弹窗，创建成功在弹窗内一次性展示并复制原文；修改期限使用支持永不过期、固定期限和自定义时间的弹窗，删除使用二次确认并在成功后从当前清单移除。`访问凭证` 是导航业务名称，凭证本体仍是 API Token，不称为 Token 密码或 API 密钥。作用域和状态作为名称下的辅助信息展示。所有显示文案使用中文，完整 Token 仅驻留当前页面状态，离开或刷新后不再显示。
+
+### 23.6 安全、审计和验证
+
+- Bearer 认证失败为 401，作用域不足为 403；不得把 Token 错误降级为 Session 登录或匿名访问。
+- 更新 `last_used_at` 不得记录 Token 原文；审计只记录不可逆 Token 标识和作用域元数据。
+- 验证覆盖摘要不可逆、一次性原文、过期/撤销、作用域隔离、账号停用、Session CSRF 保持有效和既有资产 API Bearer 调用。
+
+## 24. CR-020 增量设计：参考 SkillHub 前端对齐
+
+### 24.1 信息架构和术语
+
+参考项目 `web/src/i18n/locales/zh.json` 的用户菜单作为文字基线。当前 Vue 控制台新增或调整以下入口：`控制台`、`我的技能`、`发布`、`我的命名空间`、`治理中心`、`审核管理`、`用户管理`、`标签管理`、`审计日志`、`命名空间管理`、`访问凭证`、`安全设置`、`个人设置`、`通知设置`。当前工程的资产目录、安装管理、发布策略和治理审计作为本产品扩展保留。
+
+本增量明确不创建或恢复 `推广管理`、`举报管理`、`账号合并`、`收藏与评分`，也不提供只看已收藏、收藏筛选及收藏/评分/举报相关交互。所有页面均使用中文可见文案；参考项目内部的 `Token 管理`、`API Tokens` 和“管理 CLI 和 API 使用的访问凭证”按已确认 Token 术语保留，其中“访问凭证”是导航名称。
+
+### 24.2 页面和路由
+
+| 页面 | 主路由 | 交互要求 |
+| --- | --- | --- |
+| 控制台 | `/dashboard` | 展示当前用户、平台角色、我的技能摘要、访问凭证入口和最近技能，同时保留当前治理运行摘要 |
+| 我的技能 | `/dashboard/skills` | 搜索、命名空间筛选、全部/待审核/已发布/已拒绝/已归档/已隐藏状态 Tab、查看详情、更新、归档/恢复、撤回审核；危险动作使用确认弹窗 |
+| 发布 | `/dashboard/publish` | 选择命名空间、可见性、上传 ZIP、发布前检查、风险确认弹窗、发布/提交审核、成功后回到我的技能 |
+| 搜索技能 | `/search` | 相关性/下载量/最新排序、标签和命名空间筛选、结果数量、分页、技能卡片；不要求登录即可打开页面，实际数据仍由后端授权决定 |
+| 技能详情 | `/space/:namespace/:slug` | README/概览/文件/版本 Tab，文件树、文本预览弹窗、下载、安装命令、生命周期操作、版本比较；不包含收藏、评分、举报 |
+| 版本比较 | `/space/:namespace/:slug/compare` | 与参考路径一致，同时兼容现有 `/versions/compare` |
+| 审核管理 | `/dashboard/reviews` | 技能审核/资料审核、待审核/已通过/已拒绝 Tab、详情查看、审核意见弹窗和通过/拒绝确认弹窗 |
+| 治理中心 | `/dashboard/governance` | 待审核任务、治理通知、最近活动和搜索索引维护；不显示被排除的推广/举报区块 |
+| 我的命名空间 | `/dashboard/namespaces` | 命名空间列表、创建/冻结/归档/恢复确认弹窗、进入成员管理和审核入口 |
+| 命名空间成员 | `/dashboard/namespaces/:slug/members` | 成员列表、添加成员弹窗、角色变更、移除确认弹窗 |
+| 命名空间审核 | `/dashboard/namespaces/:slug/reviews` | 展示当前命名空间审核任务并进入审核详情 |
+| 管理页面 | `/admin/users`、`/admin/namespaces`、`/admin/labels`、`/admin/audit-log` | 将原合并管理页拆分；保留 `/admin` 兼容入口，服务端继续执行管理员权限 |
+| 设置 | `/settings/security`、`/settings/profile`、`/settings/notifications` | 修改密码、个人资料和通知偏好；不实现账号合并 |
+| 访问凭证 | `/dashboard/tokens` | 与 `/account/tokens` 双向兼容，页面标题、创建/期限/撤销弹窗沿用 CR-018/019 |
+
+### 24.3 数据与交互边界
+
+前端页面仅调用现有资产、内容、搜索、审核、命名空间、管理员和 Token 接口；新增页面使用现有 DTO 字段映射，不能在前端伪造发布状态、权限或审核结果。当前后端未提供的资料审核、通知偏好和命名空间生命周期写接口以只读或明确“暂未开放”状态展示，不模拟成功结果。所有确认、危险动作、审核意见和文件预览使用统一弹窗/抽屉样式，禁止继续使用 `window.prompt` 和 `window.confirm`。
+
+页面布局沿用 Vue 3 企业控制台：左侧分组导航、顶部工作栏、页面标题区、内容分区、状态标签、空状态、加载状态和响应式移动抽屉。主题继续使用现有公司蓝色 CSS 变量，不引入参考项目的 React、OAuth、S3 或微服务实现。
+
+## 25. CR-021 增量设计：侧边栏收敛与页签承载
+
+### 25.1 信息架构
+
+侧边栏只保留高频业务入口：`控制台`、`我的技能`、`发布`、`我的命名空间`、`搜索`、`资产目录`、`访问凭证`、`治理中心`、`安装管理` 和管理员可见的 `系统管理`，以及 `设置`。治理类低频入口不再单独占用侧边栏项，而是在页面内使用一级页签承载：
+
+| 入口 | 页面内页签 |
+| --- | --- |
+| 治理中心 | 总览、审核管理、发布策略、审计记录 |
+| 系统管理 | 用户管理、命名空间管理、标签管理、审计日志 |
+| 设置 | 安全设置、个人设置、通知设置 |
+
+原有 `/dashboard/reviews`、`/governance/policies`、`/governance/audits`、`/admin/users`、`/admin/namespaces`、`/admin/labels`、`/admin/audit-log` 和三个设置路由继续保留，直接访问时仍展示对应页面；新入口通过查询参数切换同一聚合页面，刷新和复制链接后页签保持不变。
+
+### 25.2 视觉和交互
+
+导航项移除“控、技、发”等单字前置文字，使用统一的文本导航、分组标题、左侧选中线和企业蓝选中态。导航区域隐藏滚动条视觉，但仍允许小屏抽屉在内容超出时滚动；不改变移动端抽屉和遮罩交互。页签采用底部边框选中态，支持键盘聚焦和横向溢出，移动端不挤压页面内容。
+
+本增量只调整前端路由编排、页面复用和样式，不新增 API、权限、数据库、认证或被明确排除的推广、举报、账号合并、收藏、评分能力。

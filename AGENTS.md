@@ -31,6 +31,7 @@
 | 任意阶段 | 实施规范 | 涉及 Java、Vue、TypeScript、数据库、表结构、SQL、索引、迁移或实现规范入口 | [实现规范](docs/product-development/standards/implementation/index.md) |
 | 任意阶段 | 数据库设计 | 涉及数据库、表结构、SQL 语句、索引、迁移、数据保留或恢复 | [SKILL HUB 数据库设计规范](docs/product-development/standards/implementation/database-design.md) |
 | 需求阶段 | 功能需求文档 | 整理原始需求、创建 `feature-<featureId>/requirement.md`、维护功能需求 | [功能需求文档规范](docs/product-development/standards/docs-governance/feature-requirement-doc-standard.md) |
+| 实施阶段 | Skill 资产与发布治理 | 命中 `feature-skill-asset-release-governance` 的 Java、PostgreSQL、Session、发布门禁、审计或 Vue 控制台实现 | [Feature 实施计划](docs/product-development/features/feature-skill-asset-release-governance/implementation-plan.md)、[后端架构基线](docs/product-development/architecture/backend-architecture.md)、[前端架构基线](docs/product-development/architecture/frontend-architecture.md)、[数据库实施规范](docs/product-development/standards/implementation/database-design.md) |
 | 设计阶段 | 后端架构基线 | Feature 涉及 Java 后端、接口、持久化、权限或服务治理 | [后端架构基线](docs/product-development/architecture/backend-architecture.md) |
 | 设计阶段 | 前端架构基线 | Feature 涉及 Vue 页面、组件、路由、状态或控制台交互 | [前端架构基线](docs/product-development/architecture/frontend-architecture.md) |
 
