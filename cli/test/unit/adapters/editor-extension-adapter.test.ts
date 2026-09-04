@@ -1,8 +1,9 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import { afterEach, describe, it } from 'node:test'
+import { unzipSync } from 'fflate'
 import { EditorExtensionAdapter, type EditorCommandRunner } from '../../../src/adapters/codex/editor-extension-adapter.js'
 
 const temporaryDirectories: string[] = []
@@ -40,6 +41,34 @@ describe('Codex 编辑器扩展适配器', () => {
 
     assert.equal(result.installationState, 'PLANNED')
     assert.equal(installs, 0)
+  })
+
+  it('生成的 VSIX 是确定性的真实事件发送器', async () => {
+    const firstHome = await temporaryHome()
+    const secondHome = await temporaryHome()
+    let firstPath = ''
+    let secondPath = ''
+    const firstRunner: EditorCommandRunner = {
+      status: async () => ({ available: true, installed: false, success: true, runtimeVersion: '1.95.0' }),
+      install: async (_runtimeKey, path) => { firstPath = path; return { available: true, installed: true, success: true } }
+    }
+    const secondRunner: EditorCommandRunner = {
+      status: async () => ({ available: true, installed: false, success: true, runtimeVersion: '1.95.0' }),
+      install: async (_runtimeKey, path) => { secondPath = path; return { available: true, installed: true, success: true } }
+    }
+
+    await new EditorExtensionAdapter('vscode', firstRunner).install({ home: firstHome, dryRun: false })
+    await new EditorExtensionAdapter('vscode', secondRunner).install({ home: secondHome, dryRun: false })
+    const first = await readFile(firstPath)
+    const second = await readFile(secondPath)
+    assert.deepEqual(first, second)
+    const extension = unzipSync(first)['extension/extension.cjs']
+    assert.ok(extension)
+    const source = Buffer.from(extension).toString('utf8')
+    assert.match(source, /ide-event/)
+    assert.doesNotMatch(source, /\/status/)
+    assert.match(source, /collector\.secret/)
+    assert.match(source, /MAX_QUEUE_SIZE/)
   })
 })
 

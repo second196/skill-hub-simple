@@ -10,7 +10,8 @@ import {
   parseImportAttempt,
   parseItem,
   parseVersion,
-  transitionVersion
+  transitionVersion,
+  validateSkillPackage
 } from '../../src/modules/asset-governance/api/assetApi'
 import type { AssetImportRequest } from '../../src/modules/asset-governance/types/asset'
 
@@ -57,6 +58,56 @@ describe('asset catalog contract', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/assets/imports/package')
     expect(fetchMock.mock.calls[0][1].body).toBeInstanceOf(FormData)
     expect((fetchMock.mock.calls[0][1].body as FormData).get('file')).toBe(file)
+  })
+
+  it('validates a Skill package through the server before publication', async () => {
+    const responseBody = {
+      valid: true,
+      name: '文档评审',
+      description: '检查文档结构和规范',
+      versionLabel: '2.1.0',
+      artifactDigest: 'a'.repeat(64),
+      versionDigest: 'b'.repeat(64),
+      expandedSizeBytes: 128,
+      manifest: [{ path: 'SKILL.md', sizeBytes: 128, contentDigest: 'c'.repeat(64) }]
+    }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(responseBody), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const file = new File(['zip-bytes'], 'demo.zip', { type: 'application/zip' })
+
+    await expect(validateSkillPackage(file)).resolves.toEqual(responseBody)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/assets/imports/package/validate')
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST', credentials: 'include' })
+    expect((fetchMock.mock.calls[0][1].body as FormData).get('file')).toBe(file)
+  })
+
+  it('surfaces the server package validation reason without simulating success', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      code: 'SENSITIVE_FILE_NOT_ALLOWED',
+      message: 'Skill 包不能包含敏感文件：.env'
+    }), { status: 400, headers: { 'Content-Type': 'application/json' } })))
+    const file = new File(['zip-bytes'], 'unsafe.zip', { type: 'application/zip' })
+
+    await expect(validateSkillPackage(file)).rejects.toThrow('Skill 包不能包含敏感文件：.env')
+  })
+
+  it('rejects a malformed validation manifest instead of hiding invalid rows', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      valid: true,
+      name: '文档评审',
+      description: '检查文档结构和规范',
+      versionLabel: '2.1.0',
+      artifactDigest: 'a'.repeat(64),
+      versionDigest: 'b'.repeat(64),
+      expandedSizeBytes: 128,
+      manifest: [{ path: 'SKILL.md', sizeBytes: '128', contentDigest: 'c'.repeat(64) }]
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    const file = new File(['zip-bytes'], 'malformed.zip', { type: 'application/zip' })
+
+    await expect(validateSkillPackage(file)).rejects.toThrow('技能包校验响应格式错误')
   })
 
   it('parses a version file manifest and keeps the file digest optional', async () => {

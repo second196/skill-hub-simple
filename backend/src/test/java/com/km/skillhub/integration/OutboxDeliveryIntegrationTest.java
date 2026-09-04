@@ -18,8 +18,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class OutboxDeliveryIntegrationTest {
-    private static final String STREAM_KEY = "skillhub:governance:events";
-
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
@@ -30,28 +28,24 @@ class OutboxDeliveryIntegrationTest {
     private RedisStreamsOutboxDispatcher dispatcher;
 
     private String eventId;
+    private String streamKey;
 
     @AfterEach
     void cleanUp() {
         if (eventId != null) {
             jdbcTemplate.update("DELETE FROM governance_event_outbox WHERE event_id = ?", eventId);
-            List<MapRecord<String, Object, Object>> records = stringRedisTemplate.opsForStream()
-                    .range(STREAM_KEY, Range.unbounded());
-            for (MapRecord<String, Object, Object> record : records) {
-                if (eventId.equals(record.getValue().get("eventId"))) {
-                    stringRedisTemplate.opsForStream().delete(STREAM_KEY, record.getId());
-                }
-            }
+            stringRedisTemplate.delete(streamKey);
         }
     }
 
     @Test
     void dispatchesPendingOutboxEventToRedisStream() {
         eventId = UUID.randomUUID().toString();
+        streamKey = "skillhub:governance:test:" + eventId;
         jdbcTemplate.update("INSERT INTO governance_event_outbox "
-                        + "(event_id, event_type, aggregate_type, aggregate_id, payload, state, retry_count) "
-                        + "VALUES (?, ?, ?, ?, CAST(? AS jsonb), 'PENDING', 0)",
-                eventId, "INTEGRATION_VALIDATION", "TEST", "outbox-test", "{\"versionDigest\":\"validation-digest\"}");
+                        + "(event_id, event_type, aggregate_type, aggregate_id, payload, state, retry_count, stream_key) "
+                        + "VALUES (?, ?, ?, ?, CAST(? AS jsonb), 'PENDING', 0, ?)",
+                eventId, "INTEGRATION_VALIDATION", "TEST", "outbox-test", "{\"versionDigest\":\"validation-digest\"}", streamKey);
 
         assertEquals(1, dispatcher.dispatchPending());
         assertEquals(1, jdbcTemplate.queryForObject(
@@ -59,7 +53,7 @@ class OutboxDeliveryIntegrationTest {
                 Integer.class, eventId).intValue());
 
         List<MapRecord<String, Object, Object>> records = stringRedisTemplate.opsForStream()
-                .range(STREAM_KEY, Range.unbounded());
+                .range(streamKey, Range.unbounded());
         assertTrue(records.stream().anyMatch(record -> eventId.equals(record.getValue().get("eventId"))));
     }
 }

@@ -329,5 +329,14 @@
 - Code scope: `frontend/src/components`, `frontend/src/pages`, `frontend/src/modules/discovery`, `frontend/src/router/index.ts`, `frontend/src/styles.css`, frontend tests and browser verification setup.
 - Explicit exclusions: 推广管理、举报管理、账号合并、收藏与评分、只看已收藏、收藏筛选以及收藏/评分/举报交互；不增加 OAuth2/SSO、S3 或微服务；缺少后端契约的写操作不得模拟成功。
 - Approval status: approved by explicit user implementation request.
-- Verification status: in-progress.
+- Verification status: passed for frontend unit tests, production build, dependency audit, static exclusions and Playwright desktop/mobile contract flows; live-backend browser E2E unavailable because the configured PostgreSQL and Redis paths are absent.
 - Replacement relation: corrects CR-020 completion status and preserves CR-021 sidebar aggregation and company-blue theme decisions.
+
+### CR-023 Implementation Checkpoint
+
+- Date: 2026-09-04
+- Completed: reference-aligned shell, dashboard, publication workflow, discovery/detail/file/version views, review dialogs, namespace/governance/admin/settings layouts, shared feedback states and responsive sidebar behavior.
+- Security correction: removed browser-side `fflate` ZIP extraction and made the existing server package-validation endpoint authoritative before publication; folder selection uses a dependency-free STORE ZIP writer and remains subject to server validation.
+- Verification: 28/28 frontend unit tests passed; production build passed; 6/6 applicable Playwright flows passed on desktop/mobile with 6 inapplicable cross-viewport skips; production dependency audit reports zero vulnerabilities; `git diff --check` passed.
+- Evidence: `frontend/tests/e2e/ui-alignment.spec.ts` and ignored runtime screenshots under `frontend/test-results`.
+- Limitation: browser tests use API contract fixtures. Live PostgreSQL/Redis-backed browser E2E was not run because `D:\program\_env\postgresql` and `D:\program\_env\redis` do not exist on the current host.

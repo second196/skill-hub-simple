@@ -8,16 +8,16 @@ control_dir: .product-development/features/feature-skill-asset-release-governanc
 current_phase: implementation
 requirement_status: confirmed
 design_status: confirmed
-implementation_status: in-progress
+implementation_status: completed
 review_status: not-requested
-verification_status: in-progress
+verification_status: completed
 release_check_status: not-requested
 requirement_version: v5
 design_version: v6
 plan_version: v6
 active_change: CR-023
 last_test_result: pass
-feedback_status: in-progress
+feedback_status: resolved
 
 ## Work Item Boundary
 
@@ -106,7 +106,7 @@ feedback_status: in-progress
 - [x] CR-015 Task 14: implement publish review and lifecycle workbench.
 - [x] CR-015 Task 15: implement administrator account, namespace, tag and audit pages.
 - [x] CR-015 Task 16: align console information architecture and company brand theme.
-- [ ] CR-015 Task 17: execute incremental contract verification.
+- [x] CR-015 Task 17: execute incremental contract verification.
 - [x] Defect fix: replace row-expanding authorization joins with EXISTS for catalog, discovery, namespace and review queries; add regression coverage for multi-role accounts.
 - [x] CR-016 Task 18: implement enterprise console shell, grouped sidebar and responsive top workbar.
 - [x] CR-016 Task 19: implement shared enterprise page layout and work overview.
@@ -117,10 +117,10 @@ feedback_status: in-progress
 - [x] CR-017 Task 24: execute API Token contract verification.
 - [x] CR-018: align the Token management console with the reference SkillHub layout, dialogs and Chinese copy.
 - [x] CR-019: align the Token navigation label with the reference project's "访问凭证" terminology.
-- [ ] CR-020 Task 25: align reference navigation, dashboard, my skills, publish and token routes (reopened by CR-023 implementation-defect audit).
-- [ ] CR-020 Task 26: align search, skill detail, file browsing, version comparison and review dialogs (reopened by CR-023 implementation-defect audit).
-- [ ] CR-020 Task 27: align namespace, governance center, admin split pages and settings routes (reopened by CR-023 implementation-defect audit).
-- [ ] CR-020 Task 28: execute frontend contract, build and real browser interaction checks (reopened by CR-023 implementation-defect audit).
+- [x] CR-020 Task 25: align reference navigation, dashboard, my skills, publish and token routes (reopened and completed by CR-023).
+- [x] CR-020 Task 26: align search, skill detail, file browsing, version comparison and review dialogs (reopened and completed by CR-023).
+- [x] CR-020 Task 27: align namespace, governance center, admin split pages and settings routes (reopened and completed by CR-023).
+- [x] CR-020 Task 28: execute frontend contract, build and real browser interaction checks (reopened and completed by CR-023).
 - [x] CR-022: create design.md v6-draft and implementation-plan.md v6-draft.
 - [x] CR-022: human confirmation of v6 design pair.
 - [x] CR-022 Task 33: establish CLI project, credentials and Token scope baseline.
@@ -131,17 +131,26 @@ feedback_status: in-progress
 
 ## Verification Status
 
+- pass: CR-023 `npm --prefix frontend run test -- --run`; 9 unit test files and 28 tests passed, including strict service-side package preflight response/error handling and dependency-free folder ZIP packaging.
+- pass: CR-023 `npm --prefix frontend run build`; Vue type checking and Vite production build passed.
+- pass: CR-023 `npm --prefix frontend run test:e2e`; 6 applicable browser flows passed and 6 cross-viewport cases were skipped by design. Coverage includes desktop shell/account menu, server-preflight publication and dialog, mobile navigation, skill file preview/version diff, review confirmation, settings tabs and one-time Token display.
+- pass: CR-023 screenshot review at `frontend/test-results`; desktop and mobile screenshots show no blank route, incoherent overlap, horizontal overflow or visible sidebar scrollbar.
+- pass: CR-023 `npm --prefix frontend audit --omit=dev --offline --json`; zero production dependency vulnerabilities after removing `fflate`; an earlier online audit on the same production dependency tree also returned zero vulnerabilities.
+- pass: CR-023 static exclusions and native-dialog checks; prohibited promotion/report/account-merge/favorite/rating entries and `window.confirm`/`window.prompt` are absent from `frontend/src`.
+- pass: CR-023 `git diff --check`; no whitespace errors.
+- unavailable: CR-023 full live-backend browser E2E; `D:\program\_env\postgresql` and `D:\program\_env\redis` are absent on this host. Browser verification uses existing API contracts through Playwright route fixtures and is not reported as backend integration coverage.
+- unavailable: CR-023 final online audit refresh timed out waiting for the package registry; the completed online audit before Playwright dev-only installation and the final offline production audit both report zero production vulnerabilities.
 - pass: CR-022 document check; all 23 requirement IDs appear in design.md v6-draft and implementation-plan.md v6-draft, all coverage rows are covered, and V12 ownership is consistent with V13/V14.
 - pass: npm --prefix frontend run test; 4 frontend test files and 13 tests passed after updating the approved Chinese installation label.
 - pass: npm --prefix frontend run build; Vue type check and Vite production build passed.
 - pass: git diff --check and Vite HTTP check; source check passed and the development server returned HTTP 200.
-- not-run: browser screenshot and interactive viewport verification; Playwright is not installed in frontend dependencies and no repository browser test entry is available.
+- historical: browser screenshot and interactive viewport verification were not run at this earlier checkpoint; superseded by the CR-023 Playwright result above.
 
 - pass: JDK 8 targeted backend tests, backend Java 8 compile, frontend Vitest (13 tests), frontend production build, PostgreSQL 15.18 Flyway v10 migration, admin/user login and admin/user authorization smoke checks, and `git diff --check`.
 - pass: `mvn -f backend/pom.xml -Dtest=AuthorizationQueryDeduplicationIntegrationTest test`; 2 tests passed, including catalog list uniqueness and asset detail HTTP 200 for an account with 8 scope roles.
 - fail: full `mvn -f backend/pom.xml test`; 38 of 39 tests passed, while `OutboxDeliveryIntegrationTest.dispatchesPendingOutboxEventToRedisStream` failed after 121 seconds with expected 1 / actual 0.
 - pass: Spring context started on port 18080 with 65 mapped routes; `admin` received 200 from `/api/v1/admin/accounts`, `user` received 403.
-- not-run: full automated feature checker and end-to-end browser flow.
+- historical: full automated browser flow was not run at this earlier checkpoint; superseded by the CR-023 Playwright contract flow above.
 - unavailable: official website exact brand-color verification; current values are replaceable CSS tokens.
 - unavailable: Redis Streams delivery validation in the current environment; the existing Outbox test failure is classified as `environment-failure` and is unrelated to the authorization query fix.
 
@@ -152,14 +161,14 @@ feedback_status: in-progress
 - pass: CR-018 `npm --prefix frontend run test`; 5 frontend test files and 16 tests passed.
 - pass: CR-018 `npm --prefix frontend run build`; Vue type check and Vite production build passed, including the Token management route bundle.
 - pass: CR-018 `git diff --check`; no whitespace errors were found.
-- not-run: browser screenshot and interactive viewport verification; Playwright is not installed in frontend dependencies and no repository browser test entry is available.
+- historical: CR-018 browser verification was not run at that checkpoint; superseded by CR-023.
 - pass: CR-019 reference terminology check; the reference project uses `访问凭证`, `查看 API Tokens`, `Token 管理` and `管理 CLI 和 API 使用的访问凭证`, with no `Token 密码` or `API 密钥` label.
 - pass: CR-020 `npm run test` in `frontend`; 5 test files and 16 tests passed.
 - pass: CR-020 `npm run build` in `frontend`; Vue type check and Vite production build passed.
 - pass: CR-020 `git diff --check`; no whitespace errors were found.
 - pass: CR-020 static route/menu check; reference-aligned entries are reachable and excluded entries are absent from frontend source.
 - pass: CR-020 native dialog check; no `window.confirm` or `window.prompt` remains in frontend source; confirmation, review opinion and file preview use `ModalDialog` or page controls.
-- not-run: browser screenshot, responsive viewport and end-to-end interaction verification; Playwright is not installed and no repository browser test entry is available.
+- historical: CR-020 browser verification was not run at that checkpoint; superseded by CR-023.
 - unavailable: reference project backend capabilities absent from current contracts, including profile review, notification preference writes, namespace creation/member mutations and download statistics; corresponding pages show read-only or not-open status and do not simulate success.
 - pass: Task 33 `npm --prefix cli test`; Node test runner compiled and passed 2 suites / 4 tests covering service-scoped credential replacement/removal, identity validation, Chinese output and JSON output without Token disclosure.
 - pass: Task 33 `npm --prefix cli run build`; TypeScript 5.4.2 build completed successfully on Node 20.20.2.
@@ -219,6 +228,22 @@ feedback_status: in-progress
 - feedback_status: resolved
 - validation: validation-server-draft-package-import
 
+- feedback: feedback-browser-zip-parser-vulnerability
+- source: CR-023 frontend dependency audit and package publication flow review
+- classification: implementation-defect
+- affected_requirements: requirement-skill-package-content, requirement-cli-skill-package-validation, requirement-cli-skill-upload
+- decision: never decompress untrusted ZIP input in the browser; send ZIP files to `/api/v1/assets/imports/package/validate`, package selected folders with a minimal STORE writer, and use the server response as the metadata and manifest authority.
+- feedback_status: resolved
+- validation: validation-reference-aligned-frontend
+
+- feedback: feedback-playwright-fixture-isolation
+- source: CR-023 initial browser and full-unit regression runs
+- classification: test-defect
+- affected_requirements: requirement-skill-governance-console-branding
+- decision: restrict browser interception to `/api/v1/**`, use stable accessible locators, isolate Playwright specs from Vitest and Vue application type checking, and manage the Windows Vite process explicitly.
+- feedback_status: resolved
+- validation: validation-reference-aligned-frontend
+
 ## Current Boundary
 
 - allowed: asset registration, metadata, catalog/discovery, package content, immutable versions/tags/comparison, namespace governance, release governance, RBAC, account administration, audit, retention policy, API Token lifecycle, Bearer scope isolation, SkillHub CLI package validation/upload/review submission, design and implementation.
@@ -228,12 +253,12 @@ feedback_status: in-progress
 
 - completed: enterprise console shell, grouped sidebar, top workbar, mobile navigation drawer, work overview, shared enterprise visual system, page spacing/table/form/status styles, and visible Chinese terminology cleanup.
 - changed: frontend/src/components/AppShell.vue, frontend/src/components/layout/SideNavigation.vue, frontend/src/pages/dashboard/DashboardPage.vue, frontend/src/router/index.ts, frontend/src/styles.css, affected governance/discovery/installation pages and display-text tests.
-- verification: frontend tests and production build pass; Vite responds on port 5173; browser screenshot verification not-run because Playwright is unavailable.
-- next: restart the backend process on port 8080 before testing the new authorization classes, then complete CR-015 Task 17 browser/contract coverage when the browser test tool is available.
+- verification: frontend tests and production build passed at the CR-016 checkpoint; the former browser gap is superseded by CR-023.
+- next: CR-015 Task 17 browser/contract coverage was completed by CR-023; live-backend browser E2E remains environment-dependent.
 
 ## Blockers and Handoff
 
-- Previous implementation completed the requested catalog flow. CR-015 Tasks 11-16 are implemented; Task 17 remains open only for full browser contract coverage. CR-022 Tasks 33-37 are implemented. Website exact color values remain unavailable and are represented by configurable brand tokens.
+- CR-015 Tasks 11-17, CR-020 Tasks 25-28 and CR-022 Tasks 33-37 are implemented. CR-023 reference-aligned frontend remediation and browser contract verification are complete. Website exact color values remain represented by configurable company-blue brand tokens.
 - CR-022 `design.md` v6 and `implementation-plan.md` v6 are confirmed implementation baselines.
 - Recommended CLI baseline: Node 20 + TypeScript + npm, with `cac`, `fflate` and `zod`; human output is Chinese and `--json` uses stable machine-readable codes.
 - The reported duplicate catalog rows and asset detail error were caused by the same account having 8 roles in one scope; the authorization query fix is implemented and validated against PostgreSQL 15.18. The running process on port 8080 must be restarted to load the new classes.
@@ -241,11 +266,11 @@ feedback_status: in-progress
 
 ## Current Task
 
-- task: CR-022 asset increment complete; next authorized task is installation Task 9
-- slice: slice-cli-asset-governance-contract
+- task: CR-023 reference-aligned frontend remediation complete
+- slice: slice-reference-aligned-console-verification
 - status: completed
-- allowed_files: none until the active Feature is switched to `feature-skill-installation-recovery`
-- next_stop: installation Task 9 targeted PostgreSQL migration and API contract verification
+- allowed_files: none until the user authorizes another Feature or change
+- next_stop: await user direction; live-backend browser E2E requires available PostgreSQL and Redis runtime paths
 
 ## CR-021 Checkpoint
 
@@ -253,7 +278,7 @@ feedback_status: in-progress
 - approved: explicit user implementation request; no backend, authentication, authorization, persistence or excluded social capability changes are authorized.
 - current_task: CR-021 implementation and regression verification completed.
 - pending_tasks: none for CR-021.
-- verification: frontend tests, production build, static exclusion checks and diff check passed; browser screenshot and interactive viewport verification are unavailable because Playwright is not installed.
+- verification: frontend tests, production build, static exclusion checks and diff check passed; the former browser-verification gap is superseded by CR-023.
 
 ## CR-021 Verification
 
@@ -261,5 +286,5 @@ feedback_status: in-progress
 - pass: `npm --prefix frontend run build`; Vue type check and Vite production build passed.
 - pass: `git diff --check`; no whitespace errors were found.
 - pass: static source check; 前置单字导航标记、推广管理、举报管理、账号合并、收藏和评分相关入口均未出现在 `frontend/src`。
-- unavailable: browser screenshot, responsive viewport and real click-flow verification; Playwright is not installed in the frontend dependencies and no browser test entry is available.
+- historical: browser screenshot, responsive viewport and click-flow verification were unavailable at the CR-021 checkpoint; superseded by CR-023.
 - resolved feedback: the first structure-test attempt used unavailable Node typings and CSS `?raw` behavior; the test was narrowed to Vite-supported Vue source imports without adding dependencies, then the full suite passed.

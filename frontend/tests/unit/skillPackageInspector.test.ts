@@ -1,27 +1,42 @@
 import { describe, expect, it } from 'vitest'
-import { parseSkillManifest } from '../../src/modules/asset-governance/services/skillPackageInspector'
+import {
+  packageFolderAsZip,
+  slugFromPackageName
+} from '../../src/modules/asset-governance/services/skillPackageInspector'
 
-describe('技能包元数据读取', () => {
-  it('从 SKILL.md 元数据头读取发布信息', () => {
-    const result = parseSkillManifest(`---
-name: document-review
-displayName: 文档评审
-description: 检查文档结构和规范
-version: 2.1.0
----
-# 文档评审`, 'fallback.zip')
+function folderFile(content: string, name: string, relativePath: string): File {
+  const file = new File([content], name, { type: 'text/plain' })
+  Object.defineProperty(file, 'webkitRelativePath', { value: relativePath })
+  return file
+}
 
-    expect(result).toEqual({
-      name: '文档评审',
-      description: '检查文档结构和规范',
-      version: '2.1.0',
-      slug: 'document-review'
-    })
+function asFileList(files: File[]): FileList {
+  return files as unknown as FileList
+}
+
+describe('技能包发布准备', () => {
+  it('从 ZIP 文件名生成稳定的技能标识', () => {
+    expect(slugFromPackageName('Document Review.zip')).toBe('document-review')
+    expect(slugFromPackageName('sample-skill.ZIP')).toBe('sample-skill')
   })
 
-  it('缺少元数据时使用文件名和正文摘要', () => {
-    const result = parseSkillManifest('# 示例技能\n用于生成发布说明。', 'sample-skill.zip')
-    expect(result.slug).toBe('sample-skill')
-    expect(result.description).toBe('示例技能')
+  it('将文件夹原样打包为由服务端继续校验的 ZIP', async () => {
+    const archive = await packageFolderAsZip(asFileList([
+      folderFile('---\nname: demo\n---', 'SKILL.md', 'demo/SKILL.md'),
+      folderFile('# Demo', 'README.md', 'demo/README.md'),
+      folderFile('secret', '.env', 'demo/.env')
+    ]))
+
+    expect(archive.name).toBe('demo.zip')
+    expect(archive.type).toBe('application/zip')
+    expect(archive.size).toBeGreaterThan(0)
+    expect(new TextDecoder().decode(await archive.arrayBuffer())).toContain('SKILL.md')
+    expect(new TextDecoder().decode(await archive.arrayBuffer())).toContain('.env')
+  })
+
+  it('拒绝根目录缺少 SKILL.md 的文件夹', async () => {
+    await expect(packageFolderAsZip(asFileList([
+      folderFile('# Demo', 'README.md', 'demo/README.md')
+    ]))).rejects.toThrow('所选文件夹根目录必须包含 SKILL.md')
   })
 })

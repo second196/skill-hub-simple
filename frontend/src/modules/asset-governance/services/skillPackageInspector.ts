@@ -1,120 +1,97 @@
-import { unzipSync, zipSync } from 'fflate'
-
-export interface InspectedPackageFile {
+interface ZipEntry {
   path: string
-  displayPath: string
-  size: number
   data: Uint8Array
-  text: boolean
-}
-
-export interface SkillManifest {
-  name: string
-  description: string
-  version: string
-  slug: string
-}
-
-export interface InspectedSkillPackage {
-  sourceName: string
-  files: InspectedPackageFile[]
-  manifest: SkillManifest
-  warnings: string[]
 }
 
 const ignoredSegments = new Set(['.git', '.svn', '.hg', 'node_modules', '__pycache__', '__MACOSX'])
 const ignoredNames = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini'])
-const sensitivePattern = /(^|\/)(\.env(?:\.|$)|id_rsa|id_ed25519|credentials?|secrets?|.*\.(?:pem|key|p12|pfx))$/i
-const textPattern = /\.(?:md|txt|json|ya?ml|toml|xml|html?|css|scss|less|js|jsx|ts|tsx|vue|java|kt|py|rb|go|rs|sh|ps1|sql|properties|ini|conf|csv)$/i
+const encoder = new TextEncoder()
 
-function normalized(path: string): string {
-  return path.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+/g, '/')
-}
+const crcTable = (() => {
+  const table = new Uint32Array(256)
+  for (let index = 0; index < 256; index += 1) {
+    let value = index
+    for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1
+    table[index] = value >>> 0
+  }
+  return table
+})()
 
 function ignored(path: string): boolean {
-  const parts = normalized(path).split('/').filter(Boolean)
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean)
   const name = parts[parts.length - 1] ?? ''
   return parts.some((part) => ignoredSegments.has(part)) || ignoredNames.has(name) || name.startsWith('._') || /\.(?:pyc|swp)$/i.test(name)
 }
 
-function displayPaths(paths: string[]): Map<string, string> {
-  const roots = new Set(paths.map((path) => normalized(path).split('/')[0]).filter(Boolean))
-  const stripRoot = roots.size === 1 && paths.some((path) => normalized(path).includes('/'))
-  const root = stripRoot ? [...roots][0] : ''
-  return new Map(paths.map((path) => {
-    const value = normalized(path)
-    return [path, root && value.startsWith(`${root}/`) ? value.slice(root.length + 1) : value]
-  }))
+function crc32(bytes: Uint8Array): number {
+  let value = 0xffffffff
+  for (const byte of bytes) value = crcTable[(value ^ byte) & 0xff] ^ (value >>> 8)
+  return (value ^ 0xffffffff) >>> 0
 }
 
-function scalar(value: string): string {
-  const trimmed = value.trim()
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) return trimmed.slice(1, -1)
-  return trimmed
-}
+function createStoreZip(entries: ZipEntry[]): Blob {
+  const localParts: Uint8Array[] = []
+  const centralParts: Uint8Array[] = []
+  let offset = 0
+  entries.forEach((entry) => {
+    const name = encoder.encode(entry.path)
+    const checksum = crc32(entry.data)
+    const local = new Uint8Array(30 + name.length)
+    const localView = new DataView(local.buffer)
+    localView.setUint32(0, 0x04034b50, true)
+    localView.setUint16(4, 20, true)
+    localView.setUint16(6, 0x0800, true)
+    localView.setUint16(8, 0, true)
+    localView.setUint32(14, checksum, true)
+    localView.setUint32(18, entry.data.length, true)
+    localView.setUint32(22, entry.data.length, true)
+    localView.setUint16(26, name.length, true)
+    local.set(name, 30)
+    localParts.push(local, entry.data)
 
-export function parseSkillManifest(content: string, fallbackName: string): SkillManifest {
-  const frontmatter = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\s*\r?\n|$)/)
-  const values: Record<string, string> = {}
-  if (frontmatter) {
-    for (const line of frontmatter[1].split(/\r?\n/)) {
-      const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/)
-      if (match) values[match[1].toLocaleLowerCase()] = scalar(match[2])
-    }
-  }
-  const packageName = fallbackName.replace(/\.zip$/i, '').replace(/[^A-Za-z0-9._-]+/g, '-') || 'skill'
-  const name = values.displayname || values.name || packageName
-  const slugSource = values.slug || values.id || values.name || packageName
-  const slug = slugSource.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || packageName.toLocaleLowerCase()
-  const bodySummary = content.replace(/^---[\s\S]*?---\s*/, '').replace(/^#+\s*/gm, '').trim().split(/\r?\n/).find(Boolean) ?? ''
-  return {
-    name,
-    description: values.description || bodySummary.slice(0, 500),
-    version: values.version || '1.0.0',
-    slug
-  }
-}
-
-function inspectEntries(sourceName: string, values: Array<{ path: string; data: Uint8Array }>): InspectedSkillPackage {
-  const accepted = values.filter((entry) => !ignored(entry.path) && entry.data.length > 0)
-  const pathMap = displayPaths(accepted.map((entry) => entry.path))
-  const files = accepted.map((entry) => ({
-    path: normalized(entry.path),
-    displayPath: pathMap.get(entry.path) ?? normalized(entry.path),
-    size: entry.data.length,
-    data: entry.data,
-    text: textPattern.test(entry.path) || /(^|\/)SKILL\.md$/i.test(entry.path)
-  })).sort((left, right) => left.displayPath.localeCompare(right.displayPath))
-  const manifestFile = files.find((file) => /(^|\/)SKILL\.md$/i.test(file.path))
-  if (!manifestFile) throw new Error('技能包根目录必须包含 SKILL.md')
-  const content = new TextDecoder('utf-8', { fatal: true }).decode(manifestFile.data)
-  const warnings: string[] = []
-  if (!/^---\s*$/m.test(content)) warnings.push('SKILL.md 未检测到 YAML 元数据头，发布信息需要人工确认。')
-  const sensitive = files.filter((file) => sensitivePattern.test(file.displayPath))
-  if (sensitive.length > 0) warnings.push(`检测到 ${sensitive.length} 个可能包含凭据的文件，请移除后再发布。`)
-  if (files.length > 200) warnings.push(`技能包包含 ${files.length} 个文件，请确认没有包含构建产物或依赖目录。`)
-  return { sourceName, files, manifest: parseSkillManifest(content, sourceName), warnings }
-}
-
-export async function inspectZip(file: File): Promise<InspectedSkillPackage> {
-  const archive = unzipSync(new Uint8Array(await file.arrayBuffer()))
-  return inspectEntries(file.name, Object.entries(archive).map(([path, data]) => ({ path, data })))
-}
-
-export async function inspectFolder(fileList: FileList): Promise<InspectedSkillPackage> {
-  const files = Array.from(fileList)
-  const sourceName = ((files[0] as File & { webkitRelativePath?: string })?.webkitRelativePath || files[0]?.name || 'skill').split('/')[0]
-  const entries = await Promise.all(files.map(async (file) => ({
-    path: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
-    data: new Uint8Array(await file.arrayBuffer())
-  })))
-  return inspectEntries(sourceName, entries)
-}
-
-export function createPackageFile(source: InspectedSkillPackage, excludedPaths: Set<string>): File {
-  const entries: Record<string, Uint8Array> = {}
-  source.files.forEach((file) => {
-    if (!excludedPaths.has(file.path)) entries[file.path] = file.data
+    const central = new Uint8Array(46 + name.length)
+    const centralView = new DataView(central.buffer)
+    centralView.setUint32(0, 0x02014b50, true)
+    centralView.setUint16(4, 20, true)
+    centralView.setUint16(6, 20, true)
+    centralView.setUint16(8, 0x0800, true)
+    centralView.setUint16(10, 0, true)
+    centralView.setUint32(16, checksum, true)
+    centralView.setUint32(20, entry.data.length, true)
+    centralView.setUint32(24, entry.data.length, true)
+    centralView.setUint16(28, name.length, true)
+    centralView.setUint32(42, offset, true)
+    central.set(name, 46)
+    centralParts.push(central)
+    offset += local.length + entry.data.length
   })
-  return new File([zipSync(entries, { level: 6 })], `${source.sourceName.replace(/\.zip$/i, '')}.zip`, { type: 'application/zip' })
+
+  const centralSize = centralParts.reduce((total, part) => total + part.length, 0)
+  const end = new Uint8Array(22)
+  const endView = new DataView(end.buffer)
+  endView.setUint32(0, 0x06054b50, true)
+  endView.setUint16(8, entries.length, true)
+  endView.setUint16(10, entries.length, true)
+  endView.setUint32(12, centralSize, true)
+  endView.setUint32(16, offset, true)
+  return new Blob([...localParts, ...centralParts, end], { type: 'application/zip' })
+}
+
+export async function packageFolderAsZip(fileList: FileList): Promise<File> {
+  const files = Array.from(fileList)
+  if (files.length === 0) throw new Error('请选择包含 SKILL.md 的文件夹')
+  const firstPath = (files[0] as File & { webkitRelativePath?: string }).webkitRelativePath || files[0].name
+  const root = firstPath.includes('/') ? firstPath.split('/')[0] : ''
+  const entries = (await Promise.all(files.map(async (file): Promise<ZipEntry | null> => {
+    const relative = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+    const path = root && relative.startsWith(`${root}/`) ? relative.slice(root.length + 1) : relative
+    if (!path || ignored(path)) return null
+    return { path: path.replace(/\\/g, '/'), data: new Uint8Array(await file.arrayBuffer()) }
+  }))).filter((entry): entry is ZipEntry => entry !== null).sort((left, right) => left.path.localeCompare(right.path))
+  if (!entries.some((entry) => entry.path === 'SKILL.md')) throw new Error('所选文件夹根目录必须包含 SKILL.md')
+  return new File([createStoreZip(entries)], `${root || 'skill'}.zip`, { type: 'application/zip' })
+}
+
+export function slugFromPackageName(fileName: string): string {
+  return fileName.replace(/\.zip$/i, '').toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'skill'
 }

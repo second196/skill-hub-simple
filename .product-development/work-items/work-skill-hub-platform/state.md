@@ -25,7 +25,8 @@ split_confirmed_at: 2026-09-01
 - Facts, boundaries, recommendations, and pending items were extracted from the research report.
 - Four Feature IDs and their dependency relationships were confirmed by the user.
 - Four formal Feature requirement.md files have been created; `feature-skill-asset-release-governance` has completed its v5 implementation, while CR-026 confirms installation design v2.1/plan v2.2 and runtime-observability design v1.1/plan v1.4.
-- Runtime observability Task 1-3, Task 4A/4B and installation recovery Task 14 are complete; the next CR-026 implementation stop is installation recovery Task 15. Evaluation/evolution remains at requirement stage.
+- Runtime observability Task 1-3, Task 4A/4B and installation recovery Task 14-16 are complete; the next CR-026 implementation stop is runtime observability Task 4C. Evaluation/evolution remains at requirement stage.
+- Installation Task 6 was re-run with JDK 8, the actual `D:\program_env` dependencies and explicit Redis host `127.0.0.1`; the existing Memurai process completed the Outbox test successfully, so the ordered implementation advances to installation Task 16.
 - `feature-skill-installation-recovery` v1 implementation reached Task 8 except for the recorded Redis evidence gap; its CR-022 installation increment Task 9-13 is implemented against confirmed design v2 and plan v2.1.
 - CR-022 has expanded the confirmed requirement boundary to include a shared SkillHub CLI delivery channel: installation and adapter diagnosis belong to installation recovery, runtime collection and upload belong to runtime observability, and local Skill package validation/upload/review submission belong to asset governance.
 
@@ -51,6 +52,8 @@ split_confirmed_at: 2026-09-01
 - pass: CR-026 design exit; runtime-observability 12/12 and installation-recovery 9/9 requirement IDs appear in both design and plan, Task 4B/4C/14/15/16 fields are complete, versions and cross-Feature order are consistent, and `git diff --check` has no whitespace errors.
 - pass: runtime-observability Task 4B Local Collector CLI regression has 92 tests with 91 passed, 0 failed and 1 Windows symlink-permission skip; CLI build, loopback/process/security scans, residue checks and `git diff --check` pass.
 - pass: installation-recovery Task 14 managed Collector installation/authentication CLI regression has 101 tests with 100 passed, 0 failed and 1 Windows symlink-permission skip; CLI build, shared-runtime recovery/concurrency, local credential isolation, loopback/process/security scans, residue checks and `git diff --check` pass.
+- pass: installation-recovery CR-026 Task 15 event-producing VSIX has 105 CLI tests with 104 passed, 0 failed and 1 existing Windows symlink-permission skip; deterministic VSIX, seven structured editor event types, bounded failure isolation, security scans, production build and `git diff --check` pass.
+- pass: installation-recovery CR-026 Task 16 host PoC; JDK 8 and Memurai-backed Outbox rerun passed; real Codex Hook and VS Code events reached local telemetry; VS Code installation was `ACTIVE/HEALTHY`; Collector stop isolation and Codex repair recovery passed; `git diff --check` and security scans passed.
 - pass: CR-022 design audit; asset 23/23, installation 9/9 and runtime-observability 12/12 requirement IDs appear in both design and plan; all coverage rows are covered; runtime plan has 10 complete Task records; V12/V13/V14 ownership and draft versions are consistent; active-document stale scan and `git diff --check` pass.
 - pass: Feature lists match between overview and decomposition; 51 semantic requirement IDs are unique; paths and source indexes are present; formal requirement documents and control directories are present; git diff check has no whitespace errors.
 - fail: none
@@ -68,4 +71,4 @@ split_confirmed_at: 2026-09-01
 - pending_parameters: production capacity, backup, RPO/RTO, disaster recovery, ClickHouse threshold and final supported runtime versions
 - current_design_order: asset governance -> installation recovery -> runtime observability
 - design_status: all three CR-022 design pairs are confirmed; implementation is authorized in asset -> installation -> runtime-observability order
-- implementation_handoff: asset Task 33-37, installation Task 9-14, runtime-observability Task 1-3 and Task 4A/4B are complete. Stop before installation Task 15; next order remains installation Task 15-16 -> runtime Task 4C -> runtime Task 5-10. The installation Feature's historical Task 6 evidence status remains tracked in its own state.
+- implementation_handoff: asset Task 33-37, installation Task 6 and Task 9-16, runtime-observability Task 1-3 and Task 4A/4B are complete. Resume with runtime Task 4C -> runtime Task 5-10. The installation Feature's latest validation is tracked in its own state.

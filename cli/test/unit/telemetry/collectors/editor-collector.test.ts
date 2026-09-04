@@ -33,3 +33,24 @@ it('编辑器 Collector 明确声明各运行时版本范围', () => {
     { capability: 'MCP', reason: '编辑器扩展不提供 MCP 调用事件' }
   ])
 })
+
+it('编辑器 Collector 接受扩展生命周期事件并映射为标准事件', () => {
+  const collector = new EditorExtensionCollector('vscode')
+  const types = [
+    ['extension_activated', 'EDITOR_EXTENSION_ACTIVATED'],
+    ['extension_deactivated', 'EDITOR_EXTENSION_DEACTIVATED'],
+    ['document_changed', 'EDITOR_DOCUMENT_CHANGED'],
+    ['terminal_opened', 'EDITOR_TERMINAL_OPENED'],
+    ['terminal_closed', 'EDITOR_TERMINAL_CLOSED'],
+    ['task_started', 'EDITOR_TASK_STARTED'],
+    ['task_ended', 'EDITOR_TASK_ENDED']
+  ] as const
+
+  for (const [type, eventType] of types) {
+    const [event] = collector.collect({ type, sessionId: 'extension-session', sequence: 1 }, {
+      scopeId: 2, runtimeVersion: '1.95.0', receivedAt: new Date('2026-09-03T08:00:10.000Z')
+    })
+    assert.equal(event?.eventType, eventType)
+    assert.equal(event?.runtimeKey, 'vscode')
+  }
+})

@@ -54,6 +54,17 @@ export interface SkillPackageImportRequest {
   sourceLocator: string
 }
 
+export interface SkillPackageValidation {
+  valid: boolean
+  name: string
+  description: string
+  versionLabel: string
+  artifactDigest: string
+  versionDigest: string
+  expandedSizeBytes: number
+  manifest: Array<{ path: string; sizeBytes: number; contentDigest: string }>
+}
+
 export interface SkillFile {
   path: string
   required: boolean

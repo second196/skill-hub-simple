@@ -7,7 +7,8 @@ import type {
   PageResult,
   SkillVersion,
   SkillFile,
-  SkillPackageImportRequest
+  SkillPackageImportRequest,
+  SkillPackageValidation
 } from '../types/asset'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -114,6 +115,52 @@ export async function importSkillPackage(payload: SkillPackageImportRequest, fil
   const result = parseImportAttempt(await response.json())
   if (!result) throw new Error('导入结果响应格式错误')
   return result
+}
+
+export async function validateSkillPackage(file: File): Promise<SkillPackageValidation> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await fetch('/api/v1/assets/imports/package/validate', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'X-XSRF-TOKEN': csrfCookie() },
+    body: form
+  })
+  if (!response.ok) {
+    let message = response.status === 403 ? '无权校验技能包' : '技能包校验失败'
+    try {
+      const payload: unknown = await response.json()
+      if (isRecord(payload) && typeof payload.message === 'string') message = payload.message
+    } catch (_) {
+      // 非 JSON 错误响应使用稳定中文提示。
+    }
+    throw new Error(message)
+  }
+  const payload: unknown = await response.json()
+  if (!isRecord(payload) || payload.valid !== true || typeof payload.name !== 'string'
+    || typeof payload.description !== 'string' || typeof payload.versionLabel !== 'string'
+    || typeof payload.artifactDigest !== 'string' || typeof payload.versionDigest !== 'string'
+    || typeof payload.expandedSizeBytes !== 'number' || !Array.isArray(payload.manifest)) {
+    throw new Error('技能包校验响应格式错误')
+  }
+  const manifest: SkillPackageValidation['manifest'] = []
+  for (const entry of payload.manifest) {
+    if (!isRecord(entry) || typeof entry.path !== 'string'
+      || typeof entry.sizeBytes !== 'number' || typeof entry.contentDigest !== 'string') {
+      throw new Error('技能包校验响应格式错误')
+    }
+    manifest.push({ path: entry.path, sizeBytes: entry.sizeBytes, contentDigest: entry.contentDigest })
+  }
+  return {
+    valid: true,
+    name: payload.name,
+    description: payload.description,
+    versionLabel: payload.versionLabel,
+    artifactDigest: payload.artifactDigest,
+    versionDigest: payload.versionDigest,
+    expandedSizeBytes: payload.expandedSizeBytes,
+    manifest
+  }
 }
 
 export async function fetchImportAttempt(requestId: string): Promise<ImportAttempt> {

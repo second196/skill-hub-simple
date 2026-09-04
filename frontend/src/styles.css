@@ -522,11 +522,14 @@ code { color: #344054; font-family: Consolas, "Courier New", monospace; font-siz
 .package-summary-header small { margin-top: 3px; color: var(--text-secondary); font-size: 11px; }
 .risk-panel { margin: 14px; padding: 12px 14px; color: var(--warning); background: var(--warning-bg); border: 1px solid #f5d98b; border-radius: 4px; font-size: 12px; }
 .risk-panel.blocking { color: var(--danger); background: var(--danger-bg); border-color: #f3b7b2; }
+.risk-panel.validation-passed { display: flex; align-items: center; gap: 10px; color: var(--success); background: var(--success-bg); border-color: #a9ddc2; }
+.risk-panel.validation-passed span { color: #356a4e; }
 .risk-panel ul { margin: 6px 0 0; padding-left: 18px; }
 .package-file-list { max-height: 250px; overflow: auto; }
 .package-file-row { display: grid; grid-template-columns: minmax(0, 1fr) 78px 52px; gap: 12px; align-items: center; min-height: 42px; padding: 8px 15px; border-bottom: 1px solid var(--border); }
 .package-file-row:last-child { border-bottom: 0; }
 .package-file-row span { color: var(--text-tertiary); font-size: 11px; text-align: right; }
+.package-file-row > small { color: var(--text-tertiary); font-family: Consolas, monospace; font-size: 10px; text-align: right; }
 .icon-text-button { min-height: 28px; padding: 4px 6px; color: var(--brand-primary); background: transparent; border: 0; font-size: 12px; font-weight: 500; }
 .icon-text-button:hover { color: var(--danger); background: var(--danger-bg); }
 .icon-text-button:disabled { color: var(--text-tertiary); background: transparent; cursor: not-allowed; }
