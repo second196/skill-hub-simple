@@ -23,4 +23,11 @@ public interface GateEvidenceMapper {
             "</script>"})
     List<GateEvidenceEntity> findByIds(@Param("versionDigest") String versionDigest,
                                         @Param("ids") List<Long> ids);
+
+    @Select("SELECT DISTINCT ON (evidence_type) id, version_digest, evidence_type, result, producer_type, "
+            + "producer_id, evidence_uri, evidence_digest, conditions::text AS conditions, generated_at, expires_at "
+            + "FROM gate_evidence WHERE version_digest = #{versionDigest} "
+            + "AND evidence_type IN ('STATIC_SCAN', 'EVALUATION', 'RISK') "
+            + "ORDER BY evidence_type, generated_at DESC, id DESC")
+    List<GateEvidenceEntity> findLatestForReview(@Param("versionDigest") String versionDigest);
 }

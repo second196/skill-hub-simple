@@ -45,6 +45,31 @@ export interface RuntimeDefinition {
   capabilities: string
 }
 
+export interface RuntimeIntegration {
+  integrationId: string
+  scopeId: number
+  runtimeKey: string
+  runtimeVersion: string
+  targetKey: string
+  adapterVersion: string
+  configurationDigest: string
+  installationState: string
+  healthStatus: string
+  lastEventSequence: number
+  failureStage?: string
+  errorCode?: string
+  errorReason?: string
+  lastReportedAt?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface RuntimeIntegrationQuery {
+  scopeId: number
+  runtimeKey?: string
+  limit?: number
+}
+
 export interface InstallationQuery {
   scopeId: number
   assetId?: number

@@ -33,7 +33,8 @@ import java.util.Set;
 @Service
 public class ApiTokenService {
     private static final Set<String> SUPPORTED_SCOPES = Collections.unmodifiableSet(
-            new LinkedHashSet<String>(Arrays.asList("skill:read", "skill:publish", "token:manage")));
+            new LinkedHashSet<String>(Arrays.asList(
+                    "skill:read", "skill:publish", "telemetry:write", "token:manage")));
 
     private final ApiTokenMapper apiTokenMapper;
     private final AccountMapper accountMapper;

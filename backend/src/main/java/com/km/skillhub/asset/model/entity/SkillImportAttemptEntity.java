@@ -10,7 +10,9 @@ public class SkillImportAttemptEntity {
     private String failureStage;
     private String failureCode;
     private String failureReason;
+    private String requestDigest;
     private String artifactDigest;
+    private String versionDigest;
     private String createdBy;
 
     public Long getId() { return id; }
@@ -31,8 +33,12 @@ public class SkillImportAttemptEntity {
     public void setFailureCode(String failureCode) { this.failureCode = failureCode; }
     public String getFailureReason() { return failureReason; }
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
+    public String getRequestDigest() { return requestDigest; }
+    public void setRequestDigest(String requestDigest) { this.requestDigest = requestDigest; }
     public String getArtifactDigest() { return artifactDigest; }
     public void setArtifactDigest(String artifactDigest) { this.artifactDigest = artifactDigest; }
+    public String getVersionDigest() { return versionDigest; }
+    public void setVersionDigest(String versionDigest) { this.versionDigest = versionDigest; }
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
 }

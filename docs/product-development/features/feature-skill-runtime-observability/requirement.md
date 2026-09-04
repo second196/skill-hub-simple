@@ -1,11 +1,11 @@
 ---
 title: Skill 运行观测与证据
-description: 多运行时运行事件采集、Skill 调用归属、Trace 视图和可比较指标需求
+description: 多运行时运行事件采集、Skill 调用归属、Trace 视图、可比较指标和 CLI 上报需求
 audience:
   - product-development
 owner: product-development
-status: draft
-lastReviewed: 2026-09-01
+status: confirmed
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
@@ -16,10 +16,11 @@ sourceType: manual
 | 版本 | 日期 | 修订人 | 修订说明 |
 | --- | --- | --- | --- |
 | v1 | 2026-09-01 |  | 根据调研报告形成运行证据和数据治理初稿；运行时适配器和采集策略支持配置。 |
+| v2 | 2026-09-03 |  | CR-022 增加 SkillHub CLI 采集、OTLP 上传、本地缓冲补报和数据最小化需求。 |
 
 ## 2. 需求来源
 
-来源：`docs/research/skill-hub-research.md` 第 1.2、4.1、5.1、6.1、6.3、6.4、7.1、7.2 和 7.3 节，以及用户对首期运行时范围和数据策略可配置的确认。
+来源：`docs/research/skill-hub-research.md` 第 1.2、4.1、5.1、6.1、6.3、6.4、7.1、7.2 和 7.3 节，用户对首期运行时范围和数据策略可配置的确认，以及 `D:\program\witty-skill-insight` 的插件、Hook、Collector、OTLP 和本地 spool 实现。
 
 ## 3. 功能描述
 
@@ -27,7 +28,7 @@ sourceType: manual
 
 平台应从已支持的 Agent runtime 获取运行事件，识别 Agent 执行链路和 Skill 调用，关联不可变 Skill 版本与 Tracker 版本，提供双向 Trace 视图、指标聚合和数据上报状态。首期能力以安装 Feature 确认的 Codex CLI/IDE 扩展和 Claude Code OTLP 适配为默认范围，运行时能力矩阵和采集策略可配置。
 
-本 Feature 不替代通用日志或 APM，不负责 Agent 执行，不在缺失原始数据时推测事件或归属，也不负责发布决策。
+本 Feature 不替代通用日志或 APM，不负责 Agent 执行，不在缺失原始数据时推测事件或归属，也不负责发布决策。SkillHub CLI 及其安装的适配器是运行数据采集和上报的客户端入口，但不直接写入 SkillHub 数据库。
 
 ### 3.2 原子需求清单
 
@@ -79,6 +80,30 @@ Tracker 应尽可能采集任务或会话、Agent、子 Agent、模型、工具�
 
 验收条件：平台管理员能定位平台链路失败和用户运行失败的边界。
 
+#### `requirement-cli-runtime-collection`
+
+SkillHub CLI 安装的插件、Hook 或 Collector 应采集目标 Agent 实际运行产生的会话、Agent、子 Agent、模型、工具、MCP 和 Skill 调用事件，并为事件保留 Session、Trace、Span、父子关系、状态和时间信息。运行时未提供的事件或字段必须标记缺失，不得通过推测值补齐。
+
+验收条件：目标 Agent 执行一次任务后，SkillHub 能查询到对应运行事件；可识别 Skill 调用时能查看 Skill 名称、触发方式和版本关联状态；未支持能力显示缺失原因。
+
+#### `requirement-cli-runtime-upload`
+
+SkillHub CLI 或其上传器应将本地标准化事件按批次上传到 SkillHub 的 OTLP 接口。上报必须使用具有 `telemetry:write` 作用域的 API Token；服务端受理、拒绝、超限、格式非法和鉴权失败结果必须可查询。
+
+验收条件：有效事件可进入 SkillHub 服务端接收链路；缺少作用域或凭据失效时返回明确失败；CLI 输出不泄露 Token 原文。
+
+#### `requirement-cli-runtime-buffer-recovery`
+
+网络或 SkillHub 服务不可用时，CLI 采集器应将待上报事件保存在本地缓冲中，并在恢复后按唯一事件标识和上传 checkpoint 补报。上传成功后才能推进 checkpoint；重复重试不得生成重复运行记录。
+
+验收条件：服务不可用期间事件状态为待上报或失败而非成功；服务恢复后事件能够补报；同一事件重复执行补报不会重复计数。
+
+#### `requirement-cli-runtime-data-minimization`
+
+CLI 采集器默认不采集完整 transcript、prompt 和代码片段。工具输入输出、FileEdit、Terminal、系统提示词和摘要仅在适配器暴露且治理策略允许时采集；上传前必须脱敏 API Key、Token、Secret、Password 和本地路径，并对策略允许的文本执行长度限制。
+
+验收条件：凭据和本地敏感路径不会按普通运行内容上传；被脱敏、拒绝或截断的数据状态可识别；采集策略调整具有授权和审计记录。
+
 ### 3.3 可配置项与默认值
 
 | 配置项 | 默认值 | 调整约束 |
@@ -88,6 +113,7 @@ Tracker 应尽可能采集任务或会话、Agent、子 Agent、模型、工具�
 | 完整 transcript/prompt/代码采集 | 关闭 | 开启需明确策略并标记风险或估算 |
 | 单条文本采集上限 | 2000 字符 | 只能通过治理策略调整并审计 |
 | 原始运行事件保留 | 365 天 | 由资产治理 Feature 的数据策略统一管理 |
+| 客户端本地 spool 保留 | 7 天 | 仅保留待补报和近期重试所需数据，支持按组织/项目/环境调整并审计 |
 
 ### 3.4 异常与边界
 
@@ -108,4 +134,6 @@ Tracker 应尽可能采集任务或会话、Agent、子 Agent、模型、工具�
 
 ## 5. 需求评审记录
 
-暂无人工评审记录。
+| 日期 | 评审人 | 结论 |
+| --- | --- | --- |
+| 2026-09-03 | 用户 | 确认 CR-022：SkillHub CLI 作为运行数据采集、OTLP 上报、本地缓冲补报和上传前数据最小化的客户端入口；不改变服务端聚合、Trace 视图和指标治理边界。 |

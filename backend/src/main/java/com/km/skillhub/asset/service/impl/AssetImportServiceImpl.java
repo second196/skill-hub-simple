@@ -111,7 +111,9 @@ public class AssetImportServiceImpl implements AssetImportService {
             fileMapper.insertFile(manifest);
 
             attempt.setAssetId(asset.getId());
+            attempt.setRequestDigest(digest);
             attempt.setArtifactDigest(digest);
+            attempt.setVersionDigest(digest);
             attempt.setStatus("SUCCEEDED");
             attemptMapper.updateResult(attempt);
             return toVO(attempt, digest);
@@ -171,11 +173,17 @@ public class AssetImportServiceImpl implements AssetImportService {
     }
 
     private ImportAttemptVO toVO(SkillImportAttemptEntity attempt) {
-        return toVO(attempt, attempt.getArtifactDigest());
+        SkillVersionEntity version = attempt.getVersionDigest() == null
+                ? null : versionMapper.findByDigest(attempt.getVersionDigest());
+        return new ImportAttemptVO(attempt.getRequestId(), attempt.getStatus(), attempt.getAssetId(),
+                attempt.getArtifactDigest(), attempt.getVersionDigest(),
+                version == null ? null : version.getLifecycleState(), false, null,
+                attempt.getFailureStage(), attempt.getFailureCode(), attempt.getFailureReason());
     }
 
     private ImportAttemptVO toVO(SkillImportAttemptEntity attempt, String digest) {
         return new ImportAttemptVO(attempt.getRequestId(), attempt.getStatus(), attempt.getAssetId(), digest,
-                attempt.getFailureStage(), attempt.getFailureCode(), attempt.getFailureReason());
+                digest, "CANDIDATE", false, null, attempt.getFailureStage(), attempt.getFailureCode(),
+                attempt.getFailureReason());
     }
 }

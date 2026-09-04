@@ -5,7 +5,7 @@ audience:
   - product-development
 owner: product-development
 status: draft
-lastReviewed: 2026-09-02
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
@@ -27,7 +27,7 @@ sourceType: manual
 | 维护责任 | product-development |
 | 确认状态 | draft，用户已确认 Vue 3、TypeScript、Vite、Vue Router、Pinia、账户密码登录和本文件作为设计输入；组件库、浏览器、性能和发布参数待确认 |
 
-本文件是治理控制台的架构基线，不是现有页面或组件清单。当前仓库没有前端源码、构建文件、路由或测试入口。
+本文件是治理控制台的架构基线，不是页面清单。当前仓库已有 Vue 3 源码、Vite 构建、Vue Router、Pinia、Vitest 测试和资产/安装治理页面；CR-022 在既有模块化结构中新增 CLI 配套页面和运行观测模块。
 
 ## 2. 架构目标与边界
 
@@ -66,7 +66,7 @@ sourceType: manual
 
 ## 4. 前端目录结构
 
-以下为拟创建的 greenfield 目录结构，遵循 Vue 3 + TypeScript + Vite + Vue Router + Pinia 参考基线。iflytek SkillHub 使用 React 19 控制台，本产品保留 Vue 3 以遵循已确认的前端选型；认证、可观测性和部署边界参考 iflytek 的企业私有化实践。
+以下为当前工程及新增 Feature 应遵循的目录结构。iflytek SkillHub 使用 React 19 控制台，本产品继续采用已确认的 Vue 3 + TypeScript + Vite + Vue Router + Pinia；认证、可观测性和部署边界仅参考其企业私有化实践。
 
 ```text
 frontend/

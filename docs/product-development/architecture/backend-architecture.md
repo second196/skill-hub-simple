@@ -5,7 +5,7 @@ audience:
   - product-development
 owner: product-development
 status: draft
-lastReviewed: 2026-09-02
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
@@ -15,17 +15,17 @@ sourceType: manual
 
 | 项目 | 内容 |
 | --- | --- |
-| 基线版本 | v0.4-draft |
+| 基线版本 | v0.5-draft |
 | 适用产品 | SKILL HUB，公司内部私有化部署 |
-| 适用 Feature | `feature-skill-asset-release-governance` 及其后端相关 Feature |
+| 适用 Feature | `feature-skill-asset-release-governance`、`feature-skill-installation-recovery`、`feature-skill-runtime-observability` 及其后端相关 Feature |
 | 后端语言 | Java |
 | Java 版本 | JDK 8 |
 | 核心框架 | Spring Boot 2.7.18 模块化单体 + Spring MVC 5.3.31 |
 | 安全框架 | Spring Security 5.7.11 |
 | 维护责任 | product-development |
-| 确认状态 | draft，用户已确认 JDK 8、列出的 Java 8 兼容技术版本、PostgreSQL 15、账户密码 Session 和本文件作为设计输入；正式包名、部署拓扑、容量和备份参数待确认 |
+| 确认状态 | draft，用户已确认 JDK 8、列出的 Java 8 兼容技术版本、PostgreSQL 15、Redis Streams、浏览器账户密码 Session 和首期运行事件存储方案；正式部署拓扑、容量、备份和 RPO/RTO 待确认 |
 
-本文件是设计阶段架构基线，不是现有代码结构说明。当前仓库没有后端源码、构建文件、数据库模型或测试入口。
+本文件是设计阶段架构基线。当前仓库已经存在 `backend/` 模块化单体、Flyway V1-V11、资产治理、API Token 和安装恢复实现；运行观测接收、事件存储、聚合和查询仍未实现。
 
 JDK 8 兼容技术栈：
 
@@ -56,6 +56,7 @@ JDK 8 兼容技术栈：
 - 将运行时遥测摄入、评测执行等具有不同吞吐和安全边界的能力通过契约接入，不塞入 Registry 的同步请求流程。
 - 让不可变版本摘要、发布范围、门禁证据、策略版本和审计记录成为跨 Feature 的稳定关联依据。
 - 所有关键操作经过身份、范围和角色校验；关键状态变化可追溯、可恢复。
+- 首期在 PostgreSQL 15 中追加写入并按时间分区保存运行事件和聚合结果，使用 Redis Streams 触发异步聚合，不把 Redis 当作权威事实源。
 
 ### 2.2 后端负责范围
 
@@ -64,12 +65,13 @@ JDK 8 兼容技术栈：
 生命周期、目录查询、公司/项目/环境发布范围
 静态扫描/评测/审核证据关联、发布策略和门禁决策
 RBAC、审批人分离、审计、保留策略
+OTLP/标准事件接收、归一化、幂等落库、Trace/调用投影和指标查询
 ```
 
 ### 2.3 后端不负责范围
 
 - Agent runtime 执行、Skill 安装、安装失败回退和实际灰度流量调度。
-- Tracker 采集、原始运行事件摄入、Trace 查询和运行指标计算。
+- 目标 Agent 主机上的插件、Hook、Collector 执行和本地 spool；这些动作由 SkillHub CLI 的白名单适配器负责。
 - 评测 Runner、判定器、Finding 生成和 Skill 内容自动生成。
 - 替代公司统一身份、日志、APM 或基础设施平台。
 
@@ -97,12 +99,13 @@ API 层 -> 应用层 -> 领域层 -> 持久化/外部适配器
 - `governance`：角色、范围授权、审批人分离和机器主体。
 - `audit`：追加式操作审计和状态还原查询。
 - `integration`：iflytek 能力适配器、安装/观测/评测跨 Feature 契约。
+- `telemetry`：运行事件接收、归一化、脱敏复检、幂等存储、Trace/Skill 调用投影和指标聚合查询。
 
 模块之间只能通过应用服务或明确的领域契约交互，禁止跨模块直接访问对方持久化表。`version_digest` 是跨模块和跨 Feature 的不可变关联键。
 
 ## 4. 后端目录结构
 
-以下为拟创建的 greenfield 目录结构，遵循参考架构的 Controller/Service/Mapper/Model 分层。`com.km.skillhub` 是包名模板，实施时必须替换为公司的正式反向域名包名。
+以下目录约束覆盖当前模块化单体和 CR-022 增量，遵循 Controller/Service/Mapper/Model 分层。`com.km.skillhub` 是仓库当前实际包名；如需切换正式反向域名，必须作为独立兼容迁移评审，不在 CR-022 中顺带改名。
 
 ```text
 backend/
@@ -128,7 +131,8 @@ backend/
 │  ├─ filter/                                     # Web 过滤器
 │  ├─ util/                                       # 无业务语义工具
 │  ├─ handler/                                    # 全局异常和响应处理
-│  └─ integration/                                # 外部 Registry、存储和下游适配
+│  ├─ integration/                                # 外部 Registry、存储和下游适配
+│  └─ telemetry/                                  # 运行事件接收、查询和聚合领域
 ├─ src/main/resources/
 │  ├─ application.yml                             # 公共配置
 │  ├─ application-dev.yml                         # 开发配置
@@ -147,6 +151,26 @@ backend/
 ```
 
 目录约束：Controller 只做参数校验和响应封装；Service 承载业务逻辑和事务；Mapper 只做数据访问；DO/DTO/VO/Query 不混用；公共模块不反向依赖业务模块；测试目录按测试层级组织，不把集成测试伪装成单元测试。
+
+### 4.1 SkillHub CLI 客户端边界
+
+CLI 是与 `backend/`、`frontend/` 并列的 Node.js 20 + TypeScript 客户端，使用 npm 构建。它负责本地凭据、Skill 目录/ZIP 校验打包、目标 Agent 白名单适配器安装、诊断、恢复、本地事件缓冲和批量上报；不承载服务端治理状态，不直接连接 PostgreSQL、Redis 或服务端制品目录。人工输出使用中文，`--json` 输出稳定错误码和结构化结果。
+
+```text
+cli/
+├─ package.json
+├─ tsconfig.json
+├─ src/
+│  ├─ index.ts
+│  ├─ commands/                 # login、publish、telemetry install/status/repair
+│  ├─ clients/                  # SkillHub HTTP/OTLP 客户端
+│  ├─ adapters/                 # Codex、编辑器、Claude Code 白名单适配器
+│  ├─ telemetry/                # 归一化、脱敏、spool、checkpoint 和上传器
+│  ├─ platform/                 # 文件权限、原子写、ZIP 和进程探测
+│  ├─ stores/                   # 配置、凭据和安装状态
+│  └─ shared/                   # 错误码、输出和稳定标识
+└─ test/{unit,integration,fixtures}/
+```
 
 ## 5. 分层、接口和事务
 
@@ -167,6 +191,7 @@ service -> integration / config / audit adapters
 - 发布绑定、发布决策、策略版本和审计记录必须保证决策可追溯；外部通知失败不能伪造 active binding。
 - 多范围发布按范围独立处理，返回逐范围结果；不使用跨范围的大事务掩盖部分失败。
 - 外部 Scanner、评测和撤回通知采用幂等键、超时和可重试任务；重复消费不重复生成有效状态。
+- 遥测批次、事件去重记录、原始事件和聚合 Outbox 在同一 PostgreSQL 事务中提交；事务提交后才能返回已受理。Redis Streams 发布失败只形成可重试积压，不能回滚或丢失已受理事件。
 
 ### 5.3 稳定接口契约
 
@@ -174,18 +199,19 @@ service -> integration / config / audit adapters
 
 ## 6. 数据与存储边界
 
-- 权威元数据、状态、范围绑定、策略版本和决策索引使用 PostgreSQL 15；表结构以数据库设计规范为准。
+- 权威元数据、状态、范围绑定、策略版本、原始运行事件、Trace/调用投影、指标聚合和检查点使用 PostgreSQL 15；运行事件按事件时间分区，表结构以数据库设计规范为准。
 - Skill 制品、来源快照和大型门禁报告使用不可变制品/对象存储；具体组件待确认。
 - 目录查询可使用派生搜索索引；索引丢失时可从权威数据重建，不能反向修改权威状态。
 - 审计数据追加写入并受限修改；永久数据不能通过普通业务删除接口删除。
-- 运行观测域的原始事件保留 365 天、聚合指标永久保留的实际执行由运行观测域负责，但策略契约由治理域提供。
+- Redis Streams 只携带已提交批次 ID 和聚合唤醒信息；消费者始终回读 PostgreSQL，Stream 删除或重复投递不得改变权威数据。
+- 运行观测域的原始事件默认保留 365 天、聚合指标永久保留；分区清理由运行观测域执行，策略契约由治理域提供。
 
 ## 7. 安全、错误处理与可观测性
 
 ### 7.1 安全
 
 - 每个关键用例先校验身份、角色、授权范围和对象状态。
-- 平台仅支持账户密码登录，使用 Spring Security 5.7.11 的服务端会话和 HttpOnly/Secure/SameSite Cookie。
+- 浏览器仅支持账户密码登录，使用 Spring Security 5.7.11 的服务端会话和 HttpOnly/Secure/SameSite Cookie；CLI 使用带作用域的 Bearer API Token，不引入 OAuth2、统一单点登录或设备授权。
 - 密码只保存 BCrypt 哈希，不保存明文或可逆密文；登录失败、锁定和登出操作必须写入审计。
 - 人工申请人与人工审批人必须分离；自动发布使用明确的服务主体类型。
 - 版本和证据通过内容摘要关联；摘要不匹配时拒绝发布。
@@ -232,4 +258,4 @@ service -> integration / config / audit adapters
 - 身份认证、密钥管理、部署拓扑、备份和灾难恢复约束。
 - 包名中的公司反向域名和服务命名。
 
-本基线由 `product-development` 维护。技术选型、边界或标准发生变化时必须升级基线版本，并同步检查引用它的设计、实施计划和 Feature 状态。
+本基线由 `product-development` 维护。v0.5-draft 的增量是首期 PostgreSQL 15 运行事件存储、Redis Streams 聚合通知和 SkillHub CLI 客户端边界。技术选型、边界或标准发生变化时必须升级基线版本，并同步检查引用它的设计、实施计划和 Feature 状态。

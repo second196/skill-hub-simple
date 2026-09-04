@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '../stores/sessionStore'
 import SideNavigation from './layout/SideNavigation.vue'
@@ -9,8 +9,15 @@ const router = useRouter()
 const session = useSessionStore()
 const navigationOpen = ref(false)
 const canManage = ref(false)
+const accountMenuOpen = ref(false)
+const accountMenu = ref<HTMLElement | null>(null)
+
+function handleDocumentClick(event: MouseEvent): void {
+  if (accountMenu.value && !accountMenu.value.contains(event.target as Node)) accountMenuOpen.value = false
+}
 
 onMounted(async () => {
+  document.addEventListener('click', handleDocumentClick)
   try {
     const response = await fetch('/api/v1/session/current', { credentials: 'include' })
     if (response.ok) {
@@ -30,7 +37,14 @@ onMounted(async () => {
   }
 })
 
+onBeforeUnmount(() => document.removeEventListener('click', handleDocumentClick))
+watch(() => route.fullPath, () => {
+  navigationOpen.value = false
+  accountMenuOpen.value = false
+})
+
 async function logout(): Promise<void> {
+  accountMenuOpen.value = false
   await session.logout()
   await router.push('/login')
 }
@@ -100,10 +114,19 @@ function breadcrumb(): string {
             <span>搜索技能</span>
           </RouterLink>
           <span class="topbar-divider" aria-hidden="true" />
-          <div class="topbar-account">
-            <span class="account-avatar" aria-hidden="true">{{ (session.username ?? '用').slice(0, 1).toUpperCase() }}</span>
-            <span class="account-name">{{ session.username ?? '当前账户' }}</span>
-            <button class="topbar-logout" type="button" title="退出登录" @click="logout">退出</button>
+          <div ref="accountMenu" class="topbar-account account-menu">
+            <button class="account-trigger" type="button" :aria-expanded="accountMenuOpen" aria-haspopup="menu" @click.stop="accountMenuOpen = !accountMenuOpen">
+              <span class="account-avatar" aria-hidden="true">{{ (session.username ?? '用').slice(0, 1).toUpperCase() }}</span>
+              <span class="account-name">{{ session.username ?? '当前账户' }}</span>
+              <span class="account-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div v-if="accountMenuOpen" class="account-popover" role="menu">
+              <div class="account-popover-header"><strong>{{ session.username ?? '当前账户' }}</strong><span>{{ canManage ? '系统管理员' : '普通用户' }}</span></div>
+              <RouterLink role="menuitem" to="/settings?tab=profile">个人设置</RouterLink>
+              <RouterLink role="menuitem" to="/settings?tab=security">安全设置</RouterLink>
+              <RouterLink role="menuitem" to="/account/tokens">访问凭证</RouterLink>
+              <button class="account-popover-logout" role="menuitem" type="button" @click="logout">退出登录</button>
+            </div>
           </div>
         </div>
       </header>

@@ -6,14 +6,14 @@ describe('访问凭证 API 契约', () => {
 
   it('只保留合法的令牌列表项和作用域', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify([
-      { id: 1, name: '发布工具', tokenPrefix: 'sk_abc', scopes: ['skill:publish', 'invalid'], createdAt: '2026-09-02T00:00:00Z', status: 'ACTIVE' },
+      { id: 1, name: '发布工具', tokenPrefix: 'sk_abc', scopes: ['skill:publish', 'telemetry:write', 'invalid'], createdAt: '2026-09-02T00:00:00Z', status: 'ACTIVE' },
       { id: 'bad' }
     ]), { status: 200 })))
 
     const result = await fetchTokens()
 
     expect(result).toHaveLength(1)
-    expect(result[0].scopes).toEqual(['skill:publish'])
+    expect(result[0].scopes).toEqual(['skill:publish', 'telemetry:write'])
     expect(result[0].status).toBe('ACTIVE')
   })
 

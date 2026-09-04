@@ -22,6 +22,7 @@
         <postgresql.version>42.2.27</postgresql.version>
         <flyway.version>8.5.13</flyway.version>
         <springdoc.version>1.7.0</springdoc.version>
+        <snakeyaml.version>1.33</snakeyaml.version>
     </properties>
 
     <dependencies>

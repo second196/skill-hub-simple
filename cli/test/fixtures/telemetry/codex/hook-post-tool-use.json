@@ -1,0 +1,22 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "codex-session-1",
+  "turn_id": "turn-7",
+  "event_id": "codex-tool-7",
+  "timestamp": "2026-09-03T08:00:00.000Z",
+  "trace_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "span_id": "bbbbbbbbbbbbbbbb",
+  "parent_span_id": "cccccccccccccccc",
+  "sequence": 7,
+  "model": "gpt-5",
+  "tool_name": "mcp__filesystem__read_file",
+  "mcp_server": "filesystem",
+  "status": "success",
+  "skill": {
+    "name": "release-audit",
+    "version_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "trigger_type": "explicit"
+  },
+  "prompt": "password=do-not-store",
+  "tool_input": "D:\\secret\\release.md"
+}

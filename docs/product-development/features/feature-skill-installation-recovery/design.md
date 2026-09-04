@@ -4,14 +4,14 @@ description: Skill 与 Tracker 的运行时获取、安装、切换、回退和�
 audience:
   - product-development
 owner: product-development
-status: active
-lastReviewed: 2026-09-02
+status: confirmed
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
 # 方案：Skill 获取安装与失败回退
 
-> 设计版本：v1。需求基线、方案和实施计划已由用户确认，可作为后续实现依据。
+> 设计版本：v2.1。v1 是已确认并已实施到 Task 8 的基线，v2 增加已实施的 CR-022 CLI 接入；本版增加已确认的 CR-026 本地 Collector、鉴权配置和事件化 VSIX 安装修正。
 
 ## 1. 目标与非目标
 
@@ -33,28 +33,28 @@ sourceType: manual
 - 不实现 Agent 的业务执行、Tracker 的运行事件采集、指标计算或评测 Runner。
 - 不改变资产注册、Skill 版本内容、发布门禁和发布范围的权威规则。
 - 不承诺未被调研材料验证的 Claude Code IDE 安装能力。
-- 不使用 OAuth2、统一单点登录或长期 API Token；继续使用账户密码和服务端 Session。
+- 不使用 OAuth2、统一单点登录或 CLI Device Flow；浏览器继续使用账户密码和服务端 Session，CLI 使用既有 Bearer API Token。
 
 ## 2. 需求依据与版本
 
 | 依据 | 版本/范围 | 用途 |
 | --- | --- | --- |
-| `docs/product-development/features/feature-skill-installation-recovery/requirement.md` | v1，用户已确认 | 六条功能需求、运行时默认矩阵和验收条件 |
+| `docs/product-development/features/feature-skill-installation-recovery/requirement.md` | v2，用户已确认 | 六条安装恢复需求、三条 CR-022 CLI 接入需求和运行时矩阵 |
 | `docs/product-development/work-items/work-skill-hub-platform/decomposition.md` | confirmed | Feature 边界、依赖和语义化需求 ID |
 | `docs/product-development/work-items/work-skill-hub-platform/index.md` | confirmed | 资产发布、安装、观测之间的跨 Feature 契约 |
 | `docs/research/skill-hub-research.md` | 3.2、4.3、6.1、6.2、6.4、7.3、8.1 | 运行时矩阵、Tracker、CLI 分发和失败恢复调研事实 |
 
-设计版本和实施计划版本均为 `v1-draft`。安装域所有跨 Feature 关联使用 `version_digest`，不使用名称、默认版本或 `latest` 推断。
+当前增量设计和实施计划均为 `v2 confirmed`。安装域所有跨 Feature 关联使用 `version_digest`，不使用名称、默认版本或 `latest` 推断。
 
 ## 3. 架构和实施基线
 
 | 类型 | 文档 | 版本/状态 | 本方案约束 |
 | --- | --- | --- | --- |
-| 后端架构 | `docs/product-development/architecture/backend-architecture.md` | v0.4-draft，已确认作为输入 | JDK 8、Spring Boot 2.7.18、Spring MVC 5.3.31、模块化单体、Controller/Service/Mapper 分层；实际安装属于运行时适配器边界 |
+| 后端架构 | `docs/product-development/architecture/backend-architecture.md` | v0.5-draft | JDK 8、模块化单体、控制面编排、CLI 和运行时适配器边界 |
 | 前端架构 | `docs/product-development/architecture/frontend-architecture.md` | v0.3-draft，已确认作为输入 | Vue 3、TypeScript、Vite、Vue Router、Pinia；前端只发起请求和展示状态，不执行安装 |
-| 实施规范入口 | `docs/product-development/standards/implementation/index.md` | v0.3-draft，已确认作为输入 | 按影响范围执行 Java、Vue、TypeScript 和数据库规范 |
+| 实施规范入口 | `docs/product-development/standards/implementation/index.md` | v0.4-draft | 按影响范围执行 Java、Vue、Node.js CLI、TypeScript 和数据库规范 |
 | Java 规范 | `docs/product-development/standards/implementation/java-best-practices.md` | active，嵩山版依据 | 明确 DTO/VO/DO、分层、异常、事务和返回值语义 |
-| 数据库规范 | `docs/product-development/standards/implementation/database-design.md` | v0.5-draft，已确认作为输入 | PostgreSQL 15、Flyway、追加式操作记录、逻辑跨域关联、幂等和分页 |
+| 数据库规范 | `docs/product-development/standards/implementation/database-design.md` | v0.6-draft | PostgreSQL 15、运行时接入实例、追加式事件、幂等和分页 |
 | 组件规范 | `docs/product-development/standards/implementation/component-standard.md` | active | Vue 组件单一职责、显式加载/部分成功/失败状态和可访问性 |
 | TypeScript 规范 | `docs/product-development/standards/implementation/typescript-best-practices.md` | active | 外部响应先校验、精确类型、异步错误可见 |
 
@@ -62,7 +62,7 @@ sourceType: manual
 
 ## 4. 源码现状和影响范围
 
-当前仓库已有资产与发布治理实现，安装域尚未实现。相关事实如下：
+当前仓库已有资产与发布治理及安装恢复实现，CR-022 的 CLI 适配器和运行时接入登记尚未实现。相关事实如下：
 
 | 事实 | 来源 |
 | --- | --- |
@@ -280,7 +280,7 @@ npm --prefix frontend run build
 - 运行时适配器的通信协议、身份认证、命令签名和版本兼容方式尚未确认；没有这些事实不能进行真实主机安装验证。
 - Bash/PowerShell 的实际目录、原子切换方式、进程重载方式和回退安全性需要 PoC；方案只规定行为契约。
 - 适配器离线队列的容量、事件保留期、超时、重试和人工处理 SLA 未确认。
-- 数据库规范 v0.5-draft 只给出安装表的关联要求，事件接收幂等字段和完整列定义需要在实施前补充为数据库增量基线。
+- 数据库规范 v0.6-draft 已补充 V13 运行时接入元数据、事件幂等和与 V14 运行观测的迁移边界；具体列和索引仍须在 Task 9 的 PostgreSQL 15 迁移测试中验证。
 - 对象存储、制品签名/访问、备份、容量、RPO/RTO 和正式 Java 包名仍按架构基线保持待确认。
 
 ### 不覆盖项
@@ -288,3 +288,170 @@ npm --prefix frontend run build
 - 不实现未验证的 Claude Code IDE 安装。
 - 不把安装成功等同于运行观测健康；健康状态由安装回执和下游运行数据分别表达。
 - 不实现 Agent 业务执行、运行事件采集、指标聚合、评测和发布门禁计算。
+
+## 17. CR-022 增量设计：CLI 运行时接入安装、诊断与恢复
+
+### 17.1 责任边界与命令
+
+CLI 复用资产治理 Task 33 建立的 Node.js 20 + TypeScript 工程、凭据、HTTP 客户端和中文/JSON 输出。Java 后端不通过 SSH、WinRM 或任意 Shell 远程操作目标主机；所有配置写入、扩展安装、进程探测和恢复都由用户在目标主机执行 CLI 后完成。
+
+```text
+skillhub telemetry install --runtime <runtime-key> [--dry-run] [--json]
+skillhub telemetry status  [--runtime <runtime-key>] [--json]
+skillhub telemetry repair  --runtime <runtime-key> [--json]
+```
+
+首期 `runtime-key` 固定为 `codex-cli`、`codex-vscode`、`codex-cursor`、`codex-windsurf` 和 `claude-code-otlp`。命令只接受枚举值和显式选项，不能拼接用户输入执行任意命令。`status` 是严格只读操作；`install --dry-run` 只展示检查和预计变更。
+
+### 17.2 适配器注册表和本地目录
+
+```text
+cli/src/adapters/
+├─ adapter-registry.ts
+├─ types.ts
+├─ codex/codex-cli-adapter.ts
+├─ codex/editor-extension-adapter.ts
+└─ claude/claude-code-otlp-adapter.ts
+cli/src/telemetry/
+├─ collector-installer.ts
+├─ integration-health.ts
+└─ integration-event-spool.ts
+cli/src/stores/runtime-integration-store.ts
+```
+
+`RuntimeAdapter` 固定提供 `detect`、`plan`、`install`、`status`、`repair` 和 `rollback`。注册表按运行时、版本范围、操作系统和能力选择唯一适配器；无匹配项返回 `RUNTIME_UNSUPPORTED`，不使用通用 Shell 兜底。每个适配器包内声明版本、文件摘要、支持矩阵和可写目标，安装前复核摘要。
+
+CLI 状态目录位于用户状态目录的 `skillhub/runtime-integrations/<runtime-key>/`，只保存适配器版本、配置摘要、受管文件清单、安装前快照定位、最后自检和未上报事件；Token 保持在独立凭据文件中。状态和快照使用当前用户权限、文件锁和临时文件原子替换。
+
+### 17.3 首期适配器行为
+
+| 运行时 | 安装动作 | 自检和人工边界 |
+| --- | --- | --- |
+| Codex CLI | 安装 CLI 自带 Collector/relay；合并 `%USERPROFILE%/.codex/hooks.json` 和 `config.toml` 的带标记 OTel 配置块 | 校验 Hook、配置块、处理器摘要、relay 和服务端；Hook 信任必须由用户在 Codex 内确认 |
+| VS Code/Cursor/Windsurf | 使用 CLI 包内摘要固定的 VSIX；仅调用已探测到的 `code`、`cursor`、`windsurf --install-extension <fixed-vsix> --force` | 校验扩展版本和 Collector 连通；不存在的编辑器标记未安装，不伪造成功 |
+| Claude Code OTLP | 在已支持版本下合并 `~/.claude/settings.json` 的受管 `env` 配置，设置遥测启用、OTLP HTTP/JSON endpoint 和 Bearer header 引用 | 校验 JSON、配置摘要、版本和服务端鉴权；冲突的用户自定义 OTLP 配置要求人工确认，不静默覆盖 |
+
+Codex 适配器参考 Witty 的 managed block、安装状态、摘要校验和 self-check 设计，但配置名、目录和 endpoint 使用本产品 `skillhub` 命名。编辑器命令参数由适配器内部构造。Claude Code 未通过版本/字段兼容测试时，矩阵项保持禁用。
+
+### 17.4 原子安装和恢复状态机
+
+```text
+DETECTED -> PLANNED -> SNAPSHOTTED -> APPLYING -> VERIFYING -> ACTIVE
+                                 |          |          |
+                                 +----------+----------+-> ROLLING_BACK
+                                                          |-> RESTORED
+                                                          +-> REQUIRES_MANUAL
+```
+
+1. 检测运行时版本、目标文件、写权限、端口、SkillHub 地址和 `telemetry:write` 凭据，只记录 Token 前缀。
+2. 获取本地锁并计算目标文件修改前摘要；保存最小快照和计划，不复制无关用户目录。
+3. 安装 CLI 自带且摘要固定的文件，使用结构化 JSON/TOML 修改器写入受管块，再原子替换目标文件。
+4. 执行自检。全部通过后保存 `ACTIVE` 状态并上报接入事件；需要 Codex Hook 信任时返回 `ACTION_REQUIRED`，不能标记健康。
+5. 任一步失败时，仅当当前文件仍匹配本次写入摘要才恢复快照；发现用户并发修改时停止覆盖并进入 `REQUIRES_MANUAL`。
+
+`repair` 先执行只读诊断，只修复缺失或摘要不匹配的受管内容；不删除用户配置。采集器、上传器和网络异常必须捕获并写本地事件 spool，不能改变目标 Agent 的退出码或阻塞业务调用。
+
+### 17.5 服务端登记和 Vue 展示
+
+新增兼容接口：
+
+```text
+POST /api/v1/runtime-integrations
+POST /api/v1/runtime-integrations/{integrationId}/events
+GET  /api/v1/runtime-integrations
+GET  /api/v1/runtime-integrations/{integrationId}
+```
+
+CLI 写接口使用 `telemetry:write`，并校验账号、公司/项目/环境范围；Vue 查询继续使用 Session/CSRF 和范围 RBAC。Flyway `V13__create_runtime_integration_metadata.sql` 新增 `runtime_integration_instance` 和 `runtime_integration_event`，对 `(scope_id,runtime_key,target_key)` 和 `event_id` 建立唯一约束。实例保存适配器版本、配置摘要、安装状态、健康状态和最近上报时间，不保存 Token、用户主目录或原始配置正文。
+
+现有安装管理页增加“Skill 安装”和“运行时接入”页签；接入列表展示运行时、目标逻辑标识、适配器版本、配置/健康状态、最后检查和失败阶段。服务端不可达时 CLI 事件进入本地待上报队列，恢复后按 `event_id` 补报；发送成功不等于本机安装成功。
+
+### 17.6 异常、安全、兼容和回滚
+
+- 运行时不存在、版本不支持、权限不足、端口占用、配置语法错误、用户配置冲突、扩展命令失败、服务端不可达和凭据拒绝必须使用不同错误码。
+- 适配器输出、服务端事件和日志必须脱敏 Token、Bearer header、本地用户名和绝对路径；服务端只接收散列后的目标逻辑 ID。
+- 重复 `install` 在配置摘要一致时返回原状态；不同版本升级必须保留旧适配器和配置快照，健康确认后才清理临时文件。
+- CLI/适配器版本回退使用本地快照；服务端表和事件追加保留。后端可暂停接收新接入登记，但不能远程卸载或宣称目标主机已恢复。
+
+### 17.7 可行性证据和验证
+
+- 当前后端已存在 `RuntimeInstaller`/`RuntimeInstallerRegistry` 接口、安装事件接收和状态机，但没有真实主机安装器，适合保持控制面与本地执行分离。
+- Witty Codex 安装器已证明 managed JSON/TOML 修改、VSIX 安装、安装状态、摘要校验、relay 自检和恢复路径可实现；Hook 信任仍需人工操作。
+- 当前 V8/V9 安装表以具体 Skill 资产和版本为必填，不能承载纯遥测接入，因此新增独立 `runtime_integration_*` 表而不放宽既有不变量。
+- 验证必须在临时 HOME 中覆盖幂等安装、用户并发修改、坏配置、升级失败、恢复、只读诊断和凭据脱敏；真实 Codex/编辑器/Claude Code 主机验证不可用时标记 `unavailable`。
+
+### 17.8 CR-022 需求覆盖矩阵
+
+| requirement-<semantic-name> | 方案响应 | 计划任务 | 验证方式 | 状态 |
+| --- | --- | --- | --- | --- |
+| `requirement-cli-agent-integration-installation` | 白名单适配器、Collector/密钥预配、预检、快照、原子写、自检和服务端登记 | Task 9-11、Task 14-16 | CLI 单元/集成和临时 HOME 安装测试 | covered |
+| `requirement-cli-agent-integration-check` | 严格只读 `status`，区分配置、Collector、网络、凭据、spool 和健康 | Task 10、Task 12、Task 14、Task 16 | 只读副作用检查、错误码测试 | covered |
+| `requirement-cli-agent-integration-recovery` | 摘要保护的快照恢复、Collector 恢复、密钥轮换和幂等事件补报 | Task 10、Task 12-16 | 故障注入、恢复和服务端幂等测试 | covered |
+
+### 17.9 风险和不覆盖项
+
+- Codex、VS Code/Cursor/Windsurf 和 Claude Code 的最终支持版本需要实现阶段以真实二进制验证；未验证版本不进入 ACTIVE 矩阵。
+- npm 发布、CLI 签名、企业软件分发和管理员提权策略待确认；首期不自动提权。
+- 不实现远程任意命令、Java 后端主机控制、未验证的 Claude Code IDE 扩展或 Agent 业务任务执行。
+
+## 18. CR-026 增量设计：Collector 安装与真实事件接入
+
+### 18.1 跨 Feature 边界
+
+运行观测 Feature 拥有 `LocalCollectorServer`、本地路由、事件转换、脱敏和 spool 语义；安装恢复 Feature 只负责本地 Collector 的受管安装、密钥分发、运行时配置、进程自检和失败恢复。Java 后端继续只保存接入状态，不启动目标主机进程，也不接收本地 Collector 密钥。
+
+安装顺序固定为：
+
+```text
+检查运行时/文件/端口
+-> 创建或读取本地 Collector 密钥
+-> 启动并鉴权检查 LocalCollectorServer
+-> 快照并写入 Hook/OTLP/VSIX 受管配置
+-> 发送无正文探针事件并确认 spool 增量
+-> 保存本地状态并登记服务端
+```
+
+任一步失败都进入既有 `ROLLING_BACK`；只回退本次摘要匹配的受管内容。已有健康 Collector 为其他运行时服务时不得因单个适配器失败而停止。
+
+### 18.2 本地密钥和配置注入
+
+本地入口密钥由运行观测 Task 4B 的 `CollectorConfigStore` 首次创建，至少 256 bit，位于 `<user-home>/.skillhub/collector/collector.secret`。安装适配器只能通过受限读取接口取得，不得写入 `runtime-integrations.json`、接入事件、CLI 输出、服务端、日志、spool 或 VSIX 包体。
+
+| 消费方 | 密钥使用方式 | 配置约束 |
+| --- | --- | --- |
+| Codex Hook | Hook handler 运行时读取 `collector.secret`，发送 `X-SkillHub-Collector-Key` | handler 不内嵌密钥；读失败时静默放弃采集并以 0 退出 |
+| Codex OTLP | 受管 OTel 配置写本地 endpoint、runtime key 和本地密钥头引用/值 | 不得写 SkillHub API Token；不覆盖用户非受管 exporter |
+| Claude Code OTLP | 受管 `OTEL_EXPORTER_OTLP_HEADERS` 保存本地 Collector 密钥和 runtime key | 这是唯一允许密钥值进入运行时配置的情况；settings 必须当前用户可读写，输出/快照索引只保存摘要 |
+| VSIX | 扩展运行时从固定受管密钥文件读取并发送本地头 | 包体和扩展日志不含密钥；读取失败显示 Collector 未连接 |
+
+本地密钥不是 SkillHub API Token，不能用于访问服务端。轮换采用“双密钥短窗口”：生成新密钥、原子更新受管配置、逐个探针验证、撤销旧密钥；失败则恢复旧密钥和摘要匹配的配置。首期不提供用户输入固定密钥的选项。
+
+### 18.3 Hook、OTLP 和 VSIX 安装契约
+
+- Codex Hook 固定发送 `POST /hook`，正文限制 1 MiB，本地请求超时 150 ms；任何 Collector 错误都不能改变 Codex 退出码。
+- Codex/Claude Code OTLP 固定发送 HTTP/JSON `POST /v1/logs`，同时携带本地鉴权头和编译期白名单 runtime key；不配置 gRPC 或任意远程 endpoint。
+- VS Code、Cursor、Windsurf 使用同一摘要固定 VSIX，但安装时写入各自 runtime key。扩展必须发送真实编辑器生命周期事件到 `POST /ide-event`，不再用周期 `/status` 请求冒充采集。
+- VSIX 首期采集扩展会话开始/结束、文件修改计数、终端打开/关闭和任务开始/结束；只发送时间、会话/事件稳定标识、编辑器类型、语言/终端种类等结构化枚举，不发送文件名、绝对路径、代码差异、终端命令/输出、窗口标题或工作区名称。目标 API 不可用的事件显式标记能力缺失。
+- 扩展使用短超时、有界内存队列和丢弃计数；本地服务不可用时不得阻塞编辑器保存、终端和任务操作，不做无限重试。
+
+每个适配器安装完成后必须发送一条不含用户内容的探针 envelope，并通过 spool 计数或请求关联 ID确认入口可用。仅 `/health` 成功不足以将运行采集标记为健康。
+
+### 18.4 状态、诊断和恢复
+
+`telemetry install` 和 `telemetry repair` 可以启动或恢复受管 Collector；`telemetry status` 仍严格只读。状态至少区分：服务停止、陈旧 PID、未知端口占用、协议不兼容、鉴权不匹配、运行时配置缺失、密钥摘要不匹配、探针失败、spool 不可写和健康。
+
+端口冲突时只允许接管通过进程标识、协议版本和密钥验证的既有 Collector；未知进程不得结束、覆盖或自动改端口。Collector 启动失败时不继续写运行时配置。进程在安装后退出时，`repair` 清理陈旧 PID/锁、启动同版本 Collector、验证探针并恢复 ACTIVE；用户并发修改配置则进入 `REQUIRES_MANUAL`。
+
+本地安装结果上报服务端时只包含 Collector 协议版本、运行时/适配器版本、配置摘要、探针结果、失败阶段和稳定错误码。不得上传 PID、用户目录、密钥、配置正文或本地事件正文。Vue 继续展示服务端最近登记状态，并明确“服务端接入状态不等于目标主机当前进程实时状态”。
+
+### 18.5 兼容、迁移和回滚
+
+已有无鉴权 Hook、OTLP 或只轮询 `/status` 的 VSIX 标记 `ACTION_REQUIRED`，由 `repair` 在保存快照后升级；不得通过开放无鉴权路由维持兼容。适配器和 Collector 协议使用显式版本，主版本不兼容时阻断安装。
+
+回滚按“禁用新事件发送 -> 恢复 Hook/OTLP/VSIX 受管快照 -> 验证 Agent/编辑器正常 -> 在没有其他运行时依赖时停止 Collector”执行。spool、checkpoint、服务端接入历史和审计保留。回滚不得删除用户非受管配置、其他扩展或其他运行时正在使用的 Collector。
+
+### 18.6 验证和实施顺序
+
+自动化在临时用户目录覆盖密钥权限/轮换、Hook 退出码隔离、OTLP Header、VSIX 无正文事件、安装探针、只读 status、进程恢复、未知端口、并发修改和多运行时共享 Collector。主机 PoC 至少对当前可用 Codex 与 VS Code 执行真实事件；Claude Code、Cursor、Windsurf 缺失时逐项标记 `unavailable`。
+
+实施依赖顺序为运行观测 Task 4B -> 安装恢复 Task 14 -> Task 15 -> Task 16 -> 运行观测 Task 4C。CR-026 不改变已完成 Task 9-13 的服务端登记、离线补报和 Vue 页签契约。

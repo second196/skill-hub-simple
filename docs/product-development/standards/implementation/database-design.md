@@ -7,7 +7,7 @@ audience:
   - database-administrators
 owner: product-development
 status: draft
-lastReviewed: 2026-09-02
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
@@ -19,7 +19,7 @@ sourceType: manual
 
 | 项目 | 内容 |
 | --- | --- |
-| 基线版本 | v0.5-draft |
+| 基线版本 | v0.6-draft |
 | 适用产品 | SKILL HUB，公司内部私有化部署 |
 | 适用 Feature | 资产与发布治理、安装与回退、运行时观测、评测与持续演进 |
 | 事务数据库 | PostgreSQL 15 |
@@ -28,12 +28,12 @@ sourceType: manual
 | PostgreSQL JDBC | 42.2.27，Java 8 兼容基线 |
 | Flyway 版本 | 8.5.13，Java 8 兼容基线 |
 | 异步任务 | Redis Streams 6.2.14，消费幂等、失败重试和积压可观测 |
-| 高吞吐运行数据 | 独立分析存储，候选为 ClickHouse；具体组件待确认 |
+| 首期运行数据 | PostgreSQL 15 追加式时间分区表；达到经验证的容量阈值后再评估 ClickHouse |
 | 制品和大报告 | 不可变对象存储；具体组件待确认 |
-| 确认状态 | draft，已确认 PostgreSQL 15、核心治理模型和保留默认值；容量、部署、备份和数据安全参数待确认 |
+| 确认状态 | draft，已确认 PostgreSQL 15 是首期运行事件和聚合结果的权威存储，Redis Streams 只传递异步聚合通知；容量、部署、备份、RPO/RTO 和数据安全参数待确认 |
 | 维护责任 | product-development |
 
-当前仓库没有业务源码、数据库或迁移历史。以下表和路径是目标设计，不是已有数据库事实。
+当前仓库已经存在 Flyway V1-V11、资产治理、API Token 和安装恢复表；本次运行观测表仍是待实施的目标设计，不能写成已有数据库事实。
 
 ## 2. 总体存储架构
 
@@ -49,8 +49,8 @@ sourceType: manual
           +------------------------+------------------------+
           |                         |                        |
           v                         v                        v
-    对象存储                  搜索索引                  分析存储
-  制品/报告/快照              目录派生索引          原始事件/Trace/指标
+    本地制品存储                搜索索引                 Redis Streams
+  制品/报告/快照              目录派生索引             聚合通知/重试
 ```
 
 ### 2.1 PostgreSQL 负责
@@ -60,12 +60,14 @@ sourceType: manual
 - 组织范围、角色授权、审批记录和审计记录。
 - 安装实例/Tracker 配置的低频元数据、评测运行索引、Finding 和候选版本索引。
 - 迁移历史、幂等键、Outbox 事件和数据保留策略。
+- 首期原始运行事件、接收批次、去重记录、Agent Trace、SkillInvocation、指标聚合和聚合检查点。
 
 ### 2.2 其他存储负责
 
-- 对象存储：Skill 制品、来源快照、静态扫描报告、评测报告和大型证据；对象名必须包含内容摘要，上传后不可覆盖。
-- 分析存储：原始运行事件、Agent Trace、SkillInvocation 和 MetricAggregate。原始事件默认保留 365 天，聚合指标永久保留。
+- 本地制品存储：Skill 制品、来源快照、静态扫描报告、评测报告和大型证据；对象名必须包含内容摘要，上传后不可覆盖。本阶段不采用 S3。
+- Redis Streams：只发布已经提交的遥测批次 ID 和聚合唤醒消息；消费者必须回读 PostgreSQL，Stream 不保存唯一事实。
 - 搜索索引：资产目录的派生查询索引，可从 PostgreSQL 15 重建，不拥有状态写权限。
+- ClickHouse：仅保留存储适配边界；达到经压测和运维评审确认的容量阈值后另行设计迁移，首期不作为依赖。
 
 ## 3. 通用表设计规范
 
@@ -137,10 +139,25 @@ sourceType: manual
 | `installation_instance` | Skill 在 Agent/主机/逻辑实例上的安装状态 | `asset_id`、`version_digest`、`runtime_key`、`scope_id` |
 | `tracker_binding` | Skill 与 Tracker 的绑定和健康状态 | `installation_instance_id`、Tracker 版本 |
 | `installation_operation` | 安装、切换、回退和撤回操作 | 前后 `version_digest`、结果、失败阶段、幂等键 |
+| `runtime_integration_instance` | CLI 在目标主机安装的插件、Hook、Collector 或 OTLP 配置状态 | `runtime_key`、`adapter_version`、`target_key`、`scope_id`、配置摘要 |
+| `runtime_integration_event` | 接入安装、检查、修复和回退事件 | `event_id`、实例、阶段、结果和发生时间 |
 
 ### 4.4 运行观测域
 
-运行观测由 `feature-skill-runtime-observability` 负责。Tracker 元数据可在 PostgreSQL 15 保存；原始运行事件、AgentTrace、SkillInvocation 和 MetricAggregate 使用独立分析存储。不能可靠归属版本的调用保存 `version_unknown` 标志和原因，禁止绑定当前最新版本。
+运行观测由 `feature-skill-runtime-observability` 负责，首期全部权威数据保存到 PostgreSQL 15：
+
+| 表 | 用途 | 关键约束/索引 |
+| --- | --- | --- |
+| `telemetry_ingest_batch` | 批次受理、拒绝数量、摘要和调用主体 | `uk_telemetry_request_id`；按主体/时间查询 |
+| `runtime_event_dedup` | 在分区表之外提供全局事件幂等 | `event_id` 主键；保留期不短于原始事件加客户端补报窗口 |
+| `runtime_event` | 追加式标准化原始事件，按 `occurred_at` 月分区 | `(occurred_at,event_id)`；Trace、Skill、范围和时间索引 |
+| `agent_trace` | AgentTrace 查询投影和完整性摘要 | `trace_id` 唯一；按范围/运行时/时间查询 |
+| `skill_invocation` | 可识别 Skill 调用、版本归因和缺失原因 | `invocation_id` 唯一；按 `version_digest`/时间查询 |
+| `metric_aggregate` | 带条件、分子和分母的时间窗口聚合 | 聚合维度摘要 + 窗口唯一 |
+| `telemetry_aggregation_outbox` | PostgreSQL 提交后可靠发布 Redis 聚合通知 | `event_id` 唯一；状态/重试时间索引 |
+| `telemetry_aggregation_checkpoint` | 聚合消费者的最后成功位置和窗口 | `consumer_key` 唯一；乐观锁 |
+
+不能可靠归属版本的调用必须保存 `version_unknown = TRUE` 和原因，禁止绑定当前最新版本。Redis Streams 丢失、重复或乱序时，聚合器依靠 PostgreSQL Outbox、幂等键和 checkpoint 恢复。
 
 ### 4.5 评测与持续演进域
 
@@ -178,10 +195,12 @@ sourceType: manual
 | `failure_stage` | VARCHAR(32) | 否 | 读取、清单、元数据、摘要或持久化阶段 |
 | `failure_code` | VARCHAR(64) | 否 | 稳定错误码 |
 | `failure_reason` | VARCHAR(2048) | 否 | 可定位且已脱敏的失败原因 |
+| `request_digest` | CHAR(64) | 否 | 收到的 ZIP 载荷摘要；用于识别同请求 ID 的内容冲突 |
 | `artifact_digest` | CHAR(64) | 否 | 成功生成的制品摘要 |
+| `version_digest` | CHAR(64) | 否 | 规范化元数据和文件清单摘要；成功后关联不可变版本 |
 | `created_by` / `created_at` | VARCHAR(128) / TIMESTAMP(3) WITH TIME ZONE | 是 | 请求主体和时间 |
 
-同一 `request_id` 重试返回原导入结果；不得因重复请求生成重复版本。失败阶段和原因必须可查询，不能仅写入日志。
+同一 `request_id` 和 `request_digest` 重试返回原导入结果；同一请求 ID 携带不同摘要必须拒绝。不得因重复请求生成重复版本。失败阶段和原因必须可查询，不能仅写入日志。
 
 ### 5.2 `skill_version`
 
@@ -320,6 +339,16 @@ CREATE UNIQUE INDEX uk_binding_scope_asset_current
 
 这些跨 Feature 表的外键默认是逻辑关联，消费方必须校验资产/版本存在和状态；关联缺失时标记 unknown，不绑定最新版本。
 
+### 5.10 运行事件、投影和聚合
+
+`telemetry_ingest_batch` 至少保存 `request_id`、主体、Token 标识、范围、运行时、载荷摘要、接收/接受/拒绝数量、状态、错误摘要和接收时间。相同 `request_id` 与载荷摘要重试返回原结果；同一请求标识携带不同摘要时拒绝并审计。
+
+`runtime_event` 至少保存 `event_id`、`batch_id`、事件类型、Session/Trace/Span/父 Span、运行时和版本、事件时间、状态、耗时、Token/成本数值、`version_digest`、`version_unknown`、Tracker 版本、脱敏/截断状态及受控 `JSONB` 属性。正文默认不接收完整 transcript、prompt 或代码；需要查询、分组或约束的字段必须独立成列。
+
+分区表的唯一约束受分区键限制，因此全局幂等由非分区表 `runtime_event_dedup(event_id)` 保证。接收事务先写去重记录，再写原始事件、批次统计和 `telemetry_aggregation_outbox`；任一步失败均回滚。去重记录保留期不得短于对应原始事件保留期加最大客户端补报窗口，默认至少 372 天。
+
+`agent_trace` 和 `skill_invocation` 是可从原始事件重建的查询投影；`metric_aggregate` 保存窗口、维度 JSON 摘要、调用量、成功/错误数、判定分子/分母、Token、成本和延迟统计。聚合必须记录定义版本、样本数和完整性状态，条件不一致或真值缺失时不得输出“业务准确率”。
+
 ## 6. 迁移、索引与恢复
 
 ```text
@@ -329,11 +358,17 @@ backend/src/main/resources/db/migration/
 ├─ V3__create_release_gate_policy.sql
 ├─ V4__create_authorization_audit.sql
 ├─ V5__create_cross_feature_metadata.sql
+├─ V12__extend_cli_package_import.sql
+├─ V13__create_runtime_integration_metadata.sql
+├─ V14__create_runtime_observability.sql
 └─ R__rebuild_catalog_projection.sql
 ```
 
 - Flyway 迁移脚本不可修改；破坏性变更必须拆成兼容迁移、数据迁移和清理迁移。
 - 外键、范围、状态、版本摘要和时间字段按查询模式建立索引；新增索引必须提供执行计划或查询证据。
+- `runtime_event` 按 UTC 月创建 RANGE 分区，至少预建当前月和后续两个月；没有可写分区时接收失败并报警，禁止落入无界默认分区。
+- 原始事件查询必须包含授权范围和时间窗口；Trace/调用列表采用 `(occurred_at,event_id)` seek 分页，禁止无时间条件扫描全部分区。
+- 保留任务先记录批次和候选分区，再按已生效策略删除或 detach/drop 到期分区；失败时保留数据并可重试。
 - 目录、审计和门禁列表必须分页，深度分页使用游标或基于时间/ID 的 seek 分页。
 - 生产账户按读写、迁移、审计查询和策略执行分离最小权限。
 - 备份、RPO/RTO 和灾备方式待确认；恢复后必须校验版本摘要、active binding、策略版本和审计连续性。
@@ -345,6 +380,7 @@ backend/src/main/resources/db/migration/
 - 制品、报告、审计和运行事件按组织安全策略加密；敏感内容进入日志/分析存储前脱敏。
 - Skill 制品、不可变版本、评测报告、发布决策和审计数据永久保留。
 - 原始运行事件默认保留 365 天；聚合指标永久保留。
+- CLI 本地 spool 默认保留 7 天；服务端 `runtime_event_dedup` 默认至少保留 372 天，防止保留窗口边界内的补报重复记账。
 - 调整或缩短保留期必须创建新的 `retention_policy_version`，由治理管理员执行并写入 `audit_log`。
 - 不提供普通用户临时删除单条数据的接口；删除/归档任务必须使用受限执行主体并记录批次和结果。
 
@@ -354,6 +390,6 @@ backend/src/main/resources/db/migration/
 - 版本、策略、决策和审计不能被普通更新或删除；重复发布和重复事件不重复记账。
 - 同一范围不会产生两个当前版本；缺失版本关联不会绑定 `latest`。
 - 迁移可在空库执行，恢复演练不会覆盖历史版本和永久数据。
-- 待确认：分析存储、对象存储、容量增长、RPO/RTO、分区分表、身份 ID 和正式 Java 包名；PostgreSQL JDBC 42.2.27、Flyway 8.5.13 和 MyBatis-Plus 3.5.5 已纳入 JDK 8 兼容基线。
+- 待确认：容量阈值、备份、RPO/RTO、灾备、分区维护调度、身份 ID 和正式 Java 包名；PostgreSQL JDBC 42.2.27、Flyway 8.5.13 和 MyBatis-Plus 3.5.5 已纳入 JDK 8 兼容基线。ClickHouse 只作为达到容量阈值后的候选，不是首期依赖。
 
-本规范由 `product-development` 维护。数据库选型、核心表、字段语义、索引策略或保留规则发生变化时，必须升级规范版本并同步检查架构、Feature 设计、实施计划和迁移脚本。
+本规范由 `product-development` 维护。v0.6-draft 增量确认首期 PostgreSQL 15 运行事件存储、Redis Streams 聚合通知、事件幂等、时间分区、投影和 checkpoint 规则。数据库选型、核心表、字段语义、索引策略或保留规则发生变化时，必须升级规范版本并同步检查架构、Feature 设计、实施计划和迁移脚本。

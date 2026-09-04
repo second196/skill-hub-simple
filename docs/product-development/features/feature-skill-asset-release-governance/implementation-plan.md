@@ -4,18 +4,18 @@ description: 按可运行 Slice 实现 Skill 资产、版本、发布门禁、�
 audience:
   - product-development
 owner: product-development
-status: active
-lastReviewed: 2026-09-02
+status: confirmed
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
 # 实施计划：Skill 资产与发布治理
 
-> 当前实施计划版本：v5；对应需求 `requirement.md` v4 和设计 `design.md` v5。用户已确认按 CR-017 增量继续实现。
+> 当前实施计划版本：v6；对应 `requirement.md` v5 和 `design.md` v6。v5 已实施，CR-022 增量已由用户确认并进入 implementation。
 
 ## 1. 实施前约束
 
-- 当前仓库是 greenfield，没有可复用业务源码、构建文件、迁移历史、测试入口或真实 API。
+- 当前仓库已有资产治理、安装恢复、API Token、Vue 控制台、Flyway V1-V11 和测试入口；CR-022 只新增 CLI 上传链路及其必要的 V12/服务端增量，不重写既有实现。
 - 后端严格使用 JDK 8、Spring Boot 2.7.18、Spring MVC 5.3.31、Spring Security 5.7.11、MyBatis-Plus 3.5.5、Maven 3.8.8、PostgreSQL 15、Flyway 8.5.13 和 Redis Streams 6.2.14。
 - 前端使用 Vue 3、TypeScript、Vite、Vue Router 和 Pinia；组件、类型和注释遵循已确认标准。
 - 认证只实现账户密码 + BCrypt + 服务端 Session + HttpOnly/Secure/SameSite Cookie，不实现 OAuth2、统一单点登录、CLI Device Flow 或 API Token。
@@ -37,7 +37,7 @@ sourceType: manual
 | 后端测试 | `backend/src/test/java/com/km/skillhub/{service,mapper,integration,contract}/` | 规则、迁移和契约验证 |
 | 前端测试 | `frontend/tests/{unit,integration,contract,e2e}/` | 页面和契约验证 |
 
-以上路径来自 `backend-architecture.md` 和 `frontend-architecture.md` 的 greenfield 目录设计；创建前不得假设这些文件已经存在。
+以上路径以当前仓库已存在的 `backend/`、`frontend/` 为事实基线；`cli/` 尚不存在，由 Task 33 创建。实施前必须再次核对计划中的现有符号与新增路径。
 
 ## 3. Slice 与任务顺序
 
@@ -550,3 +550,135 @@ Slice：`slice-sidebar-tabs-regression`
 验证：导航排除项检查、页签切换和深链接检查、`npm --prefix frontend run test`、`npm --prefix frontend run build`、`git diff --check`；浏览器截图和真实点击验证在 Playwright 不可用时记录为 `unavailable`。
 
 停止条件：侧边栏出现排除项、合并页面无法访问原功能、页签刷新丢失、中文文案回退为英文或移动端内容重叠。
+
+## 8. CR-022 SkillHub CLI 上传实施计划
+
+### Task 33：建立 CLI 工程、凭据和 Token 作用域基线
+
+Slice：`slice-cli-authentication-baseline`
+
+需求：`requirement-skill-api-token-access`
+
+依赖：已实施的 CR-017 API Token
+
+文件：Create `cli/package.json`、`cli/package-lock.json`、`cli/tsconfig.json`、`cli/src/index.ts`、`cli/src/shared/constants.ts`、`errors.ts`、`output.ts`、`cli/src/stores/config-store.ts`、`credentials-store.ts`、`cli/src/commands/login.ts`、`logout.ts`、`whoami.ts`、`cli/src/clients/skillhub-client.ts`；Modify `backend/src/main/java/com/km/skillhub/token/service/ApiTokenService.java` 的 `SUPPORTED_SCOPES`、`frontend/src/pages/account/TokenManagementPage.vue` 的作用域选项和中文说明；Test `cli/test/unit/stores/credentials-store.test.ts`、`cli/test/integration/auth-commands.test.ts`、现有 Token 测试。
+
+目标：Node.js 20 + TypeScript CLI 可以按服务地址安全保存/删除 API Token，验证当前身份，并让控制台创建 `telemetry:write` Token；人工输出中文，`--json` 输出稳定错误码。
+
+实现：锁定 TypeScript 5.4.2、`cac 6.7.14`、`fflate 0.8.2`、`zod 3.24.1`、`yaml 2.8.3`；`yaml` 从原计划的 2.4.5 升级到同一主版本安全补丁，以消除依赖审计发现的深层递归拒绝服务风险。凭据文件使用当前用户权限和原子替换；环境变量优先于凭据文件；所有输出只显示 Token 前缀。遵循 implementation index v0.4-draft、TypeScript 最佳实践和注释规范；CLI 测试使用 Node.js 20 内置 `node:test`，避免为测试引入存在已知漏洞的旧版 Vite/esbuild 链。
+
+测试/验证类型：unit、integration、security、build。
+
+测试场景：首次登录、覆盖同服务凭据、退出、失效/撤销 Token、账号停用、文件权限、环境变量优先级、中文/JSON 输出、四类作用域展示。
+
+测试文件或替代证据：`cli/test/unit/stores/credentials-store.test.ts`、`cli/test/integration/auth-commands.test.ts`、`backend/src/test/java/com/km/skillhub/token/ApiTokenServiceTest.java`、`ApiTokenAuthenticationFilterTest.java`、`frontend/tests/unit/tokenApi.test.ts`。
+
+验证：`npm --prefix cli test`、`npm --prefix cli run build`、`mvn -f backend/pom.xml -Dtest=ApiTokenServiceTest,ApiTokenAuthenticationFilterTest test`、`npm --prefix frontend run test`；预期凭据不出现在日志/JSON，四类作用域可创建且越权仍为 403。
+
+停止条件：Token 明文进入日志、普通配置或测试快照，Session/CSRF 行为变化，或 CLI 可以绕过作用域时停止。
+
+回滚：移除 CLI 认证入口并从允许列表撤下新增作用域；保留既有 Token 表和 v5 Session/Bearer 行为，不删除用户 Token。
+
+### Task 34：实现目录/ZIP 校验和确定性打包
+
+Slice：`slice-cli-skill-package-validation`
+
+需求：`requirement-cli-skill-package-validation`
+
+依赖：Task 33
+
+文件：Create `cli/src/services/skill-package-service.ts`、`cli/src/platform/archive.ts`、`paths.ts`、`cli/src/shared/types.ts`、`cli/test/unit/services/skill-package-service.test.ts`、`cli/test/unit/platform/archive.test.ts`、`cli/test/fixtures/skills/`。
+
+目标：目录和 ZIP 经过同一套路径、大小、文件数、主描述和 frontmatter 校验，目录打包保留完整相对结构并生成稳定清单摘要。
+
+实现：拒绝绝对/穿越/反斜杠逃逸/重复/符号链接路径；默认限制 10 MiB 压缩、100 MiB 解压、单文件 10 MiB、1000 文件、255 字符路径；使用 YAML + Zod 校验 `name`、`description`、语义版本；排序路径并固定 ZIP 元数据，不打包 `.git`、凭据和本地绝对路径。遵循 TypeScript v0.4-draft 入口规范。
+
+测试/验证类型：unit、integration、security。
+
+测试场景：有效目录、有效 ZIP、两者摘要一致、缺失 `SKILL.md`、坏 YAML、缺字段、非法版本、ZIP Slip、重复路径、符号链接、压缩膨胀、不可读文件和边界大小。
+
+测试文件或替代证据：上述 CLI 单元测试和固定二进制夹具；夹具不得包含真实凭据。
+
+验证：`npm --prefix cli test`；预期所有非法包在网络调用前失败，有效目录和等价 ZIP 产生相同规范化清单摘要。
+
+停止条件：恶意路径可写出临时目录、限制只检查压缩大小、解析器执行任意标签，或摘要受 ZIP 时间戳影响时停止。
+
+回滚：撤下 `publish` 命令入口并删除未发布 CLI 构建；不改变服务端资产数据。
+
+### Task 35：实现服务端复检、草稿导入和三层幂等
+
+Slice：`slice-server-draft-package-import`
+
+需求：`requirement-cli-skill-package-validation`、`requirement-cli-skill-upload`、`requirement-cli-skill-upload-idempotency`
+
+依赖：Task 34
+
+文件：Create `backend/src/main/resources/db/migration/V12__extend_cli_package_import.sql`；Modify `backend/src/main/java/com/km/skillhub/asset/controller/AssetImportController.java`、`asset/model/dto/SkillPackageImportCommand.java`、`asset/model/entity/SkillImportAttemptEntity.java`、`asset/model/vo/ImportAttemptVO.java`、`asset/service/SkillPackageImportService.java`、`asset/service/impl/SkillPackageImportServiceImpl.java`、`mapper/asset/SkillImportAttemptMapper.java`；Create `asset/service/SkillPackageValidator.java`、`asset/model/vo/SkillPackageValidationVO.java`；Test `backend/src/test/java/com/km/skillhub/service/SkillPackageImportServiceTest.java`、Create `SkillPackageValidationTest.java` 和 `SkillPackageImportIntegrationTest.java`。
+
+目标：服务端独立复检包内容，区分 `artifact_digest` 与规范化 `version_digest`，成功导入默认创建 `DRAFT`，重复请求返回同一结果且冲突请求被拒绝。
+
+实现：V12 为 `skill_import_attempt` 增加 `request_digest`、`version_digest` 和查询索引；增加 `/package/validate` 无副作用接口；兼容现有 multipart 字段并拒绝其与 frontmatter 冲突；事务内写导入尝试、资产、制品、草稿版本和清单；同请求不同摘要返回 `IDEMPOTENCY_CONFLICT`，同版本不同内容返回 `VERSION_CONTENT_CONFLICT`；保存失败阶段和脱敏原因。不修改已执行 Flyway V1-V11；V13 归安装恢复的运行时接入元数据，运行观测使用 V14。
+
+测试/验证类型：unit、integration、migration、security。
+
+测试场景：客户端摘要伪造、ZIP 顺序差异、相同请求重试、并发重试、请求 ID 冲突、版本内容冲突、制品失败、数据库失败、默认草稿和旧页面兼容。
+
+测试文件或替代证据：上述 Java 测试、PostgreSQL 15 空库迁移和现有前端 `assetApi.test.ts`。
+
+验证：`mvn -f backend/pom.xml -Dtest=SkillPackageValidationTest,SkillPackageImportServiceTest,SkillPackageImportIntegrationTest test`、`npm --prefix frontend run test`；预期导入响应为 DRAFT，失败不产生候选/发布版本，重复请求只产生一个版本。
+
+停止条件：服务端信任客户端摘要、历史版本被更新、失败包进入候选、Flyway 版本冲突或现有上传页面契约破坏时停止。
+
+回滚：关闭校验/CLI 入口并恢复 v5 服务代码；保留向前兼容字段、导入留痕和已创建草稿，不回写历史摘要。
+
+### Task 36：实现发布命令和显式审核提交
+
+Slice：`slice-cli-publish-review-submit`
+
+需求：`requirement-cli-skill-upload`、`requirement-cli-skill-review-submit`、`requirement-skill-api-token-access`
+
+依赖：Task 35
+
+文件：Create `cli/src/commands/publish.ts` 及其命令注册、扩展 `cli/src/clients/skillhub-client.ts`；Modify `backend/src/main/java/com/km/skillhub/review/service/ReviewService.java`、`review/controller/ReviewController.java`、`version/service/LifecycleService.java` 的受控调用边界、`token/security/ApiTokenScopeFilter.java`；Test `cli/test/integration/publish-command.test.ts`、`publish-dry-run.test.ts`、`backend/src/test/java/com/km/skillhub/service/ReviewServiceTest.java`、`backend/src/test/java/com/km/skillhub/integration/ApiTokenIntegrationTest.java`。
+
+目标：`skillhub publish` 显示上传进度和草稿结果，`--dry-run` 不写数据，`--submit-review` 在门禁满足时原子进入候选并创建待审核任务。
+
+实现：网络/429/5xx 使用同一请求 ID 有界退避；上传和审核分别返回结果；ReviewService 对 DRAFT 执行范围、元数据、扫描、评测、门禁和待处理任务检查，再原子转 CANDIDATE；申请人仍不能审批自己。CLI 结果包含资产 ID、版本摘要、状态和控制台相对地址。
+
+测试/验证类型：integration、contract、security、build。
+
+测试场景：仅校验、仅上传、上传并提交、门禁缺失、重复提交、权限不足、Token 过期、网络中断后重试、上传成功但审核失败。
+
+测试文件或替代证据：上述 CLI/Java 集成测试和 Mock HTTP 服务。
+
+验证：`npm --prefix cli test`、`npm --prefix cli run build`、`mvn -f backend/pom.xml -Dtest=ReviewServiceTest,ApiTokenIntegrationTest test`；预期默认草稿不发布，审核失败保留可查询草稿，申请人与审批人分离不回归。
+
+停止条件：上传自动发布、审核失败删除草稿、CLI 绕过门禁或错误输出泄露 Token 时停止。
+
+回滚：隐藏 `--submit-review` 并恢复旧审核入口；保留草稿和审核审计，不删除不可变版本。
+
+### Task 37：执行资产 CLI 纵向契约验证
+
+Slice：`slice-cli-asset-governance-contract`
+
+需求：`requirement-skill-api-token-access`、`requirement-cli-skill-package-validation`、`requirement-cli-skill-upload`、`requirement-cli-skill-upload-idempotency`、`requirement-cli-skill-review-submit`
+
+依赖：Task 33 至 Task 36
+
+文件：Create/update `cli/test/integration/asset-governance-flow.test.ts`、`backend/src/test/java/com/km/skillhub/integration/SkillCliContractIntegrationTest.java`，并更新对应 Feature `state.md` 验证记录。
+
+目标：串联 Token、目录校验、打包、服务端复检、草稿导入、重复补偿、审核申请和控制台查询，证明 CLI 只是治理入口而非发布绕过通道。
+
+实现：使用临时用户目录和测试 Token，启动真实 Spring 测试应用与 PostgreSQL 15；模拟首次上传响应丢失后使用原请求 ID重试；核对资产、版本、导入尝试、审核和审计唯一性。
+
+测试/验证类型：contract、integration、migration、build、static。
+
+测试场景：正常闭环、恶意包、重试、版本冲突、Token 作用域、账号停用、审核门禁缺失和中文/JSON 输出。
+
+测试文件或替代证据：上述端到端契约测试、Maven Surefire、Vitest/CLI 测试报告和 `git diff --check`。
+
+验证：`npm --prefix cli test`、`npm --prefix cli run build`、JDK 8 下 `mvn -f backend/pom.xml test`、`npm --prefix frontend run test`、`npm --prefix frontend run build`、`git diff --check`；预期全部通过，Redis 环境失败必须单独归因，不能掩盖资产链路失败。
+
+停止条件：任一需求没有对应证据、全量测试出现未归因失败、版本/审核/审计重复，或现有网页上传回归时停止。
+
+回滚：按 Task 33 至 Task 36 逆序回退应用和 CLI；数据库只使用前向兼容修复，保留所有草稿、失败导入和审计证据。

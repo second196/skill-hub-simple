@@ -302,3 +302,32 @@
 - Approval status: approved by explicit user implementation request
 - Verification status: pass for frontend tests, production build, static exclusion checks and diff check; browser screenshot and interactive viewport verification remain unavailable because Playwright is not installed.
 - Replacement relation: extends CR-020 without replacing existing routes or backend contracts。
+
+## CR-022
+
+- 日期：2026-09-03
+- 用户请求：SkillHub CLI 支持将现有 Skill 目录或 ZIP 上传到 SkillHub，并支持采集数据和上报平台的统一凭据契约。
+- 类型：requirement-change
+- 原因：将参考项目中的自动化客户端能力对齐到当前资产治理，补齐本地校验、打包、服务端二次校验、幂等和提交审核链路。
+- 影响需求：`requirement-cli-skill-package-validation`、`requirement-cli-skill-upload`、`requirement-cli-skill-upload-idempotency`、`requirement-cli-skill-review-submit`、`requirement-skill-api-token-access`
+- 影响方案：`design.md` v6 和 `implementation-plan.md` v6 已由用户统一确认
+- 影响任务：Task 33-37，依次覆盖 CLI 凭据、包校验、V12 服务端复检与草稿导入、发布/审核命令和纵向契约验证
+- 代码范围：本轮无代码变更
+- 审批状态：approved；用户于 2026-09-03 确认 v6 方案双产物并授权按顺序实施
+- 验证状态：文档检查通过，23/23 需求进入设计和计划，覆盖状态均为 covered，V12/V13/V14 归属一致；CLI 和端到端上传尚未实现
+- 替代关系：替代 CR-020/CR-021 中 CLI 排除项，不替代 OAuth2、S3、微服务等排除项
+
+## CR-023
+
+- Date: 2026-09-03
+- User request: 当前 Vue 前端必须与参考项目 `D:\program\skillhub\web` 的页面布局和交互效果一致。
+- Type: implementation-defect
+- Reason: 源码复核确认 CR-020 Tasks 25-28 虽被标记完成，但公共反馈、发布包交互、详情文件浏览、版本差异、审核详情、命名空间及管理页面仍未达到已确认的 CR-020 验收目标。
+- Affected requirements: `requirement-skill-governance-console-branding`, `requirement-skill-catalog-search`, `requirement-skill-package-content`, `requirement-skill-file-browse-download`, `requirement-skill-version-comparison`, `requirement-skill-publish-review-lifecycle`, `requirement-skill-namespace-governance`, `requirement-governance-account-management`, `requirement-skill-api-token-access`
+- Affected design: reopens the confirmed `design.md` CR-020 increment without changing its architecture or exclusions.
+- Affected tasks: reopens CR-020 Tasks 25-28 in `implementation-plan.md`.
+- Code scope: `frontend/src/components`, `frontend/src/pages`, `frontend/src/modules/discovery`, `frontend/src/router/index.ts`, `frontend/src/styles.css`, frontend tests and browser verification setup.
+- Explicit exclusions: 推广管理、举报管理、账号合并、收藏与评分、只看已收藏、收藏筛选以及收藏/评分/举报交互；不增加 OAuth2/SSO、S3 或微服务；缺少后端契约的写操作不得模拟成功。
+- Approval status: approved by explicit user implementation request.
+- Verification status: in-progress.
+- Replacement relation: corrects CR-020 completion status and preserves CR-021 sidebar aggregation and company-blue theme decisions.

@@ -4,14 +4,14 @@ description: Skill 资产登记、不可变版本、授权发布、门禁、审�
 audience:
   - product-development
 owner: product-development
-status: active
-lastReviewed: 2026-09-02
+status: confirmed
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
 # 方案：Skill 资产与发布治理
 
-> 设计版本：v4（包含已确认的 CR-015、CR-016 增量）。CR-017 API Token 增量将当前实施设计提升为 v5；方案、风险和实施计划已由用户确认，可作为后续 implementation 的设计依据。
+> 设计版本：v6。v5 是已确认并已实施的基线；本版增加已确认的 CR-022 SkillHub CLI 上传链路。
 
 ## 1. 目标与非目标
 
@@ -32,18 +32,18 @@ sourceType: manual
 - 不实现 Tracker、原始运行事件摄入、Trace/指标计算或评测 Runner。
 - 不实现静态扫描器、评测引擎、Finding 生成或 Skill 内容自动生成；本 Feature 只接收并校验证据。
 - 不建设 SaaS 多租户，不替代公司统一身份、日志、APM 或对象存储平台。
-- 不使用 OAuth2、统一单点登录、CLI Device Flow 或 API Token；首期只支持账户密码登录和服务端 Session。
+- 不使用 OAuth2、统一单点登录或 CLI Device Flow；浏览器继续使用账户密码和服务端 Session，CLI 使用既有 Bearer API Token。
 
 ## 2. 需求依据与版本
 
 | 依据 | 版本/范围 | 用途 |
 | --- | --- | --- |
-| `docs/product-development/features/feature-skill-asset-release-governance/requirement.md` | v4 | 本 Feature 的原始需求、CR-015 对齐增量和 CR-017 API Token 增量 |
+| `docs/product-development/features/feature-skill-asset-release-governance/requirement.md` | v5 confirmed | 本 Feature 的原始需求、参考项目对齐、API Token 和 CR-022 CLI 上传增量 |
 | `docs/product-development/work-items/work-skill-hub-platform/decomposition.md` | confirmed | Feature 边界、跨 Feature 契约和需求映射 |
 | `docs/research/skill-hub-research.md` | 3.1、4.3、5.1、6.2、6.4、7.3、8.1 | Registry、审核、扫描、发布和保留的调研事实 |
-| `.product-development/features/feature-skill-asset-release-governance/state.md` | CR-008 后 | 当前阶段、确认决策和 greenfield 事实 |
+| `.product-development/features/feature-skill-asset-release-governance/state.md` | CR-022 | 当前阶段、已实现源码事实和本次增量边界 |
 
-当前实施设计版本为 v5，实施计划版本为 v5。跨 Feature 关联统一使用不可变 `version_digest`；缺失关联必须显式标记，禁止用 `latest` 补齐。
+当前增量设计和实施计划均为 v6 confirmed。跨 Feature 关联统一使用不可变 `version_digest`；缺失关联必须显式标记，禁止用 `latest` 补齐。
 
 ## 3. 架构和实施基线
 
@@ -51,10 +51,10 @@ sourceType: manual
 
 | 类型 | 文档 | 版本/状态 | 本方案约束 |
 | --- | --- | --- | --- |
-| 后端架构 | `docs/product-development/architecture/backend-architecture.md` | v0.4-draft，用户已确认 | JDK 8、Spring Boot 2.7.18 模块化单体、Spring MVC 5.3.31、Spring Security 5.7.11、MyBatis-Plus 3.5.5、分层目录 |
+| 后端架构 | `docs/product-development/architecture/backend-architecture.md` | v0.5-draft | JDK 8 模块化单体、Bearer CLI 边界、PostgreSQL 15 和 Redis Streams |
 | 前端架构 | `docs/product-development/architecture/frontend-architecture.md` | v0.3-draft，用户已确认 | Vue 3、TypeScript、Vite、Vue Router、Pinia、Feature 模块化 |
-| 实施规范入口 | `docs/product-development/standards/implementation/index.md` | v0.3-draft，用户已确认 | 按 Feature 影响范围读取 Java、Vue 组件、TypeScript、数据库规范 |
-| 数据库规范 | `docs/product-development/standards/implementation/database-design.md` | v0.5-draft，由 v0.4 补充导入留痕和灰度状态 | PostgreSQL 15、MyBatis-Plus、Flyway、追加式审计、版本化策略 |
+| 实施规范入口 | `docs/product-development/standards/implementation/index.md` | v0.4-draft | Java、Vue、TypeScript、Node.js CLI、数据库和分层测试入口 |
+| 数据库规范 | `docs/product-development/standards/implementation/database-design.md` | v0.6-draft | PostgreSQL 15、MyBatis-Plus、Flyway、追加式审计、幂等和保留策略 |
 | Java 规范 | `docs/product-development/standards/implementation/java-best-practices.md` | active，嵩山版 | Controller/Service/Mapper 分层、明确类型、异常分层、事务和命名约束 |
 | Vue 组件规范 | `docs/product-development/standards/implementation/component-standard.md` | active | 单一职责、明确 Props/Emits、状态最小化、分页和可访问性 |
 | TypeScript 规范 | `docs/product-development/standards/implementation/typescript-best-practices.md` | active | 精确类型、外部输入先校验、禁止无界 `any`、异步失败语义明确 |
@@ -73,7 +73,7 @@ sourceType: manual
 
 ## 4. 源码现状和影响范围
 
-当前仓库没有业务 `src`、构建文件、API、数据库迁移、对象存储适配器或测试入口。以下文件和符号均是实施阶段拟创建的 greenfield 目标，不是现有代码事实。首个实施 Slice 必须先创建工程骨架和真实测试入口。
+当前仓库已有 `backend/`、`frontend/`、Flyway V1-V11、资产导入、版本、审核、API Token 和安装恢复实现，但尚无 `cli/`。CR-022 在既有模块上做兼容增量，并创建独立 Node.js CLI 工程。
 
 ### 4.1 影响范围
 
@@ -386,7 +386,7 @@ backend/src/main/resources/db/migration/
 | --- | --- | --- |
 | 直接 Fork iflytek SkillHub | 不采用 | Registry、namespace、RBAC 和 Scanner 可复用，但会把目标产品的范围、证据、策略和跨 Feature 契约绑死在上游模型中 |
 | 多个开源项目拼接成运行时微服务 | 不采用 | 版本、权限、证据和审计一致性分散，跨服务补偿复杂；当前需求没有拆分为独立部署的依据 |
-| 模块化单体 + 能力适配器 | 采用 | 保持单一事务边界和统一审计，同时为 Registry/Scanner/RBAC/对象存储保留替换边界，适合 greenfield 首期 |
+| 模块化单体 + 能力适配器 | 采用 | 保持现有单一事务边界和统一审计，同时为 Registry/Scanner/RBAC/对象存储保留替换边界，适合当前首期架构 |
 | 以对象存储或搜索索引为权威 | 不采用 | 无法可靠保证并发 binding、策略生效、权限和审计一致性 |
 
 ## 15. 可行性证据和验证限制
@@ -736,3 +736,103 @@ DELETE /api/v1/tokens/{id}
 导航项移除“控、技、发”等单字前置文字，使用统一的文本导航、分组标题、左侧选中线和企业蓝选中态。导航区域隐藏滚动条视觉，但仍允许小屏抽屉在内容超出时滚动；不改变移动端抽屉和遮罩交互。页签采用底部边框选中态，支持键盘聚焦和横向溢出，移动端不挤压页面内容。
 
 本增量只调整前端路由编排、页面复用和样式，不新增 API、权限、数据库、认证或被明确排除的推广、举报、账号合并、收藏、评分能力。
+
+## 26. CR-022 增量设计：SkillHub CLI 上传
+
+### 26.1 目标、边界与技术基线
+
+本增量新增本地 Skill 上传客户端，不改变资产治理的权威边界。CLI 采用 Node.js 20、TypeScript 5.4、npm，参考 iflytek SkillHub 使用 `cac 6.7.14`、`fflate 0.8.2` 和 `zod 3.24.1`，并使用 `yaml 2.4.5` 解析 YAML frontmatter。浏览器 Session/CSRF 保持不变；CLI 只通过 Bearer API Token 调用服务端，不直接访问 PostgreSQL、Redis 或 `skillhub.artifact.root`。
+
+CLI 人工输出全部为中文，`--json` 输出稳定的 `code`、`message`、`requestId` 和结构化 `details`。CLI 不负责审核通过或正式发布；上传成功只产生 `DRAFT`，只有显式 `--submit-review` 才调用审核提交接口。
+
+### 26.2 CLI 命令与目录
+
+```text
+skillhub login --server <url>
+skillhub whoami [--json]
+skillhub logout
+skillhub publish <目录或zip> [--scope-id <id>] [--dry-run]
+                 [--submit-review] [--request-id <id>] [--json]
+```
+
+`login` 默认使用不回显输入读取 Token，CI 可通过 `SKILLHUB_TOKEN` 注入；命令行参数不作为默认凭据入口，避免进入 shell 历史和进程列表。凭据优先级为当前进程环境变量、当前服务地址的凭据文件；配置和凭据分别保存在用户状态目录下，凭据文件使用仅当前用户可读写权限。任何日志、错误和 `--json` 结果只显示 Token 前缀。
+
+```text
+cli/src/
+├─ index.ts
+├─ commands/{login,logout,whoami,publish}.ts
+├─ clients/skillhub-client.ts
+├─ services/{auth-service,skill-package-service}.ts
+├─ stores/{config-store,credentials-store}.ts
+├─ platform/{archive,paths}.ts
+└─ shared/{constants,errors,output,types}.ts
+```
+
+### 26.3 本地包校验和规范化摘要
+
+目录输入先枚举真实文件并按 UTF-8 正斜杠相对路径排序，再生成 ZIP；ZIP 输入先解析中央目录。两种输入执行同一规则：拒绝绝对路径、`..`、反斜杠逃逸、符号链接、重复路径、不可读文件、空包和根目录缺少 `SKILL.md`。默认限制为压缩包 10 MiB、解压后 100 MiB、单文件 10 MiB、1000 个文件和 255 字符相对路径，全部通过服务端策略配置并在 CLI 获取不到策略时使用内置保守默认值；服务端限制始终是最终依据。
+
+CLI 使用 YAML 解析器读取 `SKILL.md` 首段 frontmatter，再用 Zod 校验 `name`、`description` 和语义化 `version`。客户端计算文件摘要和规范化清单摘要用于提前发现重复；服务端必须重新解压、复检并计算：
+
+```text
+artifact_digest = SHA-256(收到的原始 ZIP 字节)
+version_digest  = SHA-256(规范化元数据 + 排序后的相对路径/文件摘要/大小)
+```
+
+因此相同内容不会因 ZIP 文件顺序、时间戳或压缩级别不同而产生新版本；客户端摘要不能替代服务端摘要。
+
+### 26.4 服务端接口与状态契约
+
+保留现有 multipart 导入路由并增加兼容字段，不另建绕过治理的 CLI 专用写入口：
+
+```text
+POST /api/v1/assets/imports/package/validate
+POST /api/v1/assets/imports/package
+GET  /api/v1/assets/imports/{requestId}
+POST /api/v1/reviews
+```
+
+两个包接口都要求 `skill:publish`，接收 `X-Request-Id`、`ownerScopeId`、ZIP 文件及可选来源定位。包内 frontmatter 是名称、描述和版本的规范输入；客户端提供的同名字段仅用于兼容现有页面，若与包内容冲突则拒绝。校验接口不写制品、资产或版本；导入接口返回 `requestId`、`assetId`、`versionDigest`、`lifecycleState=DRAFT`、`duplicate`、校验结果和控制台相对地址。
+
+现有 `SkillPackageImportServiceImpl` 需要从“原始 ZIP 摘要即版本摘要、直接创建 CANDIDATE”调整为“原始制品摘要与规范化版本摘要分离、默认创建 DRAFT”。`ReviewService.submit` 接收 `DRAFT`，在同一事务中完成范围权限、元数据、扫描/评测/门禁证据和待处理审核检查；全部满足后执行 `DRAFT -> CANDIDATE` 并创建 `PENDING` 审核任务。任一检查失败保持 `DRAFT`，不会留下候选状态。
+
+### 26.5 幂等、重复和失败处理
+
+- `request_id` 全局唯一；相同请求 ID 和相同载荷摘要返回原结果，相同请求 ID 携带不同摘要返回 `IDEMPOTENCY_CONFLICT`。
+- 同一资产、同一语义版本和同一 `version_digest` 返回已有草稿或导入结果；同一版本标签对应不同内容返回 `VERSION_CONTENT_CONFLICT`，调用方必须使用新版本号。
+- 不同内容且版本号有效时创建新的不可变版本，绝不更新历史 `skill_version` 或文件清单。
+- 客户端只对网络错误、429 和 5xx 使用同一请求 ID 退避重试；400、401、403、409 和包校验失败不自动重试。
+- 包读取、校验、制品写入或事务失败都更新 `skill_import_attempt` 的失败阶段和脱敏原因；制品写成功但数据库失败时保留可清理的孤立制品标记，不生成可发布版本。
+- `--submit-review` 仅在导入结果为草稿时执行；审核提交失败不回滚已成功导入的草稿，CLI 分别报告上传和审核结果。
+
+Flyway `V12__extend_cli_package_import.sql` 为 `skill_import_attempt` 增加请求载荷摘要和规范化版本摘要字段，并建立幂等查询索引；不修改 V1-V11。V13 归安装恢复的运行时接入元数据，运行观测表使用 V14，避免迁移版本冲突。
+
+### 26.6 权限、安全、兼容和回滚
+
+`ApiTokenService` 的允许作用域增加 `telemetry:write`，但本链路只使用 `skill:publish`；Token 身份仍受账号启停、范围角色和命名空间权限约束。前端访问凭证页面增加“运行数据上报”中文作用域说明，不展示 Token 原文。ZIP 解压采用条目数、压缩/解压大小和路径边界防护，禁止把本地绝对路径、环境变量、凭据文件或 `.git` 内容自动加入包。
+
+服务端接口只做向后兼容扩展，现有 `/assets/import` 页面继续可用。发生问题时可隐藏 CLI 分发并恢复 v5 应用；已创建的草稿、导入留痕和审计保留。不得通过回滚把草稿批量改回候选，也不得删除不可变版本。
+
+### 26.7 可行性证据与验证策略
+
+- 已确认参考项目 `D:/program/skillhub/cli` 使用 TypeScript、`cac`、`fflate`、`zod`，支持目录/ZIP 和 `publish --dry-run`，并按服务地址保存本地凭据。
+- 已确认当前服务端存在 `/api/v1/assets/imports/package`、SHA-256 计算、根目录 `SKILL.md` 和路径安全检查，具备兼容扩展基础。
+- 已确认当前导入直接创建 `CANDIDATE`、未解析 YAML frontmatter；当前审核只接受 `CANDIDATE`，是本增量必须修正的状态契约。
+- 已确认当前 Token 作用域缺少 `telemetry:write`，当前仓库没有 `cli/`；本机 Node.js 20.20.2 和 npm 10.8.2 可用。
+- 验证覆盖目录/ZIP 等价摘要、非法路径、符号链接、ZIP 膨胀、frontmatter、幂等冲突、默认草稿、审核部分失败、Token 作用域、中文输出和 `--json` 稳定错误码。
+
+### 26.8 CR-022 需求覆盖矩阵
+
+| requirement-<semantic-name> | 方案响应 | 计划任务 | 验证方式 | 状态 |
+| --- | --- | --- | --- | --- |
+| `requirement-skill-api-token-access` | 增加 `telemetry:write`，保持 Session 与 Bearer 分离 | Task 33、Task 36 | Token 单元/集成和前端显示测试 | covered |
+| `requirement-cli-skill-package-validation` | 目录/ZIP 统一解析、YAML/Zod 校验、限制和规范化摘要 | Task 34、Task 35 | CLI 单元、服务端包安全测试 | covered |
+| `requirement-cli-skill-upload` | `publish` 命令、服务端复检、DRAFT 响应和控制台地址 | Task 35、Task 36 | CLI/HTTP 契约测试 | covered |
+| `requirement-cli-skill-upload-idempotency` | 请求 ID + 载荷摘要 + 规范化版本摘要三层幂等 | Task 35、Task 37 | 重试、冲突和并发集成测试 | covered |
+| `requirement-cli-skill-review-submit` | 显式提交、草稿到候选原子转换、门禁和审批人分离 | Task 36、Task 37 | 审核服务和端到端契约测试 | covered |
+
+### 26.9 风险、待确认与不覆盖
+
+- 10 MiB/100 MiB/1000 文件等是首期可配置默认值，需要在真实 Skill 样本压测后调整，不是容量承诺。
+- npm 包发布渠道、CLI 自动升级、代码签名和供应链扫描尚未确认；首期实施只保证仓库构建和本地执行。
+- 不实现 CLI 直接审核通过、正式发布、删除远端 Skill、S3、OAuth2、统一单点登录、设备授权、收藏、评分或举报。

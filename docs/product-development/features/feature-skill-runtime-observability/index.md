@@ -5,7 +5,7 @@ audience:
   - product-development
 owner: product-development
 status: draft
-lastReviewed: 2026-09-01
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
@@ -15,4 +15,6 @@ sourceType: manual
 - Work Item：`work-skill-hub-platform`
 - 依赖：`feature-skill-installation-recovery`
 - 被依赖：`feature-skill-evaluation-evolution`
-- 正式需求：`requirement.md`
+- 正式需求：`requirement.md` v2 confirmed
+- 技术设计：`design.md` v1 confirmed
+- 实施计划：`implementation-plan.md` v1 confirmed

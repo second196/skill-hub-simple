@@ -10,6 +10,7 @@ public class SkillPackageImportCommand {
     private String sourceLocator;
     private byte[] packageBytes;
     private String filename;
+    private String clientArtifactDigest;
 
     public String getRequestId() { return requestId; }
     public void setRequestId(String requestId) { this.requestId = requestId; }
@@ -29,4 +30,6 @@ public class SkillPackageImportCommand {
     public void setPackageBytes(byte[] packageBytes) { this.packageBytes = packageBytes; }
     public String getFilename() { return filename; }
     public void setFilename(String filename) { this.filename = filename; }
+    public String getClientArtifactDigest() { return clientArtifactDigest; }
+    public void setClientArtifactDigest(String clientArtifactDigest) { this.clientArtifactDigest = clientArtifactDigest; }
 }

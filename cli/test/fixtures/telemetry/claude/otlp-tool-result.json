@@ -1,0 +1,25 @@
+{
+  "resourceLogs": [{
+    "resource": {"attributes": [
+      {"key": "service.name", "value": {"stringValue": "claude-code"}},
+      {"key": "service.version", "value": {"stringValue": "2.1.41"}}
+    ]},
+    "scopeLogs": [{
+      "scope": {"name": "claude-code", "version": "2.1.41"},
+      "logRecords": [{
+        "timeUnixNano": "1788422403000000000",
+        "severityText": "ERROR",
+        "traceId": "33333333333333333333333333333333",
+        "spanId": "4444444444444444",
+        "attributes": [
+          {"key": "event.name", "value": {"stringValue": "claude_code.tool_result"}},
+          {"key": "session.id", "value": {"stringValue": "claude-session-1"}},
+          {"key": "tool.name", "value": {"stringValue": "Bash"}},
+          {"key": "model", "value": {"stringValue": "claude-opus-4"}},
+          {"key": "error", "value": {"boolValue": true}}
+        ],
+        "body": {"stringValue": "{\"tool_output\":\"C:\\\\Users\\\\Administrator\\\\secret.txt\"}"}
+      }]
+    }]
+  }]
+}

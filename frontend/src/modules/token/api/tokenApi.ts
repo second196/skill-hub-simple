@@ -6,7 +6,7 @@ import type {
   TokenStatus
 } from '../types/token'
 
-const scopes: TokenScope[] = ['skill:read', 'skill:publish', 'token:manage']
+const scopes: TokenScope[] = ['skill:read', 'skill:publish', 'telemetry:write', 'token:manage']
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null

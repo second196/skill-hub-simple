@@ -32,6 +32,10 @@ public class ApiTokenScopeFilter extends OncePerRequestFilter {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Bearer Token 未通过认证");
             return;
         }
+        if (isIdentityRequest(request)) {
+            filterChain.doFilter(request, response);
+            return;
+        }
         String requiredScope = requiredScope(request);
         if (requiredScope == null) {
             response.sendError(HttpServletResponse.SC_FORBIDDEN, "Token 不支持访问此接口");
@@ -44,18 +48,35 @@ public class ApiTokenScopeFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
+    private boolean isIdentityRequest(HttpServletRequest request) {
+        return "GET".equalsIgnoreCase(request.getMethod())
+                && "/api/v1/session/current".equals(request.getRequestURI());
+    }
+
     private String requiredScope(HttpServletRequest request) {
         String path = request.getRequestURI();
         String method = request.getMethod();
         if (path.equals("/api/v1/tokens") || path.startsWith("/api/v1/tokens/")) {
             return "token:manage";
         }
+        if (path.equals("/api/v1/runtime-integrations")
+                || path.startsWith("/api/v1/runtime-integrations/")) {
+            return "telemetry:write";
+        }
+        if (path.equals("/api/v1/telemetry") || path.startsWith("/api/v1/telemetry/")) {
+            return "telemetry:write";
+        }
+        if ("POST".equalsIgnoreCase(method) && path.equals("/api/v1/reviews")) {
+            return "skill:publish";
+        }
         if (path.equals("/api/v1/assets") || path.startsWith("/api/v1/assets/")) {
             if ("GET".equalsIgnoreCase(method)) {
                 return "skill:read";
             }
             if ("POST".equalsIgnoreCase(method)
-                    && (path.equals("/api/v1/assets/imports") || path.equals("/api/v1/assets/imports/package"))) {
+                    && (path.equals("/api/v1/assets/imports")
+                    || path.equals("/api/v1/assets/imports/package")
+                    || path.equals("/api/v1/assets/imports/package/validate"))) {
                 return "skill:publish";
             }
         }

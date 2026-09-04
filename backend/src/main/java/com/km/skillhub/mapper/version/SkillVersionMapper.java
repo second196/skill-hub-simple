@@ -15,6 +15,12 @@ public interface SkillVersionMapper extends BaseMapper<SkillVersionEntity> {
             + "WHERE version_digest = #{versionDigest}")
     SkillVersionEntity findByDigest(@Param("versionDigest") String versionDigest);
 
+    @Select("SELECT id, asset_id, artifact_id, version_label, version_digest, source_type, source_locator, "
+            + "source_snapshot_uri, metadata_status, lifecycle_state, created_by FROM skill_version "
+            + "WHERE asset_id = #{assetId} AND version_label = #{versionLabel}")
+    SkillVersionEntity findByAssetAndLabel(@Param("assetId") Long assetId,
+                                           @Param("versionLabel") String versionLabel);
+
     @Select("SELECT sa.owner_scope_id FROM skill_version sv JOIN skill_asset sa ON sa.id = sv.asset_id "
             + "WHERE sv.version_digest = #{versionDigest}")
     Long findOwnerScopeId(@Param("versionDigest") String versionDigest);

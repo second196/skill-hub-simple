@@ -38,6 +38,9 @@ decomposition_status: confirmed
 - 已确认：发布、灰度和回退采用报告中的默认参数，且按公司、项目和环境可配置、可调整、可审计。
 - 已确认：数据保留采用分层默认策略，制品/评测/发布审计永久保留，原始运行事件默认 365 天；策略可配置。
 - 已确认：创建四个 Feature 的正式 `requirement.md`；不创建 `design.md`、`implementation-plan.md` 或代码。
+- 已确认：SkillHub CLI 作为跨 Feature 客户端增量，不新增独立 CLI Feature；安装接入归属安装恢复，运行数据采集与上报归属运行观测，Skill 包上传与发布申请归属资产治理。
+- 已确认：CLI 使用 API Token Bearer，新增 `telemetry:write` 作用域；浏览器继续使用账户密码、服务端 Session 和 CSRF。
+- 已确认：CLI Skill 上传默认创建草稿，提交审核和正式发布继续受现有门禁、审批人分离和审计约束。
 
 ## 3. Feature 与需求映射
 
@@ -56,6 +59,32 @@ decomposition_status: confirmed
 | `requirement-skill-namespace-governance` | 命名空间和成员角色 | Owner/Admin/Member 与范围权限联动 | confirmed |
 | `requirement-governance-account-management` | 管理员账户管理 | 停用会话失效、普通用户无权管理 | confirmed |
 | `requirement-skill-governance-console-branding` | 参考项目同类信息架构和企业主题 | 中文界面、品牌 token、响应式可用 | confirmed |
+
+### 3.0.1 CR-022 SkillHub CLI 增量映射
+
+本次增量不新增 Feature，调整三个既有 Feature 的允许边界。CLI 只提供本地配置、适配器安装、数据补报和 Skill 包上传入口；业务状态仍由对应 Feature 的服务端治理流程产生。
+
+| 需求 | 归属 Feature | 目标 | 验收重点 | 状态 |
+| --- | --- | --- | --- | --- |
+| `requirement-cli-agent-integration-installation` | `feature-skill-installation-recovery` | 安装目标 Agent 的插件、Hook、Collector 或 OTLP 配置 | 安装幂等、配置正确、结果可查询 | confirmed |
+| `requirement-cli-agent-integration-check` | `feature-skill-installation-recovery` | 检查运行时、适配器、上传器和本地缓冲状态 | 不支持和异常状态显式展示 | confirmed |
+| `requirement-cli-agent-integration-recovery` | `feature-skill-installation-recovery` | 处理接入失败、升级失败和旧配置恢复 | 不破坏可用接入，失败可追溯 | confirmed |
+| `requirement-cli-runtime-collection` | `feature-skill-runtime-observability` | 通过适配器采集 Agent 和 Skill 运行事件 | 事件可查询，缺失字段不伪造 | confirmed |
+| `requirement-cli-runtime-upload` | `feature-skill-runtime-observability` | 将本地标准化事件通过 OTLP 上传到 SkillHub | API Token 作用域、批量上传和结果可见 | confirmed |
+| `requirement-cli-runtime-buffer-recovery` | `feature-skill-runtime-observability` | 离线缓冲、重试、补报和幂等 | 恢复后不重复记账 | confirmed |
+| `requirement-cli-runtime-data-minimization` | `feature-skill-runtime-observability` | 上传前脱敏、截断和敏感数据拒绝 | 凭据和本地路径不泄露 | confirmed |
+| `requirement-cli-skill-package-validation` | `feature-skill-asset-release-governance` | 校验目录或 ZIP 的 Skill 结构和元数据 | 缺少 `SKILL.md`、非法路径和不可读文件被拒绝 | confirmed |
+| `requirement-cli-skill-upload` | `feature-skill-asset-release-governance` | 上传本地 Skill 包并创建资产或版本 | 进度、结果、摘要和控制台链接可见 | confirmed |
+| `requirement-cli-skill-upload-idempotency` | `feature-skill-asset-release-governance` | 保证重复上传不生成重复资产或版本 | 请求 ID 和版本摘要可追溯 | confirmed |
+| `requirement-cli-skill-review-submit` | `feature-skill-asset-release-governance` | 将草稿版本提交审核 | 不绕过发布门禁和审批人分离 | confirmed |
+
+### 3.0.2 CR-017 API Token 增量映射
+
+API Token 是账户自动化访问契约，继续归属资产治理 Feature；浏览器账户密码、服务端 Session 和 CSRF 流程不受影响。
+
+| 需求 | 归属 Feature | 目标 | 验收重点 | 状态 |
+| --- | --- | --- | --- | --- |
+| `requirement-skill-api-token-access` | `feature-skill-asset-release-governance` | 为控制台和 CLI 提供按作用域隔离的 Bearer 访问凭据 | 创建只返回一次原文、作用域隔离、撤销/过期生效、审计可追溯 | confirmed |
 
 ### 3.1 `feature-skill-asset-release-governance`
 
@@ -82,6 +111,14 @@ decomposition_status: confirmed
 | `requirement-skill-installation-failure-recovery` | 报告 6.4 | 下载、安装、配置、确认、停用旧版本或启用新版本失败时，旧版本保持或恢复启用；无可用旧版本时禁止启用未确认版本并要求人工处理；失败阶段、回退结果和当前状态必须补报且不重复记账。 | confirmed |
 | `requirement-skill-emergency-revocation` | 报告 6.2、7.3 | 发现高危安全或行为问题时，授权管理员可阻断新增安装并停用授权范围内存量实例；停用结果、原因和影响范围可查询。 | confirmed |
 
+#### CR-022 CLI 接入增量
+
+| 需求 | 来源证据 | 可观察行为与验收条件 | 状态 |
+| --- | --- | --- | --- |
+| `requirement-cli-agent-integration-installation` | Witty CLI、安装指导和运行时矩阵 | CLI 可按运行时安装或配置插件、Hook、Collector 或 OTLP；重复执行不破坏现有配置，并输出安装阶段和结果。 | confirmed |
+| `requirement-cli-agent-integration-check` | Witty `status`/安装检查链路 | CLI 可检查目标运行时、适配器版本、配置地址、凭据状态、本地 spool、上传器和最近健康状态；不支持、未安装和异常必须区分。 | confirmed |
+| `requirement-cli-agent-integration-recovery` | Witty 安装失败和恢复链路 | 安装或升级失败时保留可用旧配置；CLI 可重新执行检查或恢复，并记录失败阶段、原因和结果；采集器异常不得阻塞 Agent 业务执行。 | confirmed |
+
 ### 3.3 `feature-skill-runtime-observability`
 
 | 需求 | 来源证据 | 可观察行为与验收条件 | 状态 |
@@ -94,6 +131,15 @@ decomposition_status: confirmed
 | `requirement-observability-comparison-validity` | 报告 1.2、6.3 | 比较时固定或展示 Skill 版本、运行时、模型参数、工具环境、任务集、判定器和样本数；条件不一致、样本不足或缺少真值时标记不可直接比较，不显示伪准确率。 | confirmed |
 | `requirement-runtime-data-minimization` | 报告 6.4、7.3 | 默认不采集完整 transcript、prompt 和代码片段；仅在适配器暴露且策略允许时采集工具输入输出、FileEdit、Terminal 和摘要；上传前脱敏凭据、密钥和本地路径，受策略限制的文本最长 2000 字符。 | confirmed |
 | `requirement-platform-observability` | 报告 7.1、7.2 | 平台自身可观测数据接入、队列、分析、评测 Runner 和发布失败；平台服务观测与用户 Agent 运行观测分开呈现。 | confirmed |
+
+#### CR-022 CLI 运行观测增量
+
+| 需求 | 来源证据 | 可观察行为与验收条件 | 状态 |
+| --- | --- | --- | --- |
+| `requirement-cli-runtime-collection` | Witty 插件、Hook、Collector 和统一事件模型 | CLI 安装的适配器应采集会话、Agent、子 Agent、模型、工具、MCP 和 Skill 调用事件，并保留 Session、Trace、Span 和父子关系；运行时未提供的字段必须标记缺失。 | confirmed |
+| `requirement-cli-runtime-upload` | Witty OTLP Trace/Logs 上报链路 | CLI 或其上传器应使用 `telemetry:write` 凭据向 SkillHub OTLP 接口批量上报；服务端返回的受理、拒绝、超限和格式错误结果可查询。 | confirmed |
+| `requirement-cli-runtime-buffer-recovery` | Witty 本地 JSONL spool、checkpoint 和重试链路 | 网络或服务不可用时事件写入本地 spool；恢复后按 checkpoint 补报，成功后推进位置，重复重试不得生成重复事件。 | confirmed |
+| `requirement-cli-runtime-data-minimization` | Witty 脱敏、截断和最小采集链路 | 默认不采集完整 transcript、prompt 和代码；上传前脱敏 API Key、Token、密码、Secret 和本地路径，并对策略允许的文本执行长度限制。 | confirmed |
 
 ### 3.4 `feature-skill-evaluation-evolution`
 
@@ -119,6 +165,12 @@ decomposition_status: confirmed
 
 四个 Feature 共同服务一个 Skill 生命周期闭环，共享版本、发布范围、运行证据和整体验收；拆成四个 Work Item 会丢失跨 Feature 依赖和发布闭环约束。
 
+### 4.3 CLI 增量不单独建 Feature 的理由
+
+- CLI 不产生独立业务对象，而是把既有资产治理、安装恢复和运行观测能力交付到目标主机。
+- Skill 上传与运行数据上报拥有不同权限、数据模型、失败处理和验收标准；放在同一 CLI Feature 会掩盖服务端领域边界。
+- 公共 CLI 配置、凭据和退出码可以通过跨 Feature 契约统一，但具体业务状态必须由对应 Feature 维护。
+
 ## 5. 整体风险与边界
 
 - 报告中的复用结论是调研和方案建议，不代表对应开源项目可直接作为目标平台上线。
@@ -126,7 +178,11 @@ decomposition_status: confirmed
 - 自动发布、灰度阈值、分层数据保留和紧急撤回会影响权限、合规、运营和成本；默认值已确认，后续调整必须通过版本化策略和审计完成。
 - 当前没有吞吐、延迟、数据量、恢复时限等数值型非功能指标，不能自行补齐。
 
-## 6. 用户确认
+## 6. CR-022 用户确认
+
+本次增量确认采用三个既有 Feature 扩展方式：CLI 接入安装归属安装恢复，运行数据采集与上报归属运行观测，Skill 包校验、上传和审核申请归属资产治理。CLI 使用 API Token Bearer，新增 `telemetry:write` 作用域；不引入 OAuth2、统一单点登录、CLI Device Flow、S3 或微服务。
+
+## 7. 用户确认
 
 confirmed_by: user
 confirmed_at: 2026-09-01

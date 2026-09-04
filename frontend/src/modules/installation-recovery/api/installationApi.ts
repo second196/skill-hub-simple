@@ -5,13 +5,38 @@ import type {
   InstallationQuery,
   InstallationRequest,
   RevocationResult,
-  RuntimeDefinition
+  RuntimeDefinition,
+  RuntimeIntegration,
+  RuntimeIntegrationQuery
 } from '../types/installation'
+
+export class InstallationApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'InstallationApiError'
+  }
+}
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { credentials: 'include', ...init })
-  if (!response.ok) throw new Error(`请求失败（状态码 ${response.status}）`)
+  if (!response.ok) {
+    throw new InstallationApiError(
+      response.status === 403 ? '您没有权限查看或操作当前安装范围' : `请求失败（状态码 ${response.status}）`,
+      response.status
+    )
+  }
   return await response.json() as T
+}
+
+function parseRuntimeIntegration(value: unknown): RuntimeIntegration | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const item = value as Record<string, unknown>
+  if (typeof item.integrationId !== 'string' || typeof item.scopeId !== 'number'
+    || typeof item.runtimeKey !== 'string' || typeof item.runtimeVersion !== 'string'
+    || typeof item.targetKey !== 'string' || typeof item.adapterVersion !== 'string'
+    || typeof item.configurationDigest !== 'string' || typeof item.installationState !== 'string'
+    || typeof item.healthStatus !== 'string' || typeof item.lastEventSequence !== 'number') return null
+  return item as unknown as RuntimeIntegration
 }
 
 function parseInstance(value: unknown): InstallationInstance | null {
@@ -44,6 +69,15 @@ export function fetchLatestOperation(id: number): Promise<InstallationOperation 
 
 export function fetchRuntimeMatrix(scopeId: number): Promise<RuntimeDefinition[]> {
   return request<RuntimeDefinition[]>(`/api/v1/runtime-matrix?scopeId=${encodeURIComponent(scopeId)}`)
+}
+
+export async function fetchRuntimeIntegrations(query: RuntimeIntegrationQuery): Promise<RuntimeIntegration[]> {
+  const params = new URLSearchParams({ scopeId: String(query.scopeId) })
+  if (query.runtimeKey) params.set('runtimeKey', query.runtimeKey)
+  params.set('limit', String(query.limit ?? 50))
+  const value = await request<unknown>(`/api/v1/runtime-integrations?${params.toString()}`)
+  if (!Array.isArray(value)) throw new Error('运行时接入列表响应格式错误')
+  return value.map(parseRuntimeIntegration).filter((item): item is RuntimeIntegration => item !== null)
 }
 
 export function requestInstallation(payload: InstallationRequest, requestId: string): Promise<InstallationOperation> {

@@ -32,6 +32,7 @@ const deleteTarget = ref<ApiTokenSummary | null>(null)
 const scopeOptions: Array<{ value: TokenScope; label: string; description: string }> = [
   { value: 'skill:read', label: '资产读取', description: '读取资产、版本、文件和制品' },
   { value: 'skill:publish', label: '资产发布', description: '提交 Skill 压缩包导入请求' },
+  { value: 'telemetry:write', label: '运行数据上报', description: '上传 Agent 与 Skill 的运行事件' },
   { value: 'token:manage', label: '令牌管理', description: '管理当前账户的访问凭证' }
 ]
 
@@ -183,7 +184,13 @@ async function copyToken(): Promise<void> {
 }
 
 function scopeLabel(scope: TokenScope): string {
-  return scope === 'skill:read' ? '资产读取' : scope === 'skill:publish' ? '资产发布' : '令牌管理'
+  const labels: Record<TokenScope, string> = {
+    'skill:read': '资产读取',
+    'skill:publish': '资产发布',
+    'telemetry:write': '运行数据上报',
+    'token:manage': '令牌管理'
+  }
+  return labels[scope]
 }
 
 function statusLabel(status: ApiTokenSummary['status']): string {

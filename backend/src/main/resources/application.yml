@@ -35,9 +35,21 @@ skillhub:
   artifact:
     root: ${SKILLHUB_ARTIFACT_ROOT:${java.io.tmpdir}/skillhub-artifacts}
     max-package-bytes: ${SKILLHUB_ARTIFACT_MAX_PACKAGE_BYTES:10485760}
+    max-expanded-bytes: ${SKILLHUB_ARTIFACT_MAX_EXPANDED_BYTES:104857600}
+    max-single-file-bytes: ${SKILLHUB_ARTIFACT_MAX_SINGLE_FILE_BYTES:10485760}
+    max-files: ${SKILLHUB_ARTIFACT_MAX_FILES:1000}
+    max-path-length: ${SKILLHUB_ARTIFACT_MAX_PATH_LENGTH:255}
   installation:
     command-stream: ${SKILLHUB_INSTALLATION_COMMAND_STREAM:skillhub:installation:commands}
     outbox-retry-seconds: ${SKILLHUB_INSTALLATION_OUTBOX_RETRY_SECONDS:30}
+  telemetry:
+    ingest:
+      client-max-events: ${SKILLHUB_TELEMETRY_CLIENT_MAX_EVENTS:100}
+      client-max-payload-bytes: ${SKILLHUB_TELEMETRY_CLIENT_MAX_PAYLOAD_BYTES:524288}
+      max-events: ${SKILLHUB_TELEMETRY_MAX_EVENTS:1000}
+      max-payload-bytes: ${SKILLHUB_TELEMETRY_MAX_PAYLOAD_BYTES:5242880}
+    privacy:
+      max-text-length: ${SKILLHUB_TELEMETRY_MAX_TEXT_LENGTH:2000}
 
 management:
   endpoints:

@@ -1,11 +1,11 @@
 ---
 title: Skill 资产与发布治理
-description: 公司内部 Skill 的资产登记、不可变版本、授权发布、审核和数据治理需求
+description: 公司内部 Skill 的资产登记、不可变版本、授权发布、审核、数据治理和 CLI 上传需求
 audience:
   - product-development
 owner: product-development
-status: active
-lastReviewed: 2026-09-02
+status: confirmed
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
@@ -18,6 +18,7 @@ sourceType: manual
 | v1 | 2026-09-01 |  | 根据调研报告和用户确认的四 Feature 拆分形成初稿；发布策略和数据保留采用可配置默认值。 |
 | v3 | 2026-09-02 |  | 根据用户确认的参考项目对齐范围，补充 Skill 包内容、发现、文件浏览、版本比较、命名空间、审核生命周期、管理员治理和品牌化控制台需求。 |
 | v4 | 2026-09-02 |  | CR-017 增加账户 API Token、Bearer 认证、作用域隔离和自动化资产读取/Skill 包导入能力；暂不实现 CLI。 |
+| v5 | 2026-09-03 |  | CR-022 将 SkillHub CLI 纳入自动化客户端范围，增加本地 Skill 校验、打包、上传、幂等和提交审核需求，并增加 `telemetry:write` 运行数据作用域契约。 |
 
 ## 2. 需求来源
 
@@ -29,7 +30,7 @@ sourceType: manual
 
 平台应为公司内部 Skill 提供统一的登记、发现、版本管理、授权范围发布、审核、下线、撤回和审计能力。首期为公司私有化部署，仅服务公司内部员工，不建设 SaaS 多租户能力。
 
-本 Feature 不负责 Agent runtime 执行、运行时 Tracker 采集、评测 Runner 执行或 Skill 内容的自动生成；它向其他 Feature 提供不可变版本、发布范围、发布门禁和治理审计结果。
+本 Feature 不负责 Agent runtime 执行、运行时 Tracker 采集、评测 Runner 执行或 Skill 内容的自动生成；它向其他 Feature 提供不可变版本、发布范围、发布门禁和治理审计结果。SkillHub CLI 是本 Feature 的自动化上传入口，但服务端仍负责最终校验、制品存储、版本创建、扫描、门禁和发布治理。
 
 ### 3.2 原子需求清单
 
@@ -170,7 +171,7 @@ Skill 版本应支持语义化版本号和组织自定义标签。用户可以�
 
 ### 3.7 增量范围和明确排除
 
-本次增量只对齐参考项目中与账户治理、Skill 资产发现、版本内容和发布治理直接相关的能力。继续排除 OAuth2、统一单点登录、CLI Device Flow、API Token、S3、微服务拆分、收藏、评分、订阅和通知；安装执行、运行事件采集和评测 Runner 仍由既有 Feature 负责。
+本次增量只对齐参考项目中与账户治理、Skill 资产发现、版本内容和发布治理直接相关的能力。继续排除 OAuth2、统一单点登录、CLI Device Flow、S3、微服务拆分、收藏、评分、订阅和通知；安装执行和运行事件采集仍分别由安装恢复与运行观测 Feature 定义。SkillHub CLI 可在目标主机执行已授权的适配器安装并采集运行事件，但控制面编排、资产/版本治理和运行数据接收仍必须通过 SkillHub 服务端接口完成。
 
 ## 4. 非功能性需求
 
@@ -183,17 +184,19 @@ Skill 版本应支持语义化版本号和组织自定义标签。用户可以�
 
 ## 5. 需求评审记录
 
-暂无人工评审记录。
+| 日期 | 评审人 | 结论 |
+| --- | --- | --- |
+| 2026-09-03 | 用户 | 确认 CR-022：SkillHub CLI 支持现有 Skill 目录或 ZIP 的校验、上传和审核申请；上传默认创建草稿，不绕过服务端校验、发布门禁和审批人分离。运行数据上报使用 `telemetry:write` 作用域。 |
 
 ## 6. CR-017 API Token 增量需求
 
-> 当前增量需求版本：v4。以下内容覆盖原 v3 中“API Token”排除项；OAuth2、统一单点登录、CLI Device Flow、S3、微服务和其它排除项继续有效。
+> 当前增量需求版本：v5。以下内容覆盖原 v3 中“API Token”排除项，并由 CR-022 扩展到 SkillHub CLI 和运行数据上报；OAuth2、统一单点登录、CLI Device Flow、S3、微服务和其它排除项继续有效。
 
 ### `requirement-skill-api-token-access`
 
 系统应支持账户自主创建和管理 API Token，并允许自动化客户端使用 `Authorization: Bearer <token>` 调用 Skill 资产读取和 ZIP 包导入接口。Token 必须以 `sk_` 前缀生成，服务端只保存不可逆 SHA-256 摘要，不保存原文；完整 Token 只在创建成功响应中返回一次。
 
-Token 至少支持名称、作用域、创建时间、过期时间、最后使用时间和撤销状态。作用域至少包括 `skill:read`、`skill:publish`、`token:manage`：读取作用域覆盖既有资产目录、资产详情、版本、文件和制品下载接口；发布作用域覆盖既有 Skill ZIP 导入接口；管理作用域覆盖 Token 的查询、创建、过期时间更新和撤销接口。网页端继续使用账户密码、服务端 Session 和 CSRF；Bearer API 请求不改变网页 Session 流程。
+Token 至少支持名称、作用域、创建时间、过期时间、最后使用时间和撤销状态。作用域至少包括 `skill:read`、`skill:publish`、`telemetry:write`、`token:manage`：读取作用域覆盖既有资产目录、资产详情、版本、文件和制品下载接口；发布作用域覆盖 Skill 目录或 ZIP 导入、资产版本创建和发布申请接口；运行数据作用域覆盖 CLI 事件和 OTLP 上报接口；管理作用域覆盖 Token 的查询、创建、过期时间更新和撤销接口。网页端继续使用账户密码、服务端 Session 和 CSRF；Bearer API 请求不改变网页 Session 流程。
 
 验收条件：
 
@@ -201,9 +204,36 @@ Token 至少支持名称、作用域、创建时间、过期时间、最后使�
 - 创建响应只返回一次完整 Token，刷新或再次查询不能恢复原文；过期或撤销 Token 返回 401。
 - Bearer Token 只能访问其拥有作用域的接口；缺少作用域返回 403；无 Bearer 认证返回 401。
 - `skill:read` 可以调用既有资产读取接口，`skill:publish` 可以调用既有 ZIP 导入接口；Token 身份仍受账号启停和资产范围权限约束。
+- `telemetry:write` 可以调用运行数据接收接口；运行数据身份仍受账号启停和组织、项目、环境范围约束。
 - Token 管理操作记录主体、Token 标识、作用域变化和撤销/过期原因；日志和错误响应不得泄露 Token 原文。
 
 ### 明确排除
 
-- 本增量暂不实现 CLI、Token 本地凭据文件、设备授权流程、OAuth2 或统一单点登录。
+- 本增量不实现设备授权流程、OAuth2 或统一单点登录。SkillHub CLI 的本地凭据保存、环境变量读取和输出脱敏由 CLI 增量需求定义。
 - Token 不写入 Skill 包、项目目录或数据库明文；Token 不负责压缩 Skill，客户端或调用方负责准备 ZIP 包，服务端继续负责解压、校验和导入治理。
+
+## 7. CR-022 SkillHub CLI 上传增量需求
+
+### `requirement-cli-skill-package-validation`
+
+SkillHub CLI 应支持输入本地 Skill 目录或 ZIP 包，并在上传前校验主描述文件 `SKILL.md`、YAML frontmatter、名称、版本、目录结构、文件可读性、非法路径、路径穿越和包大小。目录输入应能生成包含完整文件结构的 ZIP；校验失败不得发起上传。
+
+验收条件：有效目录和 ZIP 均能通过校验并展示文件清单；缺少 `SKILL.md`、存在非法路径、不可读文件或超过策略上限时明确失败；CLI 不会把本地绝对路径和凭据写入上传内容。
+
+### `requirement-cli-skill-upload`
+
+有 `skill:publish` 作用域的 CLI 用户应能上传本地 Skill 目录或 ZIP，并查看上传进度、服务端校验结果、资产标识、版本摘要、导入状态和控制台访问地址。客户端摘要仅用于提前发现重复，服务端必须重新计算并作为最终版本标识。
+
+验收条件：上传成功后可查询资产和具体版本；上传失败显示阶段和原因；服务端不因客户端重复请求覆盖已创建版本。
+
+### `requirement-cli-skill-upload-idempotency`
+
+CLI 上传必须携带稳定请求标识，并结合 Skill 内容摘要保证重试和重复执行的幂等。相同资产、相同内容和相同版本不得因网络重试生成重复资产或版本；不同内容必须生成新的不可变版本。
+
+验收条件：同一请求重复执行返回同一导入结果或明确的重复结果；历史版本内容不可被覆盖；导入记录和失败记录均可审计。
+
+### `requirement-cli-skill-review-submit`
+
+SkillHub CLI 可在上传完成且版本处于草稿状态时显式提交审核申请。提交前必须检查资产范围、元数据完整性、静态扫描、评测证据和发布门禁；CLI 不得直接把草稿标记为已发布，也不得绕过审批人分离。
+
+验收条件：默认上传结果为草稿；只有显式提交审核才进入候选或待审核状态；门禁缺失、权限不足或申请人与审批人冲突时提交被拒绝并说明原因。

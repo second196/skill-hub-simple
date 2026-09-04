@@ -15,12 +15,14 @@ const router = createRouter({
     { path: '/dashboard/namespaces', component: () => import('../pages/dashboard/MyNamespacesPage.vue'), meta: { requiresAuth: true } },
     { path: '/dashboard/namespaces/:slug/members', component: () => import('../pages/dashboard/NamespaceMembersPage.vue'), meta: { requiresAuth: true } },
     { path: '/dashboard/namespaces/:slug/reviews', component: () => import('../pages/review/ReviewWorkbenchPage.vue'), meta: { requiresAuth: true } },
+    { path: '/dashboard/namespaces/:slug/reviews/:id', component: () => import('../pages/review/ReviewDetailPage.vue'), meta: { requiresAuth: true } },
     { path: '/space/:namespace/:slug/compare', component: () => import('../pages/skill/SkillVersionComparePage.vue'), meta: { requiresAuth: true } },
     { path: '/space/:namespace', component: () => import('../pages/namespace/NamespaceSpacePage.vue'), meta: { requiresAuth: true } },
     { path: '/space/:namespace/:slug', component: () => import('../pages/skill/SkillDetailPage.vue'), meta: { requiresAuth: true } },
     { path: '/space/:namespace/:slug/versions/compare', component: () => import('../pages/skill/SkillVersionComparePage.vue'), meta: { requiresAuth: true } },
     { path: '/reviews', component: () => import('../pages/review/ReviewWorkbenchPage.vue'), meta: { requiresAuth: true } },
     { path: '/dashboard/reviews', component: () => import('../pages/review/ReviewWorkbenchPage.vue'), meta: { requiresAuth: true } },
+    { path: '/dashboard/reviews/:id', component: () => import('../pages/review/ReviewDetailPage.vue'), meta: { requiresAuth: true } },
     { path: '/admin', component: () => import('../pages/admin/AdminConsolePage.vue'), meta: { requiresAuth: true } },
     { path: '/admin/accounts', component: () => import('../pages/admin/AdminConsolePage.vue'), meta: { requiresAuth: true } },
     { path: '/admin/namespaces', component: () => import('../pages/admin/AdminNamespacesPage.vue'), meta: { requiresAuth: true } },
@@ -40,7 +42,8 @@ const router = createRouter({
     { path: '/installations/:instanceId', component: () => import('../pages/installation-recovery/InstallationDetailPage.vue'), meta: { requiresAuth: true } },
     { path: '/releases/decisions/:decisionId', component: () => import('../pages/asset-governance/ReleaseDecisionPage.vue'), meta: { requiresAuth: true } },
     { path: '/governance/policies', component: () => import('../pages/asset-governance/PolicyPage.vue'), meta: { requiresAuth: true } },
-    { path: '/governance/audits', component: () => import('../pages/asset-governance/AuditPage.vue'), meta: { requiresAuth: true } }
+    { path: '/governance/audits', component: () => import('../pages/asset-governance/AuditPage.vue'), meta: { requiresAuth: true } },
+    { path: '/:pathMatch(.*)*', component: () => import('../pages/RouteNotFoundPage.vue'), meta: { requiresAuth: true } }
   ]
 })
 
@@ -48,11 +51,13 @@ router.beforeEach(async (to) => {
   if (!to.meta.requiresAuth) {
     return true
   }
-  const response = await fetch('/api/v1/session/current', { credentials: 'include' })
-  if (response.ok) {
-    return true
+  try {
+    const response = await fetch('/api/v1/session/current', { credentials: 'include' })
+    if (response.ok) return true
+  } catch (_) {
+    return { path: '/login', query: { reason: 'session-unavailable' } }
   }
-  return '/login'
+  return { path: '/login', query: { redirect: to.fullPath } }
 })
 
 export default router

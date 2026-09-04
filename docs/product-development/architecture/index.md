@@ -5,7 +5,7 @@ audience:
   - product-development
 owner: product-development
 status: draft
-lastReviewed: 2026-09-02
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
@@ -24,4 +24,4 @@ sourceType: manual
 - Java 后端服务、Vue 控制台、数据访问和跨 Feature 契约。
 - 架构、技术栈、目录结构或模块边界变更。
 
-后端架构基线当前为 `v0.4-draft`，前端架构基线当前为 `v0.3-draft`。用户已于 2026-09-02 确认这两份 draft 作为本 Feature 的设计输入；未确认的容量、备份、存储产品和部署参数仍须在后续阶段补齐。
+后端架构基线当前为 `v0.5-draft`，前端架构基线当前为 `v0.3-draft`。用户已确认 JDK 8、Vue 3、PostgreSQL 15、Redis Streams 和账户密码 Session 等既有基线，并于 2026-09-03 确认首期运行事件采用 PostgreSQL 15 权威存储、Redis Streams 异步通知；未确认的容量、备份、RPO/RTO 和部署参数仍须在后续阶段补齐。

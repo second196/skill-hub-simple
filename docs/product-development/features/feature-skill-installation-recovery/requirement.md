@@ -1,11 +1,11 @@
 ---
 title: Skill 获取安装与失败回退
-description: Skill 与 Tracker 的获取、安装、版本切换、失败恢复和紧急撤回需求
+description: Skill 与 Tracker 的获取、安装、版本切换、失败恢复、紧急撤回和 CLI 接入需求
 audience:
   - product-development
 owner: product-development
 status: confirmed
-lastReviewed: 2026-09-01
+lastReviewed: 2026-09-03
 sourceType: manual
 ---
 
@@ -16,10 +16,11 @@ sourceType: manual
 | 版本 | 日期 | 修订人 | 修订说明 |
 | --- | --- | --- | --- |
 | v1 | 2026-09-01 |  | 根据调研报告和用户确认的运行时矩阵可配置要求形成初稿。 |
+| v2 | 2026-09-03 |  | CR-022 增加 SkillHub CLI 对目标 Agent 插件、Hook、Collector 和 OTLP 配置的安装、检查与恢复需求。 |
 
 ## 2. 需求来源
 
-来源：`docs/research/skill-hub-research.md` 第 3.2、4.3、6.1、6.2、6.4、7.3 和 8.1 节，以及用户对首期运行时范围可配置和后期可调整的确认。
+来源：`docs/research/skill-hub-research.md` 第 3.2、4.3、6.1、6.2、6.4、7.3 和 8.1 节，用户对首期运行时范围可配置和后期可调整的确认，以及 `D:\program\witty-skill-insight` 的 CLI、安装指导和适配器实现。
 
 ## 3. 功能描述
 
@@ -29,7 +30,7 @@ sourceType: manual
 
 首期默认运行时矩阵为：Codex CLI、Codex 的 VS Code/Cursor/Windsurf 扩展，以及 Claude Code 的 OTLP 运行数据上报；安装主机支持 Witty 已验证的 Bash 和 PowerShell 路径。未被调研材料证实的 Claude Code IDE 扩展不纳入首期默认承诺。运行时、适配器、能力和启用状态必须可配置，后续新增或停用运行时不能改变历史安装记录。
 
-本 Feature 不负责 Skill 资产注册、评测执行或 Agent 业务执行；它消费已发布版本，并为运行观测 Feature 产生安装、切换、回退和健康状态。
+本 Feature 不负责 Skill 资产注册、评测执行或 Agent 业务执行；它消费已发布版本，并为运行观测 Feature 产生安装、切换、回退和健康状态。SkillHub CLI 是本 Feature 的客户端入口之一，负责在目标 Agent 主机执行接入检查和适配器安装，但不直接访问服务端数据库或制品存储。
 
 ### 3.2 原子需求清单
 
@@ -69,6 +70,24 @@ sourceType: manual
 
 验收条件：撤回后不可新增安装；授权范围内实例状态可查询；部分失败不会被标记为全部成功。
 
+#### `requirement-cli-agent-integration-installation`
+
+SkillHub CLI 应能根据已配置的运行时和适配器矩阵，在目标 Agent 所在主机安装或配置对应的插件、Hook、Collector 或 OTLP 上报配置。安装过程应检查目标运行时、文件写入权限、服务地址和凭据配置，并按阶段返回结果。
+
+验收条件：用户执行 CLI 接入安装后，目标运行时存在对应接入配置；重复执行不会生成冲突配置或重复安装记录；未支持的运行时会明确显示为不支持，不得伪装为安装成功。
+
+#### `requirement-cli-agent-integration-check`
+
+SkillHub CLI 应提供接入诊断能力，检查目标运行时版本、适配器版本、配置的 SkillHub 地址、凭据状态、本地 spool、上传器和最近健康状态。未安装、已停用、配置错误、网络不可达和服务端拒绝必须区分显示。
+
+验收条件：CLI 能输出可读的诊断结论和失败原因；诊断不会修改目标 Agent 配置；凭据原文不会出现在输出和日志中。
+
+#### `requirement-cli-agent-integration-recovery`
+
+适配器安装、升级或配置失败时，CLI 应保留可用的旧配置或恢复旧配置，并记录失败阶段、原因和恢复结果。采集器、上传器或网络异常不得阻塞目标 Agent 的业务执行。
+
+验收条件：升级失败后原有可用接入仍可使用；无可用旧配置时明确进入人工处理状态；恢复和重试不会生成重复安装状态记录。
+
 ### 3.3 运行时配置与默认矩阵
 
 | 运行时/形态 | 默认状态 | 默认能力 | 配置要求 |
@@ -104,3 +123,4 @@ sourceType: manual
 | 日期 | 评审人 | 结论 |
 | --- | --- | --- |
 | 2026-09-02 | 用户 | 确认 `v1` 作为设计输入；确认采用“后端编排、运行时适配器实际安装、Vue 控制台展示”的边界。 |
+| 2026-09-03 | 用户 | 确认 CR-022：SkillHub CLI 作为客户端入口，负责目标 Agent 接入组件安装、检查和恢复；不改变后端编排与运行时适配器边界。 |

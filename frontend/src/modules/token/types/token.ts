@@ -1,4 +1,4 @@
-export type TokenScope = 'skill:read' | 'skill:publish' | 'token:manage'
+export type TokenScope = 'skill:read' | 'skill:publish' | 'telemetry:write' | 'token:manage'
 
 export type TokenStatus = 'ACTIVE' | 'EXPIRED' | 'REVOKED'
 

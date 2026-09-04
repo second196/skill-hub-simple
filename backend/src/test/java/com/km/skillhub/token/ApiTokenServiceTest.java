@@ -93,6 +93,25 @@ class ApiTokenServiceTest {
     }
 
     @Test
+    void acceptsTelemetryWriteScope() {
+        when(apiTokenMapper.insert(any(ApiTokenEntity.class))).thenAnswer(invocation -> {
+            ApiTokenEntity entity = invocation.getArgument(0);
+            entity.setId(14L);
+            return 1;
+        });
+        ApiTokenEntity saved = savedToken(14L);
+        saved.setScopeJson("[\"telemetry:write\"]");
+        when(apiTokenMapper.findById(14L)).thenReturn(saved);
+        ApiTokenCreateRequest request = new ApiTokenCreateRequest();
+        request.setName("运行数据上报");
+        request.setScopes(Arrays.asList("telemetry:write"));
+
+        ApiTokenCreateResponse response = service.create("admin", request);
+
+        assertEquals(Arrays.asList("telemetry:write"), response.getScopes());
+    }
+
+    @Test
     void rejectsExpiredAndRevokedTokens() {
         ApiTokenEntity expired = savedToken(12L);
         expired.setExpiresAt(OffsetDateTime.now().minusMinutes(1));

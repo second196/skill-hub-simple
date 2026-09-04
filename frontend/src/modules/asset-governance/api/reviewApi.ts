@@ -23,6 +23,13 @@ export function fetchReviews(status = 'PENDING'): Promise<ReviewTask[]> {
   return request<ReviewTask[]>(`/api/v1/reviews?status=${encodeURIComponent(status)}`)
 }
 
+export async function fetchReview(id: number): Promise<ReviewTask> {
+  const lists = await Promise.all(['PENDING', 'APPROVED', 'REJECTED'].map(fetchReviews))
+  const task = lists.flat().find((item) => item.id === id)
+  if (!task) throw new Error('审核任务不存在或当前账户无权查看')
+  return task
+}
+
 export function submitReview(versionDigest: string, comment: string): Promise<ReviewTask> {
   return request<ReviewTask>('/api/v1/reviews', {
     method: 'POST',

@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import AppShell from './components/AppShell.vue'
+import ToastHost from './components/ui/ToastHost.vue'
 
 const route = useRoute()
 const isLogin = computed(() => route.path === '/login')
@@ -10,4 +11,5 @@ const isLogin = computed(() => route.path === '/login')
 <template>
   <AppShell v-if="!isLogin"><RouterView /></AppShell>
   <RouterView v-else />
+  <ToastHost />
 </template>

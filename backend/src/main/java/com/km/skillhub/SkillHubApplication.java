@@ -18,7 +18,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
         "com.km.skillhub.namespace.mapper",
         "com.km.skillhub.review.mapper",
         "com.km.skillhub.version.mapper",
-        "com.km.skillhub.token.mapper"
+        "com.km.skillhub.token.mapper",
+        "com.km.skillhub.telemetry.mapper"
 })
 public class SkillHubApplication {
 
