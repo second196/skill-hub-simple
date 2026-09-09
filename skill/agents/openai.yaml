@@ -1,0 +1,4 @@
+interface:
+  display_name: "SkillHub CLI"
+  short_description: "Operate SkillHub CLI for uploading, listing, and installing skills"
+  default_prompt: "Use this skill when the user asks an AI coding agent to use SkillHub CLI for uploading, listing, or installing platform skills."

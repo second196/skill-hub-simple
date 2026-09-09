@@ -1,8 +1,8 @@
 import { createApp } from 'vue'
-import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
 import './styles.css'
-import 'highlight.js/styles/github.css'
-
-createApp(App).use(createPinia()).use(router).mount('#app')
+import './site.css'
+import './markdown.css'
+import './file-layout.css'
+createApp(App).use(router).mount('#app')

@@ -1,0 +1,144 @@
+.file-layout {
+  height: clamp(680px, 75vh, 900px);
+  min-height: 0;
+}
+
+.file-tree {
+  min-height: 0;
+}
+
+.file-content {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.file-content pre {
+  min-height: 0;
+  max-height: none;
+  flex: 1;
+}
+
+.version-browser {
+  display: grid;
+  grid-template-columns: 210px 280px minmax(0, 1fr);
+  height: clamp(680px, 75vh, 900px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.version-list {
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid #dce3e9;
+}
+
+.version-column-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  height: 50px;
+  padding: 0 14px;
+  border-bottom: 1px solid #dce3e9;
+  background: #fff;
+  color: #263746;
+  font-weight: 700;
+}
+
+.version-item {
+  display: flex;
+  min-width: 0;
+  border-bottom: 1px solid #edf0f2;
+}
+
+.version-item.selected {
+  background: #e8f2f9;
+  box-shadow: inset 3px 0 #1474b8;
+}
+
+.version-select {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+  padding: 12px 8px 12px 14px;
+  background: transparent;
+  color: #304758;
+  text-align: left;
+}
+
+.version-select:hover {
+  color: #1474b8;
+}
+
+.version-select span {
+  color: #71818d;
+  font-size: 12px;
+}
+
+.version-select code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-download {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  margin-right: 8px;
+  border-radius: 4px;
+  color: #536b7b;
+}
+
+.version-download:hover {
+  background: #fff;
+  color: #1474b8;
+}
+
+.version-tree {
+  padding: 0 8px 12px;
+}
+
+.version-tree .version-column-title {
+  margin: 0 -8px 8px;
+}
+
+.version-file-content {
+  min-width: 0;
+  min-height: 0;
+}
+
+.version-message {
+  margin: auto;
+  color: #708391;
+}
+
+@media (max-width: 800px) {
+  .file-layout {
+    height: clamp(720px, 82vh, 900px);
+    grid-template-rows: minmax(160px, 240px) minmax(0, 1fr);
+  }
+
+  .file-tree {
+    max-height: none;
+  }
+
+  .version-browser {
+    height: clamp(900px, 110vh, 1100px);
+    grid-template-columns: 1fr;
+    grid-template-rows: 180px 240px minmax(0, 1fr);
+  }
+
+  .version-list,
+  .version-tree {
+    border-right: 0;
+    border-bottom: 1px solid #dce3e9;
+  }
+}

@@ -1,4 +1,0 @@
-interface:
-  display_name: "研发流程治理 v2"
-  short_description: "有状态的复杂研发流程治理"
-  default_prompt: "使用本 Skill，通过持久化状态、阶段门禁、分步实现和证据化验证管理复杂研发任务。"

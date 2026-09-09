@@ -1,14 +1,19 @@
 {
-  "name": "@kmsoft/skillhub-cli",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@second196/skillhub-cli",
+  "version": "0.1.2",
+  "description": "Skill Hub CLI for uploading, discovering, and installing skills",
   "type": "module",
   "bin": {
-    "skillhub": "./dist/index.js"
+    "skillhub": "dist/index.js",
+    "skillhub-cli": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.test.json && node --test .test-dist/test"
+    "build": "tsc -p tsconfig.json && node ./scripts/mark-executable.cjs dist/index.js",
+    "test": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=20.0.0"

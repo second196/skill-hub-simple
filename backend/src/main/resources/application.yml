@@ -1,58 +1,22 @@
 server:
   port: 8080
-  servlet:
-    session:
-      cookie:
-        http-only: true
-        secure: ${SESSION_COOKIE_SECURE:false}
-        same-site: ${SESSION_COOKIE_SAME_SITE:lax}
 
 spring:
   application:
-    name: skill-hub-governance
+    name: skill-hub
   datasource:
     url: ${SKILLHUB_DB_URL:jdbc:postgresql://localhost:5432/skillhub}
     username: ${SKILLHUB_DB_USERNAME:postgres}
     password: ${SKILLHUB_DB_PASSWORD:123456}
     driver-class-name: org.postgresql.Driver
-  redis:
-    host: ${SKILLHUB_REDIS_HOST:localhost}
-    port: ${SKILLHUB_REDIS_PORT:6379}
-    database: ${SKILLHUB_REDIS_DATABASE:0}
   flyway:
     enabled: true
     locations: classpath:db/migration
   jackson:
     default-property-inclusion: non_null
 
-mybatis-plus:
-  mapper-locations: classpath:/mapper/**/*.xml
-  type-aliases-package: com.km.skillhub.model.entity
-  configuration:
-    map-underscore-to-camel-case: true
-
 skillhub:
-  artifact:
-    root: ${SKILLHUB_ARTIFACT_ROOT:${java.io.tmpdir}/skillhub-artifacts}
-    max-package-bytes: ${SKILLHUB_ARTIFACT_MAX_PACKAGE_BYTES:10485760}
-    max-expanded-bytes: ${SKILLHUB_ARTIFACT_MAX_EXPANDED_BYTES:104857600}
-    max-single-file-bytes: ${SKILLHUB_ARTIFACT_MAX_SINGLE_FILE_BYTES:10485760}
-    max-files: ${SKILLHUB_ARTIFACT_MAX_FILES:1000}
-    max-path-length: ${SKILLHUB_ARTIFACT_MAX_PATH_LENGTH:255}
-  installation:
-    command-stream: ${SKILLHUB_INSTALLATION_COMMAND_STREAM:skillhub:installation:commands}
-    outbox-retry-seconds: ${SKILLHUB_INSTALLATION_OUTBOX_RETRY_SECONDS:30}
-  telemetry:
-    ingest:
-      client-max-events: ${SKILLHUB_TELEMETRY_CLIENT_MAX_EVENTS:100}
-      client-max-payload-bytes: ${SKILLHUB_TELEMETRY_CLIENT_MAX_PAYLOAD_BYTES:524288}
-      max-events: ${SKILLHUB_TELEMETRY_MAX_EVENTS:1000}
-      max-payload-bytes: ${SKILLHUB_TELEMETRY_MAX_PAYLOAD_BYTES:5242880}
-    privacy:
-      max-text-length: ${SKILLHUB_TELEMETRY_MAX_TEXT_LENGTH:2000}
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics
+  upload:
+    max-package-bytes: ${SKILLHUB_MAX_PACKAGE_BYTES:10485760}
+    max-expanded-bytes: ${SKILLHUB_MAX_EXPANDED_BYTES:104857600}
+    max-files: ${SKILLHUB_MAX_FILES:1000}

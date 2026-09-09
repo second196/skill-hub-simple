@@ -18,7 +18,7 @@ const SEMANTIC_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-
 const metadataSchema = z.object({
   name: z.string().trim().min(1).max(100),
   description: z.string().trim().min(1).max(2000),
-  version: z.string().trim().regex(SEMANTIC_VERSION)
+  version: z.string().trim().regex(SEMANTIC_VERSION).optional().default('0.0.0')
 }).passthrough()
 
 export async function prepareSkillPackage(
@@ -44,19 +44,26 @@ export async function prepareSkillPackage(
     files = await readDirectoryFiles(inputPath, overrides)
     archive = createArchive(files, overrides)
   } else if (inputStat.isFile()) {
-    sourceType = 'ZIP'
-    if (inputStat.size > limits.maxArchiveBytes) {
-      throw new PackageValidationError('Skill 压缩包超过大小限制', 'PACKAGE_ARCHIVE_TOO_LARGE')
-    }
-    archive = new Uint8Array(await readFile(inputPath))
-    files = readArchive(archive, overrides)
-    const sensitiveEntry = files.find((file) => shouldExcludePackagePath(file.path))
-    if (sensitiveEntry !== undefined) {
-      throw new PackageValidationError(
-        'Skill ZIP 包含版本库或凭据文件',
-        'SENSITIVE_PACKAGE_PATH',
-        { path: sensitiveEntry.path }
-      )
+    if (inputPath.toLowerCase().endsWith('.md')) {
+      sourceType = 'DIRECTORY'
+      const content = new Uint8Array(await readFile(inputPath))
+      files = [{ path: 'SKILL.md', content }]
+      archive = createArchive(files, overrides)
+    } else {
+      sourceType = 'ZIP'
+      if (inputStat.size > limits.maxArchiveBytes) {
+        throw new PackageValidationError('Skill 压缩包超过大小限制', 'PACKAGE_ARCHIVE_TOO_LARGE')
+      }
+      archive = new Uint8Array(await readFile(inputPath))
+      files = readArchive(archive, overrides)
+      const sensitiveEntry = files.find((file) => shouldExcludePackagePath(file.path))
+      if (sensitiveEntry !== undefined) {
+        throw new PackageValidationError(
+          'Skill ZIP 包含版本库或凭据文件',
+          'SENSITIVE_PACKAGE_PATH',
+          { path: sensitiveEntry.path }
+        )
+      }
     }
   } else {
     throw new PackageValidationError('Skill 路径必须是目录或 ZIP 文件', 'UNSUPPORTED_SKILL_PATH')
@@ -65,6 +72,8 @@ export async function prepareSkillPackage(
   if (files.length === 0) {
     throw new PackageValidationError('Skill 包不能为空', 'EMPTY_SKILL_PACKAGE')
   }
+  files = normalizePackageRoot(files)
+  if (sourceType === 'ZIP') archive = createArchive(files, overrides)
   const skillFile = files.find((file) => file.path === 'SKILL.md')
   if (skillFile === undefined) {
     throw new PackageValidationError('Skill 包根目录缺少 SKILL.md', 'SKILL_FILE_REQUIRED')
@@ -82,6 +91,15 @@ export async function prepareSkillPackage(
     metadata,
     manifest
   }
+}
+
+function normalizePackageRoot(files: PackageFile[]): PackageFile[] {
+  if (files.some((file) => file.path === 'SKILL.md')) return files
+  const skillFiles = files.filter((file) => file.path.endsWith('/SKILL.md'))
+  if (skillFiles.length !== 1) return files
+  const prefix = skillFiles[0].path.slice(0, -'SKILL.md'.length)
+  if (!files.every((file) => file.path.startsWith(prefix))) return files
+  return files.map((file) => ({ ...file, path: file.path.slice(prefix.length) }))
 }
 
 async function readDirectoryFiles(

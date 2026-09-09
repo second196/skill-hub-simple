@@ -12,16 +12,14 @@
     </parent>
 
     <groupId>com.km</groupId>
-    <artifactId>skill-hub-governance</artifactId>
+    <artifactId>skill-hub</artifactId>
     <version>0.1.0-SNAPSHOT</version>
-    <name>skill-hub-governance</name>
+    <name>skill-hub</name>
 
     <properties>
         <java.version>1.8</java.version>
-        <mybatis-plus.version>3.5.5</mybatis-plus.version>
         <postgresql.version>42.2.27</postgresql.version>
         <flyway.version>8.5.13</flyway.version>
-        <springdoc.version>1.7.0</springdoc.version>
         <snakeyaml.version>1.33</snakeyaml.version>
     </properties>
 
@@ -32,20 +30,7 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-security</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.baomidou</groupId>
-            <artifactId>mybatis-plus-boot-starter</artifactId>
-            <version>${mybatis-plus.version}</version>
         </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>
@@ -59,22 +44,13 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-redis</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springdoc</groupId>
-            <artifactId>springdoc-openapi-ui</artifactId>
-            <version>${springdoc.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.springframework.security</groupId>
-            <artifactId>spring-security-test</artifactId>
-            <scope>test</scope>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>${snakeyaml.version}</version>
         </dependency>
     </dependencies>
 
