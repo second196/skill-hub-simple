@@ -5,8 +5,6 @@ description: Use when an AI coding agent needs to operate SkillHub CLI, upload a
 
 # SkillHub CLI
 
-Read [docs/skillhub-cli-installation-guide.md](../docs/skillhub-cli-installation-guide.md) for the complete CLI usage guide.
-
 ## CLI entry points
 
 The npm package exposes two equivalent executable names:
@@ -149,4 +147,3 @@ When an agent receives a SkillHub task:
 5. Add `--json` when the output will be parsed by another program.
 6. Add `--service-url` whenever the backend is not `http://127.0.0.1:8080`.
 
-Do not invent commands such as login, token, publish, remove, audit, telemetry, governance, policy, runtime, review, or `skill add`; they are not part of this CLI.

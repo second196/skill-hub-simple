@@ -21,7 +21,7 @@ skillhub --help
 Agent 使用标准的 `npx skills add`：
 
 ```bash
-npx skills add https://github.com/K-Dense-AI/scientific-agent-skills/tree/main/skills/paper-analysis
+npx skills add https://github.com/second196/skill-hub-simple/skill
 ```
 
 通用写法：
