@@ -1,5 +1,5 @@
 ---
-name: skillhub-cli
+name: skillhub-cli-operation-guide
 description: Use when an AI coding agent needs to operate SkillHub CLI, upload a skill package, list platform skills, install a platform skill, or follow the GitHub-hosted SkillHub CLI guide.
 ---
 

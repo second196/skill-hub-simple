@@ -1,144 +1,35 @@
-.file-layout {
-  height: clamp(680px, 75vh, 900px);
-  min-height: 0;
-}
-
-.file-tree {
-  min-height: 0;
-}
-
-.file-content {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
-}
-
-.file-content pre {
-  min-height: 0;
-  max-height: none;
-  flex: 1;
-}
-
-.version-browser {
-  display: grid;
-  grid-template-columns: 210px 280px minmax(0, 1fr);
-  height: clamp(680px, 75vh, 900px);
-  padding: 0;
-  overflow: hidden;
-}
-
-.version-list {
-  min-height: 0;
-  overflow: auto;
-  border-right: 1px solid #dce3e9;
-}
-
-.version-column-title {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  height: 50px;
-  padding: 0 14px;
-  border-bottom: 1px solid #dce3e9;
-  background: #fff;
-  color: #263746;
-  font-weight: 700;
-}
-
-.version-item {
-  display: flex;
-  min-width: 0;
-  border-bottom: 1px solid #edf0f2;
-}
-
-.version-item.selected {
-  background: #e8f2f9;
-  box-shadow: inset 3px 0 #1474b8;
-}
-
-.version-select {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 3px;
-  padding: 12px 8px 12px 14px;
-  background: transparent;
-  color: #304758;
-  text-align: left;
-}
-
-.version-select:hover {
-  color: #1474b8;
-}
-
-.version-select span {
-  color: #71818d;
-  font-size: 12px;
-}
-
-.version-select code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.version-download {
-  display: inline-flex;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
-  align-items: center;
-  justify-content: center;
-  align-self: center;
-  margin-right: 8px;
-  border-radius: 4px;
-  color: #536b7b;
-}
-
-.version-download:hover {
-  background: #fff;
-  color: #1474b8;
-}
-
-.version-tree {
-  padding: 0 8px 12px;
-}
-
-.version-tree .version-column-title {
-  margin: 0 -8px 8px;
-}
-
-.version-file-content {
-  min-width: 0;
-  min-height: 0;
-}
-
-.version-message {
-  margin: auto;
-  color: #708391;
-}
-
+.file-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); height: clamp(680px, 75vh, 900px); min-height: 0; padding: 0; overflow: hidden; }
+.file-tree, .version-list { min-height: 0; overflow: auto; border-color: var(--color-border); }
+.file-content { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 22px; background: #fff; }
+.file-content pre { min-height: 0; max-height: none; flex: 1; margin: 0; padding: 20px; overflow: auto; color: #344054; background: #f8faff; border: 1px solid #e2e8f5; border-radius: 14px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; line-height: 1.75; }
+.file-tree { padding: 16px 10px; background: #fbfcff; border-right: 1px solid var(--color-border); }
+.tree-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; padding-right: 10px; color: #667085; text-align: left; background: transparent; border-radius: 10px; transition: color var(--motion-fast) ease, background var(--motion-fast) ease; }
+.tree-item:hover { color: var(--color-foreground); background: #eef3ff; }
+.tree-item.selected { color: var(--color-primary-dark); background: #e7edff; font-weight: 700; }
+.tree-item.root { color: var(--color-foreground); font-weight: 750; }
+.tree-item svg { flex: 0 0 auto; }
+.tree-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-chevron { margin-left: auto; color: #98a2b3; }
+.file-title { margin-bottom: 16px; padding-bottom: 14px; color: var(--color-foreground); border-bottom: 1px solid var(--color-border); }
+.file-title span { color: var(--color-muted-foreground); font-size: 11px; }
+.version-browser { display: grid; grid-template-columns: 220px 290px minmax(0, 1fr); height: clamp(680px, 75vh, 900px); padding: 0; overflow: hidden; }
+.version-list { border-right: 1px solid var(--color-border); }
+.version-column-title { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; height: 52px; padding: 0 14px; color: var(--color-foreground); background: rgba(255, 255, 255, .96); border-bottom: 1px solid var(--color-border); font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.version-item { display: flex; min-width: 0; border-bottom: 1px solid #edf3f1; }
+.version-item.selected { background: #eef3ff; box-shadow: inset 3px 0 var(--color-primary); }
+.version-select { display: grid; min-width: 0; flex: 1; gap: 3px; padding: 12px 8px 12px 14px; color: var(--color-foreground); text-align: left; background: transparent; }
+.version-select:hover { color: var(--color-primary-dark); }
+.version-select span { color: var(--color-muted-foreground); font-size: 11px; }
+.version-select code { overflow: hidden; color: #78908b; text-overflow: ellipsis; white-space: nowrap; }
+.version-download { display: inline-flex; width: 36px; height: 36px; flex: 0 0 36px; align-items: center; justify-content: center; align-self: center; margin-right: 7px; color: #708681; border-radius: 8px; }
+.version-download:hover { color: var(--color-primary-dark); background: #eef3ff; }
+.version-tree { padding: 0 8px 12px; }
+.version-tree .version-column-title { margin: 0 -8px 8px; }
+.version-file-content { min-width: 0; min-height: 0; }
+.version-message { margin: auto; color: var(--color-muted-foreground); }
 @media (max-width: 800px) {
-  .file-layout {
-    height: clamp(720px, 82vh, 900px);
-    grid-template-rows: minmax(160px, 240px) minmax(0, 1fr);
-  }
-
-  .file-tree {
-    max-height: none;
-  }
-
-  .version-browser {
-    height: clamp(900px, 110vh, 1100px);
-    grid-template-columns: 1fr;
-    grid-template-rows: 180px 240px minmax(0, 1fr);
-  }
-
-  .version-list,
-  .version-tree {
-    border-right: 0;
-    border-bottom: 1px solid #dce3e9;
-  }
+  .file-layout { height: clamp(720px, 82vh, 900px); grid-template-columns: 1fr; grid-template-rows: minmax(160px, 240px) minmax(0, 1fr); }
+  .file-tree { max-height: none; border-right: 0; border-bottom: 1px solid var(--color-border); }
+  .version-browser { height: clamp(900px, 110vh, 1100px); grid-template-columns: 1fr; grid-template-rows: 180px 240px minmax(0, 1fr); }
+  .version-list, .version-tree { border-right: 0; border-bottom: 1px solid var(--color-border); }
 }

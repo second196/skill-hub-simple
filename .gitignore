@@ -3,6 +3,8 @@
 *.local
 .env.*
 docs/superpowers/
+design-system/
+.skills/
 # ===== Claude Code =====
 .claude/
 

@@ -21,7 +21,7 @@ skillhub --help
 Agent 使用标准的 `npx skills add`：
 
 ```bash
-npx skills add https://github.com/second196/skill-hub-simple/skill
+npx skills add https://github.com/second196/skill-hub-simple/tree/main/skill
 ```
 
 通用写法：
