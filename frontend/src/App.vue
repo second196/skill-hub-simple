@@ -35,7 +35,8 @@ const skills = ref<Skill[]>([])
 const loading = ref(false)
 const error = ref('')
 
-const uploadFile = ref<File | null>(null)
+type UploadItem = { file: File; status: 'pending' | 'uploading' | 'success' | 'error'; message?: string; slug?: string }
+const uploadFiles = ref<UploadItem[]>([])
 const uploadCategory = ref('')
 const uploadBusy = ref(false)
 const uploadError = ref('')
@@ -223,17 +224,31 @@ async function selectVersionFile(path: string) {
 }
 
 async function upload() {
-  if (!uploadFile.value) return
+  if (!uploadFiles.value.length) return
   uploadBusy.value = true
   uploadError.value = ''
+  uploadFiles.value = uploadFiles.value.map((item) => ({ ...item, status: 'pending', message: undefined, slug: undefined }))
+  let firstSlug = ''
   try {
-    const form = new FormData()
-    form.append('file', uploadFile.value)
-    form.append('category', uploadCategory.value)
-    const result = await request<SkillDetail>('/api/skills', { method: 'POST', body: form })
-    uploadFile.value = null
+    for (const item of uploadFiles.value) {
+      item.status = 'uploading'
+      try {
+        const form = new FormData()
+        form.append('file', item.file)
+        form.append('category', uploadCategory.value)
+        const result = await request<SkillDetail>('/api/skills', { method: 'POST', body: form })
+        item.status = 'success'
+        item.slug = result.slug
+        firstSlug ||= result.slug
+      } catch (e) {
+        item.status = 'error'
+        item.message = e instanceof Error ? e.message : '上传失败'
+      }
+    }
     await loadCategories()
-    await router.push(`/skills/${result.slug}`)
+    if (firstSlug && uploadFiles.value.every((item) => item.status === 'success')) {
+      await router.push(`/skills/${firstSlug}`)
+    }
   } catch (e) {
     uploadError.value = e instanceof Error ? e.message : '上传失败'
   } finally {
@@ -484,20 +499,30 @@ onMounted(() => {
             </div>
 
             <label class="drop" for="skill-file">
-              <input id="skill-file" class="file-input" type="file" accept=".zip,.md" @change="uploadFile = ($event.target as HTMLInputElement).files?.[0] || null" />
+              <input id="skill-file" class="file-input" type="file" accept=".zip,.md" multiple @change="uploadFiles = Array.from(($event.target as HTMLInputElement).files || []).map((file) => ({ file, status: 'pending' }))" />
               <span class="drop-topline">
                 <span class="drop-icon"><Upload :size="22" :stroke-width="1.8" aria-hidden="true" /></span>
                 <span class="drop-action">选择文件</span>
               </span>
-              <span class="drop-title">{{ uploadFile?.name || '上传技能包' }}</span>
-              <span class="drop-subtitle">{{ uploadFile ? '文件已选择，可以提交发布' : '支持 ZIP 或单个 SKILL.md 文件' }}</span>
+              <span class="drop-title">{{ uploadFiles.length ? `已选择 ${uploadFiles.length} 个文件` : '上传技能包' }}</span>
+              <span class="drop-subtitle">{{ uploadFiles.length ? '可以提交批量发布' : '支持 ZIP、目录压缩包或多个 SKILL.md 文件' }}</span>
             </label>
+
+            <div v-if="uploadFiles.length" class="upload-queue" aria-live="polite">
+              <div v-for="item in uploadFiles" :key="item.file.name + item.file.lastModified" class="upload-queue-item">
+                <span class="upload-queue-name">{{ item.file.name }}</span>
+                <span v-if="item.status === 'pending'" class="upload-queue-status">等待上传</span>
+                <span v-else-if="item.status === 'uploading'" class="upload-queue-status">上传中</span>
+                <span v-else-if="item.status === 'success'" class="upload-queue-status success">已完成</span>
+                <span v-else class="upload-queue-status error">失败：{{ item.message }}</span>
+              </div>
+            </div>
 
             <p v-if="uploadError" class="error">{{ uploadError }}</p>
 
             <div class="upload-actions">
               <RouterLink class="secondary" to="/search">返回搜索</RouterLink>
-              <button class="primary" :disabled="uploadBusy || !uploadFile">{{ uploadBusy ? '上传中...' : '发布技能' }}</button>
+              <button class="primary" :disabled="uploadBusy || !uploadFiles.length">{{ uploadBusy ? '批量上传中...' : `发布 ${uploadFiles.length || ''} 个技能` }}</button>
             </div>
           </div>
 
@@ -505,7 +530,7 @@ onMounted(() => {
             <p class="eyebrow">发布说明</p>
             <h2>准备好你的技能包</h2>
             <div class="note-list">
-              <p>ZIP 根目录或单文件都需要包含完整的 SKILL.md frontmatter。</p>
+              <p>每个文件会独立上传，复合技能包会保留完整目录结构。</p>
               <p>也可以直接交给Agent创建并上传。</p>
             </div>
           </aside>

@@ -40,21 +40,23 @@ skillhub --version
 
 ## Supported commands
 
-### 1. Upload a skill
+### 1. Upload one or more skills
 
 Syntax:
 
 ```bash
-skillhub upload <input-path> [options]
+skillhub upload <input-path...> [options]
 ```
 
-`<input-path>` may be a ZIP archive, a skill directory, or a single `SKILL.md` file.
+Each input may be a ZIP archive, a skill directory, or a single `SKILL.md` file. Inputs are uploaded independently; one failure does not stop the remaining inputs.
 
 Options:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--category <category>` | `其他` | Category stored with the skill. |
+| `--name <name>` | auto-generated | Override the generated name of a composite package. |
+| `--description <description>` | auto-generated | Override the generated description of a composite package. |
 | `--service-url <url>` | `http://127.0.0.1:8080` | SkillHub backend address. |
 | `--json` | off | Print a machine-readable JSON result. |
 
@@ -64,12 +66,15 @@ Examples:
 skillhub upload ./my-skill.zip --category 研发
 skillhub upload ./my-skill --category 研发 --service-url http://127.0.0.1:8080
 skillhub upload ./my-skill/SKILL.md --category 工具
+skillhub upload ./skill-a ./skill-b --category 研发
 skillhub upload ./my-skill.zip --category 研发 --json
 ```
 
 Package requirements:
 
-- The package must contain a root-level `SKILL.md` after automatic root-directory normalization.
+- If a package has a root-level `SKILL.md`, the complete package is uploaded and nested skills remain ordinary files inside it.
+- If a package has no root-level `SKILL.md` but contains one or more nested `SKILL.md` files, treat it as one composite package. The CLI and server generate a root entry file, preserve the complete tree, and must not select or upload one nested skill separately.
+- Composite package metadata is generated from package metadata, README content, the input name, or a generic fallback. Use `--name` and `--description` when the caller needs to override it.
 - `SKILL.md` must be UTF-8 Markdown with YAML frontmatter.
 - Frontmatter requires `name` and `description`.
 - `version` is optional; when omitted, the CLI uses `0.0.0`.
@@ -117,12 +122,12 @@ Options:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--target <directory>` | `.skills` | Parent directory for installation. |
+| `--target <directory>` | user scope | Explicit project or custom installation parent. |
 | `--version <digest>` | latest/default server version | Version digest to download. |
 | `--service-url <url>` | `http://127.0.0.1:8080` | SkillHub backend address. |
 | `--json` | off | Print a machine-readable JSON result. |
 
-The CLI creates the final directory as `<target>/<slug>`.
+Without `--target`, the CLI installs to SkillHub's user-level storage and exposes the skill through detected Agent user-level skill directories. With `--target`, the final directory is `<target>/<slug>`.
 
 Examples:
 
@@ -134,7 +139,7 @@ skillhub install using-product-development --version <version-digest>
 skillhub install using-product-development --service-url http://127.0.0.1:8080 --json
 ```
 
-The normal text result contains the slug, final directory, and extracted file count. With `--json`, the result contains `ok`, `slug`, `target`, and `fileCount`.
+The normal text result contains the slug, final directory, extracted file count, and detected Agent entry points. With `--json`, the result also includes `userInstall` and `agentLinks`.
 
 ## Agent operating workflow
 
@@ -142,8 +147,7 @@ When an agent receives a SkillHub task:
 
 1. Use `skillhub list` if the user asks what skills are available.
 2. Resolve the requested skill's `slug` from the list output.
-3. Use `skillhub install <slug> --target <directory>` to install it.
+3. Use `skillhub install <slug>` to install it in user scope. Use `--target <directory>` only when the user explicitly requests a project or custom directory.
 4. Use `skillhub upload <path> --category <category>` only when the user explicitly asks to publish a local skill.
 5. Add `--json` when the output will be parsed by another program.
 6. Add `--service-url` whenever the backend is not `http://127.0.0.1:8080`.
-

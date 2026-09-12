@@ -181,20 +181,31 @@ http://127.0.0.1:8080
 命令格式：
 
 ```bash
-skillhub upload <input-path> [options]
+skillhub upload <input-path...> [options]
 ```
 
-`<input-path>` 支持：
+`<input-path...>` 可以一次传入一个或多个：
 
 - ZIP 文件
 - Skill 目录
 - 单个 `SKILL.md` 文件
+
+批量上传示例：
+
+```bash
+skillhub upload ./skill-a ./skill-b ./skill-c --category 研发
+skillhub upload ./skill-a.zip ./skill-b.zip --category 工具 --json
+```
+
+每个输入会独立处理，一个失败不会阻止其他输入；命令结束时会汇总成功和失败结果。批量命令只要存在失败项，就会返回非 0 退出码。
 
 选项：
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--category <category>` | `其他` | 技能分类 |
+| `--name <name>` | 自动生成 | 没有根目录 `SKILL.md` 的复合包名称覆盖值 |
+| `--description <description>` | 自动生成 | 没有根目录 `SKILL.md` 的复合包描述覆盖值 |
 | `--service-url <url>` | `http://127.0.0.1:8080` | SkillHub 后端地址 |
 | `--json` | 关闭 | 输出 JSON |
 
@@ -210,7 +221,9 @@ skillhub upload ./my-skill.zip --category 研发 --json
 
 上传包要求：
 
-- 根目录最终必须包含 `SKILL.md`；CLI 会自动处理只有一层外层目录的 ZIP。
+- 有根目录 `SKILL.md` 时，整个目录或 ZIP 会作为一个完整 Skill 上传，嵌套的子 Skill 和其他资源会原样保留。
+- 没有根目录 `SKILL.md` 但包含多个嵌套 `SKILL.md` 时，CLI 和后端会识别为复合 Skill，自动生成根入口文件，不会选择或拆分某一个子 Skill。
+- 复合 Skill 的名称和描述会依次从包内标准配置、README 标题和正文、输入目录或 ZIP 名称中生成；可以使用 `--name` 和 `--description` 覆盖。
 - `SKILL.md` 必须使用 UTF-8 编码并包含 YAML frontmatter。
 - frontmatter 必须包含 `name` 和 `description`。
 - `version` 可选；省略时使用 `0.0.0`。
@@ -256,12 +269,12 @@ skillhub install <slug> [options]
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--target <directory>` | `.skills` | 安装目标的父目录 |
+| `--target <directory>` | 用户级目录 | 显式指定项目或自定义安装目录 |
 | `--version <digest>` | 最新版本 | 指定版本摘要 |
 | `--service-url <url>` | `http://127.0.0.1:8080` | SkillHub 后端地址 |
 | `--json` | 关闭 | 输出 JSON |
 
-最终安装目录为 `<target>/<slug>`。
+不传 `--target` 时，CLI 会把技能保存到 SkillHub 的用户级存储，并为检测到的 Agent 创建用户级入口。传入 `--target` 时，最终目录为 `<target>/<slug>`，用于明确的项目级或自定义安装。
 
 示例：
 
@@ -273,7 +286,7 @@ skillhub install using-product-development --version <version-digest>
 skillhub install using-product-development --service-url http://192.168.1.10:8080 --json
 ```
 
-`install` 会下载平台生成的 ZIP，并在本地解压到目标目录。需要让 Agent 使用时，通常把目标设为项目的 `.skills` 目录；Agent 专用 Skill 的安装位置由 `npx skills add` 自动处理。
+`install` 会下载平台生成的 ZIP 并解压。无 `--target` 时，CLI 会根据操作系统使用用户级存储，并检测常见 Agent 的用户级技能目录，优先创建目录链接，不能链接时回退为复制。这样切换项目后仍然可以使用同一份技能。
 
 ### 6. Agent 操作 Skill
 
@@ -286,9 +299,9 @@ npx skills add https://github.com/second196/skill-hub-simple/tree/main/skill
 安装后，Agent 可以根据该说明调用：
 
 ```bash
-skillhub upload <path> --category <category>
+skillhub upload <path> [<path> ...] --category <category>
 skillhub list
-skillhub install <slug> --target <directory>
+skillhub install <slug>
 ```
 
 ## 三、项目架构
@@ -332,7 +345,7 @@ flowchart LR
   A[Web 前端] -->|HTTP /api/skills| B[Spring Boot 后端]
   C[SkillHub CLI] -->|HTTP 上传 查询 下载| B
   B --> D[(PostgreSQL)]
-  C -->|解压到 target/slug| E[本地 Skill 目录]
+  C -->|用户级存储与 Agent 入口| E[本地 Skill 目录]
   B -->|返回文件树或 ZIP| A
 ```
 

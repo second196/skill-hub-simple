@@ -17,6 +17,11 @@ export interface SkillPackageMetadata {
   version: string
 }
 
+export interface SkillMetadataOverrides {
+  name?: string
+  description?: string
+}
+
 export interface SkillPackageManifestEntry {
   path: string
   size: number

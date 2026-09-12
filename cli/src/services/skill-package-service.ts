@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { lstat, readFile, readdir } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
+import { basename, extname, join, relative, resolve } from 'node:path'
 import { parseDocument } from 'yaml'
 import { z } from 'zod'
 import { createArchive, readArchive, resolvePackageLimits } from '../platform/archive.js'
@@ -10,6 +10,7 @@ import {
   type PackageFile,
   type PackageLimitOverrides,
   type PreparedSkillPackage,
+  type SkillMetadataOverrides,
   type SkillPackageManifestEntry,
   type SkillPackageMetadata
 } from '../shared/types.js'
@@ -23,7 +24,8 @@ const metadataSchema = z.object({
 
 export async function prepareSkillPackage(
   inputPath: string,
-  overrides: PackageLimitOverrides = {}
+  overrides: PackageLimitOverrides = {},
+  metadataOverrides: SkillMetadataOverrides = {}
 ): Promise<PreparedSkillPackage> {
   const limits = resolvePackageLimits(overrides)
   let inputStat
@@ -73,7 +75,10 @@ export async function prepareSkillPackage(
     throw new PackageValidationError('Skill 包不能为空', 'EMPTY_SKILL_PACKAGE')
   }
   files = normalizePackageRoot(files)
-  if (sourceType === 'ZIP') archive = createArchive(files, overrides)
+  if (!files.some((file) => file.path === 'SKILL.md')) {
+    files = addGeneratedRootSkill(files, inputPath, metadataOverrides)
+  }
+  archive = createArchive(files, overrides)
   const skillFile = files.find((file) => file.path === 'SKILL.md')
   if (skillFile === undefined) {
     throw new PackageValidationError('Skill 包根目录缺少 SKILL.md', 'SKILL_FILE_REQUIRED')
@@ -100,6 +105,94 @@ function normalizePackageRoot(files: PackageFile[]): PackageFile[] {
   const prefix = skillFiles[0].path.slice(0, -'SKILL.md'.length)
   if (!files.every((file) => file.path.startsWith(prefix))) return files
   return files.map((file) => ({ ...file, path: file.path.slice(prefix.length) }))
+}
+
+function addGeneratedRootSkill(
+  files: PackageFile[],
+  inputPath: string,
+  metadataOverrides: SkillMetadataOverrides
+): PackageFile[] {
+  const nestedSkillCount = files.filter((file) => file.path.endsWith('/SKILL.md')).length
+  if (nestedSkillCount === 0) {
+    throw new PackageValidationError('Skill 包根目录缺少 SKILL.md', 'SKILL_FILE_REQUIRED')
+  }
+
+  const packageMetadata = readPackageMetadata(files)
+  const fallbackName = basename(inputPath, extname(inputPath)).trim() || 'composite-skill'
+  const name = cleanMetadataValue(metadataOverrides.name || packageMetadata.name || readmeTitle(files) || fallbackName, fallbackName, 100)
+  const description = cleanMetadataValue(
+    metadataOverrides.description
+      || packageMetadata.description
+      || readmeDescription(files)
+      || `复合技能包，包含 ${nestedSkillCount} 个子技能。`,
+    `复合技能包，包含 ${nestedSkillCount} 个子技能。`,
+    2000
+  )
+  const body = [
+    '---',
+    `name: ${yamlQuote(name)}`,
+    `description: ${yamlQuote(description)}`,
+    'version: 0.0.0',
+    '---',
+    '',
+    `# ${name}`,
+    '',
+    '这是一个复合技能包，包含若干可独立使用的子技能。子技能及其资源保留在原始目录结构中。',
+    ''
+  ].join('\n')
+  return [{ path: 'SKILL.md', content: new TextEncoder().encode(body) }, ...files]
+}
+
+function readPackageMetadata(files: PackageFile[]): { name?: string; description?: string } {
+  for (const path of ['package.json', '.codex-plugin/plugin.json']) {
+    const file = files.find((item) => item.path === path)
+    if (file === undefined) continue
+    try {
+      const value = JSON.parse(new TextDecoder().decode(file.content)) as Record<string, unknown>
+      return {
+        name: typeof value.name === 'string' ? value.name : undefined,
+        description: typeof value.description === 'string' ? value.description : undefined
+      }
+    } catch {
+      continue
+    }
+  }
+  return {}
+}
+
+function readmeTitle(files: PackageFile[]): string | undefined {
+  const readme = readTextFile(files, 'README.md')
+  return readme?.match(/^#\s+(.+?)\s*$/m)?.[1]?.trim()
+}
+
+function readmeDescription(files: PackageFile[]): string | undefined {
+  const readme = readTextFile(files, 'README.md')
+  if (!readme) return undefined
+  const withoutTitle = readme.replace(/^#\s+.+?\s*$/m, '')
+  const paragraph = withoutTitle
+    .split(/\r?\n\s*\r?\n/)
+    .map((item) => item.replace(/^\s*[-*>`#].*$/gm, '').replace(/\s+/g, ' ').trim())
+    .find((item) => item.length > 0)
+  return paragraph
+}
+
+function readTextFile(files: PackageFile[], path: string): string | undefined {
+  const file = files.find((item) => item.path.toLowerCase() === path.toLowerCase())
+  if (!file) return undefined
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(file.content)
+  } catch {
+    return undefined
+  }
+}
+
+function cleanMetadataValue(value: string, fallback: string, maxLength: number): string {
+  const cleaned = value.trim().replace(/\s+/g, ' ').slice(0, maxLength)
+  return cleaned || fallback
+}
+
+function yamlQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
 }
 
 async function readDirectoryFiles(

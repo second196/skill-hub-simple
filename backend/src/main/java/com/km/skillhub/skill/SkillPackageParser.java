@@ -17,6 +17,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.HashMap;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -40,6 +42,7 @@ public class SkillPackageParser {
         if (bytes == null || bytes.length == 0) throw new IllegalArgumentException("上传文件不能为空");
         if (bytes.length > maxPackageBytes) throw new IllegalArgumentException("上传文件超过大小限制");
         List<SkillPackage.FileEntry> files = isMarkdown(filename) ? singleFile(bytes) : normalizePackageRoot(unzip(filename, bytes));
+        if (!hasRootSkill(files)) files = addGeneratedRootSkill(files, filename);
         SkillPackage.FileEntry skillFile = null;
         for (SkillPackage.FileEntry file : files) if ("SKILL.md".equals(file.getPath())) skillFile = file;
         if (skillFile == null) throw new IllegalArgumentException("Skill 根目录必须包含 SKILL.md");
@@ -109,6 +112,116 @@ public class SkillPackageParser {
             normalized.add(entry(file.getPath().substring(prefix.length()), file.getContent()));
         }
         return normalized;
+    }
+
+    private boolean hasRootSkill(List<SkillPackage.FileEntry> files) {
+        for (SkillPackage.FileEntry file : files) if ("SKILL.md".equals(file.getPath())) return true;
+        return false;
+    }
+
+    private List<SkillPackage.FileEntry> addGeneratedRootSkill(List<SkillPackage.FileEntry> files, String filename) {
+        int nestedSkillCount = 0;
+        for (SkillPackage.FileEntry file : files) if (file.getPath().endsWith("/SKILL.md")) nestedSkillCount++;
+        if (nestedSkillCount == 0) throw new IllegalArgumentException("Skill 根目录必须包含 SKILL.md");
+
+        Map<String, String> packageMetadata = packageMetadata(files);
+        String fallbackName = baseName(filename);
+        String name = cleanMetadata(
+                packageMetadata.get("name"),
+                firstNonBlank(readmeTitle(files), fallbackName, "composite-skill"),
+                100);
+        String description = cleanMetadata(
+                packageMetadata.get("description"),
+                firstNonBlank(readmeDescription(files), "复合技能包，包含 " + nestedSkillCount + " 个子技能。"),
+                2048);
+        String generated = "---\n"
+                + "name: " + yamlQuote(name) + "\n"
+                + "description: " + yamlQuote(description) + "\n"
+                + "version: 0.0.0\n"
+                + "---\n\n"
+                + "# " + name + "\n\n"
+                + "这是一个复合技能包，包含若干可独立使用的子技能。子技能及其资源保留在原始目录结构中。\n";
+        List<SkillPackage.FileEntry> result = new ArrayList<SkillPackage.FileEntry>(files.size() + 1);
+        result.add(entry("SKILL.md", generated.getBytes(StandardCharsets.UTF_8)));
+        result.addAll(files);
+        return result;
+    }
+
+    private Map<String, String> packageMetadata(List<SkillPackage.FileEntry> files) {
+        Map<String, String> result = new HashMap<String, String>();
+        String[] candidates = new String[] {"package.json", ".codex-plugin/plugin.json"};
+        for (String path : candidates) {
+            String content = textFile(files, path);
+            if (content == null) continue;
+            try {
+                Object value = new Yaml(new SafeConstructor(new LoaderOptions())).load(content);
+                if (!(value instanceof Map)) continue;
+                Map<?, ?> map = (Map<?, ?>) value;
+                if (map.get("name") instanceof String) result.put("name", ((String) map.get("name")).trim());
+                if (map.get("description") instanceof String) result.put("description", ((String) map.get("description")).trim());
+                if (!result.isEmpty()) return result;
+            } catch (RuntimeException ignored) {
+                // Invalid optional metadata should not prevent a valid composite package from uploading.
+            }
+        }
+        return result;
+    }
+
+    private String readmeTitle(List<SkillPackage.FileEntry> files) {
+        String readme = textFile(files, "README.md");
+        if (readme == null) return null;
+        Matcher matcher = Pattern.compile("(?m)^#\\s+(.+?)\\s*$").matcher(readme);
+        return matcher.find() ? matcher.group(1).trim() : null;
+    }
+
+    private String readmeDescription(List<SkillPackage.FileEntry> files) {
+        String readme = textFile(files, "README.md");
+        if (readme == null) return null;
+        String withoutTitle = readme.replaceFirst("(?m)^#\\s+.+?\\s*$", "");
+        String[] paragraphs = withoutTitle.split("\\r?\\n\\s*\\r?\\n");
+        for (String paragraph : paragraphs) {
+            String cleaned = paragraph.replaceAll("(?m)^\\s*[-*>`#].*$", "")
+                    .replaceAll("\\s+", " ").trim();
+            if (!cleaned.isEmpty()) return cleaned;
+        }
+        return null;
+    }
+
+    private String textFile(List<SkillPackage.FileEntry> files, String path) {
+        for (SkillPackage.FileEntry file : files) {
+            if (!path.equalsIgnoreCase(file.getPath())) continue;
+            try {
+                return new String(file.getContent(), StandardCharsets.UTF_8);
+            } catch (RuntimeException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private String baseName(String filename) {
+        if (filename == null || filename.trim().isEmpty()) return "composite-skill";
+        String value = filename.replace('\\', '/');
+        int slash = value.lastIndexOf('/');
+        if (slash >= 0) value = value.substring(slash + 1);
+        if (value.toLowerCase().endsWith(".zip")) value = value.substring(0, value.length() - 4);
+        return value.trim().isEmpty() ? "composite-skill" : value.trim();
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) if (value != null && !value.trim().isEmpty()) return value.trim();
+        return "composite-skill";
+    }
+
+    private String cleanMetadata(String value, String fallback, int max) {
+        String candidate = value == null ? "" : value.trim().replaceAll("\\s+", " ");
+        if (candidate.isEmpty()) candidate = fallback;
+        if (candidate.length() > max) candidate = candidate.substring(0, max).trim();
+        return candidate.isEmpty() ? fallback : candidate;
+    }
+
+    private String yamlQuote(String value) {
+        return "'" + value.replace("'", "''") + "'";
     }
 
     private Map<?, ?> parseFrontmatter(byte[] bytes) {
