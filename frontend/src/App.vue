@@ -85,7 +85,17 @@ const installationPrompt = computed(() => {
 const copiedInstallationPrompt = ref(false)
 let copyResetTimer: number | undefined
 let installCopyResetTimer: number | undefined
-const renderedMarkdown = computed(() => DOMPurify.sanitize(marked.parse(stripFrontmatter(content.value), { breaks: true }) as string))
+function isMarkdownPath(path?: string) {
+  return !!path && /\.(?:md|markdown|mdx)$/i.test(path)
+}
+
+function renderMarkdownContent(value: string) {
+  return DOMPurify.sanitize(marked.parse(stripFrontmatter(value), { breaks: true }) as string)
+}
+
+const renderedMarkdown = computed(() => renderMarkdownContent(content.value))
+const renderedFileMarkdown = computed(() => isMarkdownPath(selectedFile.value) ? renderMarkdownContent(content.value) : '')
+const renderedVersionMarkdown = computed(() => isMarkdownPath(selectedVersionFile.value) ? renderMarkdownContent(versionContent.value) : '')
 
 function buildFileTree(items: FileItem[]) {
   const root: TreeNode = { key: '__root__', label: detail.value?.name || 'Skill', directory: true, children: [] }
@@ -339,30 +349,65 @@ function runSearch() {
   void router.push({ path: '/search', query: next })
 }
 
-async function copySnippet(value: string) {
+function copyTextFallback(value: string): boolean {
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.setAttribute('aria-hidden', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '0'
+  textarea.style.left = '-9999px'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, textarea.value.length)
   try {
-    await navigator.clipboard.writeText(value)
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
+async function copyText(value: string): Promise<boolean> {
+  // Clipboard API requires a secure context (HTTPS or localhost). The app is
+  // also accessed over a LAN HTTP address, so keep a synchronous fallback.
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return true
+    } catch {
+      // Fall through to the legacy copy path when permission is unavailable.
+    }
+  }
+  return copyTextFallback(value)
+}
+
+async function copySnippet(value: string) {
+  if (await copyText(value)) {
     copiedSnippet.value = true
     if (copyResetTimer !== undefined) window.clearTimeout(copyResetTimer)
     copyResetTimer = window.setTimeout(() => {
       copiedSnippet.value = false
       copyResetTimer = undefined
     }, 1800)
-  } catch {
+  } else {
     copiedSnippet.value = false
   }
 }
 
 async function copyInstallationPrompt() {
-  try {
-    await navigator.clipboard.writeText(installationPrompt.value)
+  if (await copyText(installationPrompt.value)) {
     copiedInstallationPrompt.value = true
     if (installCopyResetTimer !== undefined) window.clearTimeout(installCopyResetTimer)
     installCopyResetTimer = window.setTimeout(() => {
       copiedInstallationPrompt.value = false
       installCopyResetTimer = undefined
     }, 1800)
-  } catch {
+  } else {
     copiedInstallationPrompt.value = false
   }
 }
@@ -691,7 +736,8 @@ function handleGlobalKeydown(event: KeyboardEvent) {
               <strong>{{ selectedFile || '选择文件' }}</strong>
               <span v-if="selectedFile">{{ files.find((item) => item.path === selectedFile)?.size_bytes }} bytes</span>
             </div>
-            <pre>{{ content }}</pre>
+            <article v-if="selectedFile && isMarkdownPath(selectedFile)" class="markdown-body file-markdown" v-html="renderedFileMarkdown"></article>
+            <pre v-else>{{ content }}</pre>
           </div>
         </section>
 
@@ -737,6 +783,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             </div>
             <p v-if="versionLoading" class="version-message">正在加载...</p>
             <p v-else-if="versionError" class="error">{{ versionError }}</p>
+            <article v-else-if="selectedVersionFile && isMarkdownPath(selectedVersionFile)" class="markdown-body file-markdown" v-html="renderedVersionMarkdown"></article>
             <pre v-else-if="selectedVersionFile">{{ versionContent }}</pre>
             <p v-else class="version-message">此版本没有文件。</p>
           </div>

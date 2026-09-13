@@ -2,6 +2,7 @@
 .file-tree, .version-list { min-height: 0; overflow: auto; border-color: var(--color-border); }
 .file-content { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 22px; background: #fff; }
 .file-content pre { min-height: 0; max-height: none; flex: 1; margin: 0; padding: 20px; overflow: auto; color: #344054; background: #f8faff; border: 1px solid #e2e8f5; border-radius: 14px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; line-height: 1.75; }
+.file-markdown { min-height: 0; flex: 1; margin: 0; padding: 20px; overflow: auto; color: #344054; background: #f8faff; border: 1px solid #e2e8f5; border-radius: 14px; }
 .file-tree { padding: 16px 10px; background: #fbfcff; border-right: 1px solid var(--color-border); }
 .tree-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; padding-right: 10px; color: #667085; text-align: left; background: transparent; border-radius: 10px; transition: color var(--motion-fast) ease, background var(--motion-fast) ease; }
 .tree-item:hover { color: var(--color-foreground); background: #eef3ff; }
