@@ -3,6 +3,7 @@ package com.km.skillhub.skill;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -32,8 +33,9 @@ public class SkillController {
     @GetMapping
     public List<Map<String, Object>> list(@RequestParam(required = false) String query,
                                           @RequestParam(required = false) String category,
+                                          @RequestParam(required = false) String status,
                                           @RequestParam(defaultValue = "false") boolean includeOffline) {
-        return repository.list(query, category, includeOffline);
+        return repository.list(query, category, status, includeOffline);
     }
 
     @GetMapping("/categories")
@@ -81,6 +83,12 @@ public class SkillController {
     @PostMapping("/{slug}/offline")
     public ResponseEntity<Void> offline(@PathVariable String slug) {
         repository.offline(slug);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/{slug}")
+    public ResponseEntity<Void> delete(@PathVariable String slug) {
+        repository.delete(slug);
         return ResponseEntity.noContent().build();
     }
 }

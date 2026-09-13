@@ -2,7 +2,7 @@
 
 SkillHub CLI 用于通过命令行上传、查询和安装 SkillHub 平台中的技能。
 
-当前版本：`0.2.0`
+当前版本：`0.2.1`
 
 ## 安装
 
@@ -80,6 +80,8 @@ skillhub upload ./skill-a --category 研发 \
 - 需要固定父级元数据时，可以显式传入 `--name` 和 `--description`。
 
 `SKILL.md` 应使用 UTF-8 编码并包含 YAML frontmatter。`name` 和 `description` 必填，`version` 可省略，省略时使用 `0.0.0`；如果填写，必须是语义化版本号。
+
+CLI 对单个 ZIP、解压后总大小和单个文件的本地预检查上限均为 1GiB，后端也使用相同的 1GiB 业务容量限制。
 
 ### 查询技能
 

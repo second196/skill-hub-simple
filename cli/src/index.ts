@@ -31,7 +31,7 @@ cli.command('install <slug>', '下载并安装技能到本地目录')
   .option('--version <digest>', '指定版本摘要')
   .option('--json', '输出 JSON')
   .action(async (slug, options) => run(() => installCommand({ slug, serviceUrl: options.serviceUrl, target: options.target, version: options.version, json: Boolean(options.json) }), Boolean(options.json)))
-cli.help(); cli.version('0.2.0'); cli.parse()
+cli.help(); cli.version('0.2.1'); cli.parse()
 
 async function run(action: () => Promise<string>, json: boolean): Promise<void> {
   try { process.stdout.write(`${await action()}\n`) } catch (error: unknown) { process.stderr.write(`${formatError(error, json)}\n`); process.exitCode = 1 }

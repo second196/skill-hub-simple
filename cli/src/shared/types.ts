@@ -39,9 +39,9 @@ export interface PreparedSkillPackage {
 }
 
 export const DEFAULT_PACKAGE_LIMITS: PackageLimits = {
-  maxArchiveBytes: 10 * 1024 * 1024,
-  maxExpandedBytes: 100 * 1024 * 1024,
-  maxSingleFileBytes: 10 * 1024 * 1024,
+  maxArchiveBytes: 1024 * 1024 * 1024,
+  maxExpandedBytes: 1024 * 1024 * 1024,
+  maxSingleFileBytes: 1024 * 1024 * 1024,
   maxFiles: 1000,
   maxPathLength: 255
 }

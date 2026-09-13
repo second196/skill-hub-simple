@@ -13,12 +13,21 @@ public class SkillRepository {
 
     public SkillRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
-    public List<Map<String, Object>> list(String query, String category, boolean includeOffline) {
+    public List<Map<String, Object>> list(String query, String category, String status) {
+        return list(query, category, status, false);
+    }
+
+    public List<Map<String, Object>> list(String query, String category, String status, boolean includeOffline) {
         String sql = "SELECT s.id,s.slug,s.name,s.description,s.category,s.status,s.updated_at," +
                 "v.version_label,v.version_digest FROM skill s JOIN LATERAL (SELECT version_label,version_digest " +
                 "FROM skill_version WHERE skill_id=s.id ORDER BY created_at DESC,id DESC LIMIT 1) v ON true WHERE 1=1";
         java.util.ArrayList<Object> args = new java.util.ArrayList<Object>();
-        if (!includeOffline) sql += " AND s.status='ACTIVE'";
+        String normalizedStatus = normalizeStatus(status);
+        if (normalizedStatus == null && !includeOffline) normalizedStatus = "ACTIVE";
+        if (normalizedStatus != null) {
+            sql += " AND s.status=?";
+            args.add(normalizedStatus);
+        }
         if (query != null && !query.trim().isEmpty()) { sql += " AND (LOWER(s.name) LIKE ? OR LOWER(s.description) LIKE ? OR LOWER(s.slug) LIKE ?)"; String q = "%" + query.trim().toLowerCase() + "%"; args.add(q); args.add(q); args.add(q); }
         if (category != null && !category.trim().isEmpty()) { sql += " AND s.category=?"; args.add(category.trim()); }
         sql += " ORDER BY s.updated_at DESC,s.id DESC";
@@ -26,7 +35,7 @@ public class SkillRepository {
     }
 
     public List<String> categories() {
-        return jdbc.queryForList("SELECT DISTINCT category FROM skill WHERE status='ACTIVE' ORDER BY category", String.class);
+        return jdbc.queryForList("SELECT DISTINCT category FROM skill ORDER BY category", String.class);
     }
 
     public Map<String, Object> detail(String slug) {
@@ -98,6 +107,20 @@ public class SkillRepository {
 
     public void offline(String slug) {
         if (jdbc.update("UPDATE skill SET status='OFFLINE',updated_at=CURRENT_TIMESTAMP WHERE slug=?", slug) != 1) throw new IllegalArgumentException("技能不存在");
+    }
+
+    @Transactional
+    public void delete(String slug) {
+        if (jdbc.update("DELETE FROM skill WHERE slug=?", slug) != 1) throw new IllegalArgumentException("技能不存在");
+    }
+
+    private String normalizeStatus(String status) {
+        if (status == null || status.trim().isEmpty()) return null;
+        String normalized = status.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!"ACTIVE".equals(normalized) && !"OFFLINE".equals(normalized)) {
+            throw new IllegalArgumentException("技能状态只能是 ACTIVE 或 OFFLINE");
+        }
+        return normalized;
     }
 
     private String uniqueSlug(String name) {

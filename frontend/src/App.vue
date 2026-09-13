@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import {
   ArrowRight,
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   Check,
@@ -56,6 +57,10 @@ const versionContent = ref('')
 const versionExpandedFolders = ref(new Set<string>(['__root__']))
 const versionLoading = ref(false)
 const versionError = ref('')
+type ConfirmationAction = 'offline' | 'delete'
+const confirmation = ref<{ action: ConfirmationAction; slug: string; name: string } | null>(null)
+const confirmationBusy = ref(false)
+const confirmationError = ref('')
 
 const isHome = computed(() => route.path === '/')
 const isSearch = computed(() => route.path === '/search')
@@ -132,7 +137,7 @@ async function loadSkills() {
     const params = new URLSearchParams()
     if (query.value) params.set('query', query.value)
     if (category.value) params.set('category', category.value)
-    if (includeOffline.value) params.set('includeOffline', 'true')
+    params.set('status', includeOffline.value ? 'OFFLINE' : 'ACTIVE')
     skills.value = await request<Skill[]>(`/api/skills?${params}`)
   } catch (e) {
     error.value = e instanceof Error ? e.message : '技能加载失败'
@@ -256,14 +261,35 @@ async function upload() {
   }
 }
 
-async function offline(slug: string) {
-  if (!window.confirm('确定要下架这个技能吗？')) return
+function openConfirmation(action: ConfirmationAction, skill: Pick<Skill, 'slug' | 'name'>) {
+  confirmation.value = { action, slug: skill.slug, name: skill.name }
+  confirmationError.value = ''
+}
+
+function closeConfirmation() {
+  if (!confirmationBusy.value) confirmation.value = null
+}
+
+async function confirmAction() {
+  const current = confirmation.value
+  if (!current || confirmationBusy.value) return
+  confirmationBusy.value = true
+  confirmationError.value = ''
   try {
-    await request<void>(`/api/skills/${encodeURIComponent(slug)}/offline`, { method: 'POST' })
-    if (isDetail.value) await loadDetail()
-    else await loadSkills()
+    if (current.action === 'offline') {
+      await request<void>(`/api/skills/${encodeURIComponent(current.slug)}/offline`, { method: 'POST' })
+      confirmation.value = null
+      if (isDetail.value) await loadDetail()
+      else await loadSkills()
+    } else {
+      await request<void>(`/api/skills/${encodeURIComponent(current.slug)}`, { method: 'DELETE' })
+      confirmation.value = null
+      await router.push('/search')
+    }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '下架失败'
+    confirmationError.value = e instanceof Error ? e.message : current.action === 'delete' ? '删除失败' : '下架失败'
+  } finally {
+    confirmationBusy.value = false
   }
 }
 
@@ -297,7 +323,7 @@ function runSearch() {
   const next: Record<string, string> = {}
   if (query.value.trim()) next.q = query.value.trim()
   if (category.value) next.category = category.value
-  if (includeOffline.value) next.includeOffline = 'true'
+  next.status = includeOffline.value ? 'OFFLINE' : 'ACTIVE'
   void router.push({ path: '/search', query: next })
 }
 
@@ -318,7 +344,7 @@ async function copySnippet(value: string) {
 const featuredSkillCards = computed(() => featuredSkills.value)
 
 watch(
-  () => [route.path, route.query.q, route.query.category, route.query.includeOffline],
+  () => [route.path, route.query.q, route.query.category, route.query.status, route.query.includeOffline],
   async () => {
     if (isDetail.value) {
       await loadDetail()
@@ -333,7 +359,8 @@ watch(
     if (isSearch.value) {
       query.value = typeof route.query.q === 'string' ? route.query.q : ''
       category.value = typeof route.query.category === 'string' ? route.query.category : ''
-      includeOffline.value = route.query.includeOffline === 'true'
+      const requestedStatus = typeof route.query.status === 'string' ? route.query.status.toUpperCase() : ''
+      includeOffline.value = requestedStatus === 'OFFLINE' || (!requestedStatus && route.query.includeOffline === 'true')
       await loadSkills()
       return
     }
@@ -347,7 +374,16 @@ watch(
 
 onMounted(() => {
   void loadCategories()
+  window.addEventListener('keydown', handleGlobalKeydown)
 })
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
+})
+
+function handleGlobalKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeConfirmation()
+}
 </script>
 
 <template>
@@ -548,7 +584,8 @@ onMounted(() => {
           </div>
           <div class="card-actions">
             <a class="primary link" :href="`/api/skills/${detail.slug}/download?version=${detail.version_digest}`">下载技能</a>
-            <button v-if="detail.status === 'ACTIVE'" class="danger" @click="offline(detail.slug)">下架技能</button>
+            <button v-if="detail.status === 'ACTIVE'" class="danger" @click="openConfirmation('offline', detail)">下架技能</button>
+            <button class="danger" @click="openConfirmation('delete', detail)">删除技能</button>
           </div>
         </header>
 
@@ -641,5 +678,28 @@ onMounted(() => {
 
       <p v-else-if="detailError" class="error">{{ detailError }}</p>
     </main>
+
+    <div v-if="confirmation" class="modal-backdrop" role="presentation" @click.self="closeConfirmation">
+      <section class="confirm-modal" role="dialog" aria-modal="true" :aria-labelledby="`${confirmation.action}-dialog-title`">
+        <div class="confirm-modal-icon" aria-hidden="true">
+          <AlertTriangle :size="22" :stroke-width="1.8" />
+        </div>
+        <p class="eyebrow">{{ confirmation.action === 'delete' ? '永久删除' : '下架确认' }}</p>
+        <h2 :id="`${confirmation.action}-dialog-title`">
+          {{ confirmation.action === 'delete' ? '确定删除这个技能吗？' : '确定下架这个技能吗？' }}
+        </h2>
+        <p class="confirm-modal-copy">
+          {{ confirmation.action === 'delete' ? '删除后将永久移除技能、所有版本和文件，且无法恢复。' : '下架后技能将不再出现在默认的技能市场列表中。' }}
+        </p>
+        <div class="confirm-modal-skill">{{ confirmation.name }}</div>
+        <p v-if="confirmationError" class="error">{{ confirmationError }}</p>
+        <div class="confirm-modal-actions">
+          <button class="secondary" type="button" :disabled="confirmationBusy" @click="closeConfirmation">取消</button>
+          <button class="danger danger-solid" type="button" :disabled="confirmationBusy" @click="confirmAction">
+            {{ confirmationBusy ? '处理中...' : confirmation.action === 'delete' ? '永久删除' : '确认下架' }}
+          </button>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
