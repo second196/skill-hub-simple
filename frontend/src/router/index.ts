@@ -4,6 +4,8 @@ export default createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', component: EmptyRoute },
+    { path: '/discover/:id', component: EmptyRoute },
+    { path: '/discover', component: EmptyRoute },
     { path: '/search', component: EmptyRoute },
     { path: '/publish', component: EmptyRoute },
     { path: '/skills/:slug', component: EmptyRoute }

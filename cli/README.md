@@ -2,7 +2,7 @@
 
 SkillHub CLI 用于通过命令行上传、查询和安装 SkillHub 平台中的技能。
 
-当前版本：`0.2.1`
+当前版本：`0.2.2`
 
 ## 安装
 
@@ -102,6 +102,8 @@ skillhub list --json
 | `--category <category>` | 不筛选 | 按分类筛选 |
 | `--service-url <url>` | `http://127.0.0.1:8080` | SkillHub 服务地址 |
 | `--json` | 关闭 | 输出完整 JSON |
+
+`skillhub list` 只返回当前已上架、可安装的技能；已下架技能不会出现在 CLI 查询结果中。
 
 ### 安装技能
 

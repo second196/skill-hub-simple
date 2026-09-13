@@ -26,3 +26,14 @@ skillhub:
     max-package-bytes: ${SKILLHUB_MAX_PACKAGE_BYTES:1073741824}
     max-expanded-bytes: ${SKILLHUB_MAX_EXPANDED_BYTES:1073741824}
     max-files: ${SKILLHUB_MAX_FILES:100000}
+  discovery:
+    github:
+      # Comma- or space-separated repositories. When empty, the scheduled
+      # sync searches GitHub for the configured topic query.
+      repositories: ${SKILLHUB_DISCOVERY_GITHUB_REPOSITORIES:anthropics/skills,addyosmani/agent-skills,nextlevelbuilder/ui-ux-pro-max-skill,K-Dense-AI/scientific-agent-skills}
+      search-query: ${SKILLHUB_DISCOVERY_GITHUB_SEARCH_QUERY:topic:agent-skills}
+      max-repositories: ${SKILLHUB_DISCOVERY_GITHUB_MAX_REPOSITORIES:12}
+    sync:
+      enabled: ${SKILLHUB_DISCOVERY_SYNC_ENABLED:true}
+      initial-delay-ms: ${SKILLHUB_DISCOVERY_SYNC_INITIAL_DELAY_MS:5000}
+      interval-ms: ${SKILLHUB_DISCOVERY_SYNC_INTERVAL_MS:21600000}

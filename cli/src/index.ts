@@ -20,7 +20,7 @@ cli.command('upload <input-path..>', '上传一个或多个 ZIP、目录或 SKIL
     description: options.description,
     json: Boolean(options.json)
   }), Boolean(options.json)))
-cli.command('list', '查询平台中的全部技能')
+cli.command('list', '查询当前可安装的技能')
   .option('--service-url <url>', 'Skill Hub 服务地址', { default: 'http://127.0.0.1:8080' })
   .option('--category <category>', '按分类筛选')
   .option('--json', '输出 JSON')
@@ -31,7 +31,7 @@ cli.command('install <slug>', '下载并安装技能到本地目录')
   .option('--version <digest>', '指定版本摘要')
   .option('--json', '输出 JSON')
   .action(async (slug, options) => run(() => installCommand({ slug, serviceUrl: options.serviceUrl, target: options.target, version: options.version, json: Boolean(options.json) }), Boolean(options.json)))
-cli.help(); cli.version('0.2.1'); cli.parse()
+cli.help(); cli.version('0.2.2'); cli.parse()
 
 async function run(action: () => Promise<string>, json: boolean): Promise<void> {
   try { process.stdout.write(`${await action()}\n`) } catch (error: unknown) { process.stderr.write(`${formatError(error, json)}\n`); process.exitCode = 1 }
