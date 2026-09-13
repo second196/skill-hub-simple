@@ -482,22 +482,27 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 
           <p v-if="loading" class="empty">正在加载...</p>
           <div v-else class="featured-grid">
-            <article v-for="skill in featuredSkillCards" :key="skill.id" class="skill-card home-card">
+            <RouterLink
+              v-for="skill in featuredSkillCards"
+              :key="skill.id"
+              class="skill-card home-card skill-card-link"
+              :to="`/skills/${skill.slug}`"
+              :aria-label="`查看技能 ${skill.name}`"
+            >
               <div class="card-top">
                 <span class="category">{{ skill.category }}</span>
                 <span :class="['status', skill.status === 'ACTIVE' ? 'active' : 'offline']">{{ skill.status === 'ACTIVE' ? '已上架' : '已下架' }}</span>
               </div>
               <h3>{{ skill.name }}</h3>
               <p>{{ skill.description }}</p>
-              <div class="feature-meta">
-                <span>{{ skill.slug }}</span>
-                <span>v{{ skill.version_label }}</span>
+              <div class="skill-card-footer">
+                <code>{{ skill.slug }} · v{{ skill.version_label }}</code>
+                <span class="download-count">
+                  <Download :size="15" :stroke-width="1.8" aria-hidden="true" />
+                  {{ skill.download_count || 0 }} 次下载
+                </span>
               </div>
-              <div class="card-actions">
-                <RouterLink class="secondary link" :to="`/skills/${skill.slug}`">查看详情</RouterLink>
-                <a class="secondary link" :href="`/api/skills/${encodeURIComponent(skill.slug)}/download?version=${skill.version_digest}`">下载</a>
-              </div>
-            </article>
+            </RouterLink>
           </div>
         </section>
 

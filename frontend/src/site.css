@@ -528,6 +528,25 @@ input::placeholder {
   min-height: 248px;
 }
 
+.featured-grid .home-card {
+  height: 248px;
+  min-height: 248px;
+}
+
+.featured-grid .home-card h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.featured-grid .home-card p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
 .skill-grid .skill-card h3 {
   display: -webkit-box;
   overflow: hidden;
