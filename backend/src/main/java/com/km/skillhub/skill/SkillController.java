@@ -76,6 +76,7 @@ public class SkillController {
                 zip.closeEntry();
             }
         }
+        repository.incrementDownloadCount(slug);
         return ResponseEntity.ok().header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + slug + ".zip\"")
                 .contentType(MediaType.parseMediaType("application/zip")).body(output.toByteArray());
     }

@@ -19,7 +19,7 @@ import {
   Upload
 } from '@lucide/vue'
 
-type Skill = { id:number; slug:string; name:string; description:string; category:string; status:string; version_label:string; version_digest:string }
+type Skill = { id:number; slug:string; name:string; description:string; category:string; status:string; version_label:string; version_digest:string; download_count:number }
 type SkillVersion = { version_label:string; version_digest:string; created_at:string }
 type SkillDetail = Skill & { version_id:number; versions:SkillVersion[] }
 type FileItem = { path:string; content_type:string; size_bytes:number; content_digest:string }
@@ -72,7 +72,19 @@ const featuredSkills = computed(() => activeSkills.value.slice(0, 6))
 
 const quickStartSnippet = '帮我安装skillhub-cli：https://github.com/second196/skill-hub-simple/blob/main/docs/skillhub-cli-installation-guide.md'
 const copiedSnippet = ref(false)
+const installationPrompt = computed(() => {
+  if (!detail.value) return ''
+  return [
+    `请帮我安装技能：${detail.value.name}`,
+    '',
+    `技能标识：${detail.value.slug}`,
+    '',
+    `请使用 skillhub install ${detail.value.slug} 完成安装。`
+  ].join('\n')
+})
+const copiedInstallationPrompt = ref(false)
 let copyResetTimer: number | undefined
+let installCopyResetTimer: number | undefined
 const renderedMarkdown = computed(() => DOMPurify.sanitize(marked.parse(stripFrontmatter(content.value), { breaks: true }) as string))
 
 function buildFileTree(items: FileItem[]) {
@@ -341,6 +353,20 @@ async function copySnippet(value: string) {
   }
 }
 
+async function copyInstallationPrompt() {
+  try {
+    await navigator.clipboard.writeText(installationPrompt.value)
+    copiedInstallationPrompt.value = true
+    if (installCopyResetTimer !== undefined) window.clearTimeout(installCopyResetTimer)
+    installCopyResetTimer = window.setTimeout(() => {
+      copiedInstallationPrompt.value = false
+      installCopyResetTimer = undefined
+    }, 1800)
+  } catch {
+    copiedInstallationPrompt.value = false
+  }
+}
+
 const featuredSkillCards = computed(() => featuredSkills.value)
 
 watch(
@@ -495,19 +521,27 @@ function handleGlobalKeydown(event: KeyboardEvent) {
         <p v-if="loading" class="empty">正在加载...</p>
         <template v-else>
           <section class="skill-grid">
-            <article v-for="skill in skills" :key="skill.id" class="skill-card">
+            <RouterLink
+              v-for="skill in skills"
+              :key="skill.id"
+              class="skill-card skill-card-link"
+              :to="`/skills/${skill.slug}`"
+              :aria-label="`查看技能 ${skill.name}`"
+            >
               <div class="card-top">
                 <span class="category">{{ skill.category }}</span>
                 <span :class="['status', skill.status === 'ACTIVE' ? 'active' : 'offline']">{{ skill.status === 'ACTIVE' ? '已上架' : '已下架' }}</span>
               </div>
               <h3>{{ skill.name }}</h3>
               <p>{{ skill.description }}</p>
-              <code>{{ skill.slug }} · v{{ skill.version_label }}</code>
-              <div class="card-actions">
-                <RouterLink class="secondary link" :to="`/skills/${skill.slug}`">查看详情</RouterLink>
-                <a class="secondary link" :href="`/api/skills/${encodeURIComponent(skill.slug)}/download?version=${skill.version_digest}`">下载</a>
+              <div class="skill-card-footer">
+                <code>{{ skill.slug }} · v{{ skill.version_label }}</code>
+                <span class="download-count">
+                  <Download :size="15" :stroke-width="1.8" aria-hidden="true" />
+                  {{ skill.download_count || 0 }} 次下载
+                </span>
               </div>
-            </article>
+            </RouterLink>
             <p v-if="!skills.length" class="empty">没有找到技能。</p>
           </section>
         </template>
@@ -580,7 +614,13 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             <p class="eyebrow">{{ detail.category }}</p>
             <h1>{{ detail.name }}</h1>
             <p>{{ detail.description }}</p>
-            <code>{{ detail.slug }} · v{{ detail.version_label }}</code>
+            <div class="detail-meta">
+              <code>{{ detail.slug }} · v{{ detail.version_label }}</code>
+              <span class="download-count">
+                <Download :size="15" :stroke-width="1.8" aria-hidden="true" />
+                {{ detail.download_count || 0 }} 次下载
+              </span>
+            </div>
           </div>
           <div class="card-actions">
             <a class="primary link" :href="`/api/skills/${detail.slug}/download?version=${detail.version_digest}`">下载技能</a>
@@ -588,6 +628,28 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             <button class="danger" @click="openConfirmation('delete', detail)">删除技能</button>
           </div>
         </header>
+
+        <section class="install-prompt-panel" aria-labelledby="install-prompt-title">
+          <div class="install-prompt-heading">
+            <div>
+              <p class="eyebrow">快速安装</p>
+              <h2 id="install-prompt-title">将提示词发送给你的 AI 安装该 Skill</h2>
+              <p>复制提示词并发送给 Codex、Claude Code 或其他 AI Agent。</p>
+            </div>
+            <button
+              :class="['copy-button install-copy-button', { copied: copiedInstallationPrompt }]"
+              type="button"
+              :aria-label="copiedInstallationPrompt ? '已复制安装提示词' : '复制安装提示词'"
+              :title="copiedInstallationPrompt ? '已复制' : '复制安装提示词'"
+              @click="copyInstallationPrompt"
+            >
+              <Check v-if="copiedInstallationPrompt" :size="16" :stroke-width="2" aria-hidden="true" />
+              <Copy v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+              <span>{{ copiedInstallationPrompt ? '已复制' : '复制提示词' }}</span>
+            </button>
+          </div>
+          <pre class="install-prompt-code">{{ installationPrompt }}</pre>
+        </section>
 
         <div class="tabs">
           <button :class="{ selected: tab === 'overview' }" @click="tab = 'overview'">概览</button>

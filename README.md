@@ -256,7 +256,7 @@ skillhub list --service-url http://192.168.1.10:8080
 skillhub list --json
 ```
 
-普通输出包含技能名称、Slug、分类、版本和状态。
+普通输出包含技能名称、Slug、分类、版本和状态。下载量可在 Web 技能搜索页和详情页查看。
 
 ### 5. 安装平台技能
 
@@ -287,7 +287,7 @@ skillhub install using-product-development --version <version-digest>
 skillhub install using-product-development --service-url http://192.168.1.10:8080 --json
 ```
 
-`install` 会下载平台生成的 ZIP 并解压。无 `--target` 时，CLI 会根据操作系统使用用户级存储，并检测常见 Agent 的用户级技能目录，优先创建目录链接，不能链接时回退为复制。这样切换项目后仍然可以使用同一份技能。
+`install` 会下载平台生成的 ZIP 并解压。无 `--target` 时，CLI 会根据操作系统使用用户级存储，并检测常见 Agent 的用户级技能目录，优先创建目录链接，不能链接时回退为复制。这样切换项目后仍然可以使用同一份技能。安装成功会计入该技能的累计下载量。CLI 只提供上传、查询和安装命令，不提供删除技能命令。
 
 ### 6. Agent 操作 Skill
 
@@ -354,14 +354,15 @@ flowchart LR
 
 后端监听 `8080` 端口，主要接口位于 `/api/skills`：
 
-- `GET /api/skills`：查询技能
+- `GET /api/skills?status=ACTIVE|OFFLINE`：按状态查询技能
 - `GET /api/skills/categories`：查询分类
 - `POST /api/skills`：上传技能
 - `GET /api/skills/{slug}`：查看技能详情
 - `GET /api/skills/{slug}/files`：查看版本文件树
 - `GET /api/skills/{slug}/files/content`：读取文件内容
-- `GET /api/skills/{slug}/download`：下载 ZIP
+- `GET /api/skills/{slug}/download`：下载 ZIP，并将该技能的下载量加一
 - `POST /api/skills/{slug}/offline`：技能下架
+- `DELETE /api/skills/{slug}`：永久删除 Skill
 
 上传时，后端会解析 ZIP 或单文件、校验 `SKILL.md` frontmatter、计算摘要，然后在事务中写入数据库。
 
@@ -369,11 +370,11 @@ flowchart LR
 
 技能内容不以单独文件形式保存，而是存放在 PostgreSQL：
 
-- `skill`：名称、Slug、描述、分类、状态
+- `skill`：名称、Slug、描述、分类、状态、下载量
 - `skill_version`：版本号、版本摘要和创建时间
 - `skill_file`：文件路径、内容、类型、大小和文件摘要
 
-其中 `skill_file.content` 使用 PostgreSQL `BYTEA` 保存文件二进制内容。下载时，后端从这些记录重新组装 ZIP。
+其中 `skill_file.content` 使用 PostgreSQL `BYTEA` 保存文件二进制内容。下载时，后端从这些记录重新组装 ZIP。`skill.download_count` 使用原子更新累计成功下载次数，数据库迁移会为已有技能初始化为 `0`。
 
 ### 5. 配置项
 
@@ -384,8 +385,8 @@ flowchart LR
 | `SKILLHUB_DB_URL` | `jdbc:postgresql://localhost:5432/skillhub` | PostgreSQL JDBC 地址 |
 | `SKILLHUB_DB_USERNAME` | `postgres` | 数据库用户 |
 | `SKILLHUB_DB_PASSWORD` | `123456` | 数据库密码（仅开发默认值） |
-| `SKILLHUB_MAX_PACKAGE_BYTES` | `10485760` | 上传包最大大小 |
-| `SKILLHUB_MAX_EXPANDED_BYTES` | `104857600` | ZIP 解压后最大大小 |
-| `SKILLHUB_MAX_FILES` | `1000` | 单个 Skill 最大文件数 |
+| `SKILLHUB_MAX_PACKAGE_BYTES` | `1073741824`（1 GiB） | 上传包最大大小 |
+| `SKILLHUB_MAX_EXPANDED_BYTES` | `1073741824`（1 GiB） | ZIP 解压后最大大小 |
+| `SKILLHUB_MAX_FILES` | `100000` | 单个 Skill 最大文件数 |
 
 生产环境请使用环境变量设置数据库密码和连接地址，不要依赖默认密码。

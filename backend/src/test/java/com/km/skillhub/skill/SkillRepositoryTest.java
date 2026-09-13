@@ -20,6 +20,7 @@ class SkillRepositoryTest {
 
         repository.list(null, null, "OFFLINE");
 
+        assertTrue(jdbc.sql.contains("s.download_count"));
         assertTrue(jdbc.sql.contains("s.status=?"));
         assertArrayEquals(new Object[]{"OFFLINE"}, jdbc.args);
     }
@@ -31,6 +32,7 @@ class SkillRepositoryTest {
 
         repository.list(null, null, null);
 
+        assertTrue(jdbc.sql.contains("s.download_count"));
         assertTrue(jdbc.sql.contains("s.status=?"));
         assertArrayEquals(new Object[]{"ACTIVE"}, jdbc.args);
     }
@@ -53,6 +55,18 @@ class SkillRepositoryTest {
         repository.delete("sample-skill");
 
         assertEquals("DELETE FROM skill WHERE slug=?", jdbc.updateSql);
+        assertArrayEquals(new Object[]{"sample-skill"}, jdbc.updateArgs);
+    }
+
+    @Test
+    void incrementDownloadCountUsesAtomicUpdate() {
+        RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
+        jdbc.updateCount = 1;
+        SkillRepository repository = new SkillRepository(jdbc);
+
+        repository.incrementDownloadCount("sample-skill");
+
+        assertEquals("UPDATE skill SET download_count=download_count+1 WHERE slug=?", jdbc.updateSql);
         assertArrayEquals(new Object[]{"sample-skill"}, jdbc.updateArgs);
     }
 

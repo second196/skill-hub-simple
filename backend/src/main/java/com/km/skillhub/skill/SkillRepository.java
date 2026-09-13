@@ -18,7 +18,7 @@ public class SkillRepository {
     }
 
     public List<Map<String, Object>> list(String query, String category, String status, boolean includeOffline) {
-        String sql = "SELECT s.id,s.slug,s.name,s.description,s.category,s.status,s.updated_at," +
+        String sql = "SELECT s.id,s.slug,s.name,s.description,s.category,s.status,s.download_count,s.updated_at," +
                 "v.version_label,v.version_digest FROM skill s JOIN LATERAL (SELECT version_label,version_digest " +
                 "FROM skill_version WHERE skill_id=s.id ORDER BY created_at DESC,id DESC LIMIT 1) v ON true WHERE 1=1";
         java.util.ArrayList<Object> args = new java.util.ArrayList<Object>();
@@ -39,7 +39,7 @@ public class SkillRepository {
     }
 
     public Map<String, Object> detail(String slug) {
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT s.id,s.slug,s.name,s.description,s.category,s.status,s.created_at,s.updated_at," +
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT s.id,s.slug,s.name,s.description,s.category,s.status,s.download_count,s.created_at,s.updated_at," +
                 "v.id AS version_id,v.version_label,v.version_digest,v.created_at AS version_created_at FROM skill s " +
                 "JOIN LATERAL (SELECT * FROM skill_version WHERE skill_id=s.id ORDER BY created_at DESC,id DESC LIMIT 1) v ON true WHERE s.slug=?", slug);
         if (rows.isEmpty()) throw new IllegalArgumentException("技能不存在");
@@ -112,6 +112,12 @@ public class SkillRepository {
     @Transactional
     public void delete(String slug) {
         if (jdbc.update("DELETE FROM skill WHERE slug=?", slug) != 1) throw new IllegalArgumentException("技能不存在");
+    }
+
+    public void incrementDownloadCount(String slug) {
+        if (jdbc.update("UPDATE skill SET download_count=download_count+1 WHERE slug=?", slug) != 1) {
+            throw new IllegalArgumentException("技能不存在");
+        }
     }
 
     private String normalizeStatus(String status) {

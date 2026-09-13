@@ -70,3 +70,9 @@ skillhub list
 ```bash
 skillhub list --service-url http://your-host:8080
 ```
+
+## 下载量说明
+
+技能搜索页和技能详情页会展示累计下载量。每次通过 Web 下载或执行
+`skillhub install <slug>` 成功下载技能 ZIP 后，平台会将对应技能的下载量加一。
+查询命令仍然可以一次列出平台中的全部技能；CLI 不提供删除技能命令。
