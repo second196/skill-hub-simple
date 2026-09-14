@@ -1,12 +1,13 @@
 # SkillHub
 
-SkillHub 是一个轻量的 Skill Hub，用于上传、浏览、下载和安装 AI Agent Skill。
+SkillHub 是一个轻量的 Skill Hub，用于上传、浏览、下载、安装和观测 AI Agent Skill。
 
-项目只包含三项核心能力：
+项目核心能力：
 
 - Web 端上传 ZIP、目录或单个 `SKILL.md`
 - Web 端和 CLI 查询平台技能
 - Web 端和 CLI 下载、安装指定技能
+- Observer CLI 采集本地技能调用，生成本地 HTML 报告，并把平台已有技能的完整观测内容上传到平台
 
 ## 一、启动项目
 
@@ -14,7 +15,7 @@ SkillHub 是一个轻量的 Skill Hub，用于上传、浏览、下载和安装 
 
 - Java 8 或更高版本
 - Maven 3.6 或更高版本
-- Node.js 20 或更高版本（CLI 要求）
+- Node.js 20 或更高版本（SkillHub CLI 和 Observer CLI 要求）
 - npm
 - Docker Desktop 和 PostgreSQL 16（推荐使用 Docker）
 
@@ -67,7 +68,7 @@ mvn spring-boot:run
 http://localhost:8080
 ```
 
-Flyway 会在首次启动时自动执行数据库迁移，创建 `skill`、`skill_version` 和 `skill_file` 表。
+Flyway 会在首次启动时自动执行数据库迁移，创建技能、发现技能和观测相关表。
 
 也可以先打包再启动：
 
@@ -305,7 +306,57 @@ skillhub list
 skillhub install <slug>
 ```
 
-## 三、项目架构
+## 三、Observer CLI
+
+观测能力和技能上传/安装是两套命令。`@second196/skillhub-cli` 只负责技能包；`@second196/skillhub-observer` 负责采集、本地报告和上传观测数据。
+
+### 1. 安装
+
+```bash
+npm install -g @second196/skillhub-observer
+skillhub-observer --help
+```
+
+也可以从源码构建：
+
+```bash
+cd observer
+npm install
+npm run build
+node dist/index.js --help
+```
+
+### 2. 命令
+
+```bash
+skillhub-observer install
+skillhub-observer report --open
+skillhub-observer report -o ./observation-report.html --service-url http://127.0.0.1:8080
+skillhub-observer upload --service-url http://127.0.0.1:8080
+```
+
+- `install`：写入 Claude Code / Codex hooks。对话结束时扫描 `~/.claude/projects/**/*.jsonl` 和 `~/.codex/sessions/**/*.jsonl`，合并进本机 `events.jsonl`。Hook 失败不会阻塞 Agent。
+- `report`：生成本地完整 HTML 报告，包含平台没有的技能。提供 `--service-url` 时会标记「可上传」或「仅本地」。
+- `upload`：只上传平台已有技能（含已下架）出现过的回合；上传完整用户原文、完整工具参数/结果、完整文档正文，不生成摘要。
+
+默认本地目录：
+
+- macOS：`~/Library/Application Support/SkillHub/observability`
+- Windows：`%LOCALAPPDATA%\SkillHub\observability`
+- Linux：`$XDG_DATA_HOME/skillhub/observability`
+
+### 3. 上传到平台的约定
+
+`POST /api/observations/ingest` 接收完整观测内容，而不是摘要。
+
+- 无登录。数据按 `clientId` 区分来源，平台观测页对所有访问者可见。
+- 客户端先对照 `/api/skills?includeOffline=true` 过滤，服务端再过滤一次：没有用过平台技能的回合直接丢弃。
+- 同一回合里，未带 slug 的工具/文档步骤归到最近一个平台技能。
+- 保留 `SKILL.md` / `*.md` / `*.mdx` / `*.txt` / `*.rst` 正文，丢弃代码和二进制。
+- 幂等键是 `(clientId, sessionId, turnIndex, stepId)`。重复上传时保留更完整的 payload。
+- 请求体按约 8MB 分批；单个超大会话整包发送。
+
+## 四、项目架构
 
 ### 1. 总体结构
 
@@ -315,14 +366,12 @@ skill-hub_simple/
 │   └── src/main/
 │       ├── java/com/km/skillhub/
 │       │   ├── SkillHubApplication.java
-│       │   └── skill/
-│       │       ├── SkillController.java       REST API
-│       │       ├── SkillRepository.java       JDBC 数据访问
-│       │       ├── SkillPackageParser.java    ZIP/Markdown 校验
-│       │       └── SkillPackage.java           内存模型
+│       │   ├── skill/                         技能上传、查询、下载
+│       │   ├── discovery/                     发现技能同步
+│       │   └── observation/                   观测入库和查询
 │       └── resources/
 │           ├── application.yml                服务和数据库配置
-│           └── db/migration/                  Flyway 迁移
+│           └── db/migration/                  Flyway 迁移 V1-V4
 ├── frontend/                         Vue 3 + Vite 前端
 │   ├── src/App.vue                   页面和交互
 │   ├── src/router/                   路由
@@ -334,6 +383,11 @@ skill-hub_simple/
 │   ├── src/clients/                  HTTP 客户端
 │   ├── src/services/                 Skill 包读取和校验
 │   └── src/platform/                 ZIP 和路径安全处理
+├── observer/                         TypeScript 观测 CLI
+│   ├── src/index.ts                  install/report/upload/hook
+│   ├── src/scan.ts                   扫描 Claude Code / Codex jsonl
+│   ├── src/upload.ts                 过滤并上传完整观测内容
+│   └── src/report.ts                 生成本地 HTML 报告
 ├── docs/                             CLI 安装指南
 ├── skill/                            Agent 操作 Skill
 └── .skills/                          CLI 本地安装目录（运行时生成）
@@ -343,8 +397,10 @@ skill-hub_simple/
 
 ```mermaid
 flowchart LR
-  A[Web 前端] -->|HTTP /api/skills| B[Spring Boot 后端]
+  A[Web 前端] -->|HTTP /api/skills /api/discovery /api/observations| B[Spring Boot 后端]
   C[SkillHub CLI] -->|HTTP 上传 查询 下载| B
+  F[SkillHub Observer] -->|hooks 和 jsonl 扫描| G[本地 events.jsonl]
+  F -->|完整观测内容 ingest| B
   B --> D[(PostgreSQL)]
   C -->|用户级存储与 Agent 入口| E[本地 Skill 目录]
   B -->|返回文件树或 ZIP| A
@@ -352,7 +408,7 @@ flowchart LR
 
 ### 3. 后端
 
-后端监听 `8080` 端口，主要接口位于 `/api/skills`：
+后端监听 `8080` 端口。技能接口位于 `/api/skills`：
 
 - `GET /api/skills?status=ACTIVE|OFFLINE`：按状态查询技能
 - `GET /api/skills/categories`：查询分类
@@ -364,17 +420,30 @@ flowchart LR
 - `POST /api/skills/{slug}/offline`：技能下架
 - `DELETE /api/skills/{slug}`：永久删除 Skill
 
-上传时，后端会解析 ZIP 或单文件、校验 `SKILL.md` frontmatter、计算摘要，然后在事务中写入数据库。
+观测接口位于 `/api/observations`：
+
+- `POST /api/observations/ingest`：上传完整观测内容
+- `GET /api/observations`：观测总览和技能列表
+- `GET /api/observations/skills`：已观测技能
+- `GET /api/observations/skills/{slug}`：某个技能的客户端、会话和调用链路
+- `GET /api/observations/sessions/{id}`：某个会话的逐步链路
+
+上传技能时，后端会解析 ZIP 或单文件、校验 `SKILL.md` frontmatter、计算摘要，然后在事务中写入数据库。
 
 ### 4. 数据库
 
-技能内容不以单独文件形式保存，而是存放在 PostgreSQL：
+技能和观测内容都存放在 PostgreSQL：
 
 - `skill`：名称、Slug、描述、分类、状态、下载量
 - `skill_version`：版本号、版本摘要和创建时间
 - `skill_file`：文件路径、内容、类型、大小和文件摘要
+- `observation_client`：本机采集端 `client_id`、主机名和操作系统
+- `observation_session`：客户端会话
+- `observation_turn`：一次用户对话及完整用户原文
+- `observation_step`：该回合中的技能、工具、文档步骤，payload 为完整 JSONB
+- `observation_ingest_batch`：上传批次统计
 
-其中 `skill_file.content` 使用 PostgreSQL `BYTEA` 保存文件二进制内容。下载时，后端从这些记录重新组装 ZIP。`skill.download_count` 使用原子更新累计成功下载次数，数据库迁移会为已有技能初始化为 `0`。
+其中 `skill_file.content` 使用 PostgreSQL `BYTEA` 保存文件二进制内容。下载时，后端从这些记录重新组装 ZIP。`skill.download_count` 使用原子更新累计成功下载次数。观测步骤按 `(turn_id, step_id)` 幂等写入，重复上传时保留更长的完整内容。
 
 ### 5. 配置项
 
@@ -388,5 +457,6 @@ flowchart LR
 | `SKILLHUB_MAX_PACKAGE_BYTES` | `1073741824`（1 GiB） | 上传包最大大小 |
 | `SKILLHUB_MAX_EXPANDED_BYTES` | `1073741824`（1 GiB） | ZIP 解压后最大大小 |
 | `SKILLHUB_MAX_FILES` | `100000` | 单个 Skill 最大文件数 |
+| `SKILLHUB_MAX_HTTP_POST_SIZE` | `1GB` | HTTP POST 最大体积，覆盖技能包和观测上传 |
 
 生产环境请使用环境变量设置数据库密码和连接地址，不要依赖默认密码。

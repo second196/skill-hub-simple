@@ -1,5 +1,8 @@
 server:
   port: 8080
+  tomcat:
+    max-http-form-post-size: ${SKILLHUB_MAX_HTTP_POST_SIZE:1GB}
+    max-swallow-size: ${SKILLHUB_MAX_HTTP_POST_SIZE:1GB}
 
 spring:
   application:

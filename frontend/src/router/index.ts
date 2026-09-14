@@ -8,6 +8,8 @@ export default createRouter({
     { path: '/discover', component: EmptyRoute },
     { path: '/search', component: EmptyRoute },
     { path: '/publish', component: EmptyRoute },
+    { path: '/observe/:slug', component: EmptyRoute },
+    { path: '/observe', component: EmptyRoute },
     { path: '/skills/:slug', component: EmptyRoute }
   ]
 })

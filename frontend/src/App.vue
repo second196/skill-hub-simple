@@ -20,6 +20,7 @@ import {
   LayoutGrid,
   Search,
   Star,
+  Activity,
   Upload
 } from '@lucide/vue'
 
@@ -98,6 +99,9 @@ const isDiscoverDetail = computed(() => route.path.startsWith('/discover/'))
 const isSearch = computed(() => route.path === '/search')
 const isPublish = computed(() => route.path === '/publish')
 const isDetail = computed(() => route.path.startsWith('/skills/'))
+const isObserve = computed(() => route.path === '/observe')
+const isObserveSkill = computed(() => /^\/observe\/[^/]+$/.test(route.path))
+const observeSlug = computed(() => isObserveSkill.value ? decodeURIComponent(route.path.slice('/observe/'.length)) : '')
 
 const discoveryQuery = ref('')
 const discoveryCategory = ref('')
@@ -120,6 +124,53 @@ const discoveryExpandedFolders = ref(new Set<string>(['__root__']))
 const copiedDiscoveryPrompt = ref(false)
 let discoveryCopyResetTimer: number | undefined
 const discoveryHasMore = computed(() => discoverySkills.value.length < discoveryTotal.value)
+
+type ObserveTrendPoint = { day: string; count: number }
+type ObserveOverview = { skillCount: number; callCount: number; sessionCount: number; clientCount: number; trend: ObserveTrendPoint[] }
+type ObserveSkillItem = {
+  slug: string
+  name: string
+  category: string
+  description: string
+  call_count: number
+  session_count: number
+  client_count: number
+  last_used_at?: string
+  trend?: ObserveTrendPoint[]
+}
+type ObserveClient = { client_id: string; hostname?: string; os?: string; session_count?: number; last_seen_at?: string }
+type ObserveSession = {
+  id: number
+  session_key: string
+  client_name: string
+  client_id: string
+  hostname?: string
+  started_at?: string
+  ended_at?: string
+  turn_count?: number
+}
+type ObserveStep = { step_id: string; seq: number; type: string; ts?: string; skill_slug?: string; payload?: Record<string, unknown> }
+type ObserveTurn = { id?: number; turn_index: number; started_at?: string; user_text?: string; steps: ObserveStep[] }
+type ObserveChain = ObserveSession & { os?: string; turns: ObserveTurn[] }
+type ObserveSkillDetail = {
+  skill: { slug: string; name: string; category?: string; description?: string }
+  kpis: { callCount: number; sessionCount: number; clientCount: number; turnCount: number }
+  trend: ObserveTrendPoint[]
+  clients: ObserveClient[]
+  sessions: ObserveSession[]
+  selectedSessionId?: number
+  selectedSession?: ObserveChain | null
+}
+
+const observeOverview = ref<ObserveOverview | null>(null)
+const observeSkills = ref<ObserveSkillItem[]>([])
+const observeHomeLoading = ref(false)
+const observeHomeError = ref('')
+const observeDetail = ref<ObserveSkillDetail | null>(null)
+const observeDetailLoading = ref(false)
+const observeDetailError = ref('')
+const observeClientId = ref('')
+const observeSessionId = ref('')
 
 const activeSkills = computed(() => skills.value.filter((skill) => skill.status === 'ACTIVE'))
 const featuredSkills = computed(() => activeSkills.value.slice(0, 6))
@@ -350,6 +401,122 @@ async function loadDetail() {
   } catch (e) {
     detailError.value = e instanceof Error ? e.message : '技能详情加载失败'
   }
+}
+
+function asNumber(value: unknown) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+function formatObserveTime(value?: string | number) {
+  if (value == null || value === '') return '未知时间'
+  if (typeof value === 'number' || /^\d+$/.test(String(value))) {
+    const date = new Date(Number(value))
+    if (!Number.isNaN(date.getTime())) return date.toISOString().replace('T', ' ').slice(0, 19)
+  }
+  return String(value).replace('T', ' ').slice(0, 19)
+}
+
+function clientLabel(name?: string) {
+  if (name === 'claude-code') return 'Claude Code'
+  if (name === 'codex') return 'Codex'
+  return name || '未知客户端'
+}
+
+function stepTitle(step: ObserveStep) {
+  const payload = step.payload || {}
+  if (step.type === 'user') return '用户输入'
+  if (step.type === 'skill') return String(payload.name || step.skill_slug || '技能')
+  if (step.type === 'document') return String(payload.path || '文档')
+  return String(payload.name || '工具')
+}
+
+function stepBody(step: ObserveStep) {
+  const payload = step.payload || {}
+  if (step.type === 'user') return String(payload.text || '')
+  if (step.type === 'document') return String(payload.content || payload.text || '')
+  if (step.type === 'skill') {
+    try { return JSON.stringify({ args: payload.args, result: payload.result, outcome: payload.outcome, duration_ms: payload.duration_ms }, null, 2) } catch { return String(payload) }
+  }
+  try { return JSON.stringify({ args: payload.args, result: payload.result }, null, 2) } catch { return String(payload) }
+}
+
+function isObserveMarkdown(step: ObserveStep) {
+  return step.type === 'document' && isMarkdownPath(String(step.payload?.path || ''))
+}
+
+function stepTypeLabel(type?: string) {
+  if (type === 'user') return '用户'
+  if (type === 'skill') return '技能'
+  if (type === 'document') return '文档'
+  if (type === 'tool') return '工具'
+  return type || '步骤'
+}
+
+function sparklinePoints(trend: ObserveTrendPoint[] | undefined, width = 168, height = 44) {
+  const points = trend && trend.length ? trend : [{ day: '', count: 0 }]
+  const max = trendMax(points)
+  return points.map((item, index) => `${trendX(index, points.length, width)},${trendY(asNumber(item.count), max, height)}`).join(' ')
+}
+
+function trendMax(trend?: ObserveTrendPoint[]) {
+  return Math.max(1, ...(trend && trend.length ? trend.map((item) => asNumber(item.count)) : [0]))
+}
+
+function trendX(index: number, length: number, width: number) {
+  return length <= 1 ? width / 2 : (index / (length - 1)) * width
+}
+
+function trendY(count: number, max: number, height: number) {
+  return height - 4 - (count / Math.max(max, 1)) * (height - 8)
+}
+
+async function loadObserveHome() {
+  observeHomeLoading.value = true
+  observeHomeError.value = ''
+  try {
+    const data = await request<{ overview: ObserveOverview; skills: ObserveSkillItem[] }>('/api/observations')
+    observeOverview.value = data.overview
+    observeSkills.value = data.skills || []
+  } catch (e) {
+    observeHomeError.value = e instanceof Error ? e.message : '观测数据加载失败'
+  } finally {
+    observeHomeLoading.value = false
+  }
+}
+
+async function loadObserveSkill() {
+  observeDetailLoading.value = true
+  observeDetailError.value = ''
+  observeClientId.value = typeof route.query.client === 'string' ? route.query.client : ''
+  observeSessionId.value = typeof route.query.session === 'string' ? route.query.session : ''
+  try {
+    const params = new URLSearchParams()
+    if (observeClientId.value) params.set('clientId', observeClientId.value)
+    if (observeSessionId.value) params.set('sessionId', observeSessionId.value)
+    const suffix = params.toString() ? `?${params}` : ''
+    observeDetail.value = await request<ObserveSkillDetail>(`/api/observations/skills/${encodeURIComponent(observeSlug.value)}${suffix}`)
+    if (!observeSessionId.value && observeDetail.value.selectedSessionId) {
+      observeSessionId.value = String(observeDetail.value.selectedSessionId)
+    }
+  } catch (e) {
+    observeDetail.value = null
+    observeDetailError.value = e instanceof Error ? e.message : '技能观测加载失败'
+  } finally {
+    observeDetailLoading.value = false
+  }
+}
+
+function selectObserveClient(clientId: string) {
+  const query: Record<string, string> = {}
+  if (clientId) query.client = clientId
+  void router.push({ path: `/observe/${observeSlug.value}`, query })
+}
+
+function selectObserveSession(session: ObserveSession) {
+  const query: Record<string, string> = { session: String(session.id) }
+  if (observeClientId.value || session.client_id) query.client = observeClientId.value || session.client_id
+  void router.push({ path: `/observe/${observeSlug.value}`, query })
 }
 
 async function requestText(path: string, version = detail.value?.version_digest || '') {
@@ -651,7 +818,7 @@ async function copyInstallationPrompt() {
 const featuredSkillCards = computed(() => featuredSkills.value)
 
 watch(
-  () => [route.path, route.query.q, route.query.category, route.query.status, route.query.includeOffline, route.query.sort, route.query.source],
+  () => [route.path, route.query.q, route.query.category, route.query.status, route.query.includeOffline, route.query.sort, route.query.source, route.query.client, route.query.session],
   async () => {
     if (isDiscoverDetail.value) {
       await loadDiscoveryDetail()
@@ -659,6 +826,14 @@ watch(
     }
     if (isDetail.value) {
       await loadDetail()
+      return
+    }
+    if (isObserveSkill.value) {
+      await loadObserveSkill()
+      return
+    }
+    if (isObserve.value) {
+      await loadObserveHome()
       return
     }
     if (isPublish.value) {
@@ -727,6 +902,10 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           <RouterLink :class="['site-nav-link', { 'router-link-active': isSearch || isDetail }]" to="/search" :aria-current="isSearch || isDetail ? 'page' : undefined">
             <Search :size="15" :stroke-width="1.9" aria-hidden="true" />
             <span>技能市场</span>
+          </RouterLink>
+          <RouterLink class="site-nav-link" to="/observe" :class="{ 'router-link-active': isObserve || isObserveSkill }" :aria-current="isObserve || isObserveSkill ? 'page' : undefined">
+            <Activity :size="15" :stroke-width="1.9" aria-hidden="true" />
+            <span>观测</span>
           </RouterLink>
         </nav>
       </div>
@@ -992,6 +1171,176 @@ function handleGlobalKeydown(event: KeyboardEvent) {
       <p v-else-if="isDiscoverDetail && discoveryDetailError" class="error">{{ discoveryDetailError }}</p>
       <p v-else-if="isDiscoverDetail" class="empty">正在加载发现技能详情…</p>
 
+      <section v-else-if="isObserve" class="observe-page">
+        <div class="page-hero">
+          <p class="home-kicker">Observability</p>
+          <h1 class="page-title">技能观测</h1>
+          <p class="page-subtitle">查看已上传的技能调用、客户端会话和逐步链路。本地报告包含全部技能；上传到平台时只保留平台已有技能，并且是完整原文而不是摘要。</p>
+          <p class="observe-hint">本机先执行 <code>skillhub-observer install</code>，再用 <code>skillhub-observer report --open</code> 查看完整报告，最后 <code>skillhub-observer upload --service-url http://127.0.0.1:8080</code> 上传。</p>
+        </div>
+
+        <p v-if="observeHomeError" class="error" role="alert">{{ observeHomeError }}</p>
+        <p v-else-if="observeHomeLoading" class="empty">正在加载观测数据…</p>
+        <template v-else>
+          <section class="observe-kpis" aria-label="观测汇总">
+            <article class="observe-kpi">
+              <span>已观测技能</span>
+              <strong>{{ observeOverview?.skillCount || 0 }}</strong>
+            </article>
+            <article class="observe-kpi">
+              <span>技能调用</span>
+              <strong>{{ observeOverview?.callCount || 0 }}</strong>
+            </article>
+            <article class="observe-kpi">
+              <span>会话</span>
+              <strong>{{ observeOverview?.sessionCount || 0 }}</strong>
+            </article>
+            <article class="observe-kpi">
+              <span>客户端</span>
+              <strong>{{ observeOverview?.clientCount || 0 }}</strong>
+            </article>
+          </section>
+
+          <section class="observe-chart-card" aria-label="近七日调用趋势">
+            <div class="section-head">
+              <div>
+                <h2>近 7 日调用</h2>
+                <p>按技能调用次数统计，颜色不作为唯一信息。</p>
+              </div>
+            </div>
+            <svg class="observe-chart" viewBox="0 0 720 180" role="img" aria-label="近七日技能调用折线图">
+              <polyline fill="none" stroke="#315cff" stroke-width="3" :points="sparklinePoints(observeOverview?.trend, 720, 180)" />
+              <circle
+                v-for="(point, index) in (observeOverview?.trend || [])"
+                :key="point.day"
+                :cx="trendX(index, (observeOverview?.trend || []).length, 720)"
+                :cy="trendY(asNumber(point.count), trendMax(observeOverview?.trend), 180)"
+                r="4"
+                fill="#315cff"
+              />
+            </svg>
+            <div class="observe-chart-legend">
+              <span v-for="point in observeOverview?.trend || []" :key="point.day">{{ point.day.slice(5) }} · {{ asNumber(point.count) }}</span>
+            </div>
+          </section>
+
+          <section>
+            <div class="section-head">
+              <div>
+                <h2>技能调用</h2>
+                <p>点击卡片查看该技能在各客户端中的会话和逐步链路。</p>
+              </div>
+            </div>
+            <section class="skill-grid observe-skill-grid">
+              <RouterLink
+                v-for="skill in observeSkills"
+                :key="skill.slug"
+                class="skill-card skill-card-link"
+                :to="`/observe/${skill.slug}`"
+                :aria-label="`查看 ${skill.name} 的观测结果`"
+              >
+                <div class="card-top">
+                  <span class="category">{{ skill.category || '未分类' }}</span>
+                  <span class="download-count">{{ asNumber(skill.call_count) }} 次调用</span>
+                </div>
+                <h3>{{ skill.name }}</h3>
+                <p>{{ skill.description || '暂无描述' }}</p>
+                <svg class="observe-mini-chart" viewBox="0 0 168 44" aria-hidden="true">
+                  <polyline fill="none" stroke="#315cff" stroke-width="2" :points="sparklinePoints(skill.trend)" />
+                </svg>
+                <div class="skill-card-footer">
+                  <code>{{ skill.slug }}</code>
+                  <span class="download-count">{{ asNumber(skill.session_count) }} 个会话</span>
+                </div>
+              </RouterLink>
+              <p v-if="!observeSkills.length" class="empty">还没有上传观测数据。先在本机采集，再执行 <code>skillhub-observer upload --service-url http://127.0.0.1:8080</code> 上传平台已有技能的完整调用内容。</p>
+            </section>
+          </section>
+        </template>
+      </section>
+
+      <section v-else-if="isObserveSkill" class="observe-page observe-skill-page">
+        <RouterLink class="back" to="/observe">← 返回观测</RouterLink>
+        <p v-if="observeDetailError" class="error" role="alert">{{ observeDetailError }}</p>
+        <p v-else-if="observeDetailLoading && !observeDetail" class="empty">正在加载技能观测…</p>
+        <template v-else-if="observeDetail">
+          <header class="detail-head">
+            <div>
+              <p class="eyebrow">{{ observeDetail.skill.category || '观测' }}</p>
+              <h1>{{ observeDetail.skill.name }}</h1>
+              <p>{{ observeDetail.skill.description }}</p>
+              <div class="detail-meta">
+                <code>{{ observeDetail.skill.slug }}</code>
+                <span class="download-count">{{ asNumber(observeDetail.kpis.callCount) }} 次调用</span>
+              </div>
+            </div>
+          </header>
+
+          <section class="observe-kpis observe-kpis-compact" aria-label="该技能观测汇总">
+            <article class="observe-kpi"><span>调用</span><strong>{{ asNumber(observeDetail.kpis.callCount) }}</strong></article>
+            <article class="observe-kpi"><span>会话</span><strong>{{ asNumber(observeDetail.kpis.sessionCount) }}</strong></article>
+            <article class="observe-kpi"><span>客户端</span><strong>{{ asNumber(observeDetail.kpis.clientCount) }}</strong></article>
+            <article class="observe-kpi"><span>回合</span><strong>{{ asNumber(observeDetail.kpis.turnCount) }}</strong></article>
+          </section>
+
+          <div class="observe-filters" role="tablist" aria-label="客户端">
+            <button :class="['observe-chip', { selected: !observeClientId }]" type="button" @click="selectObserveClient('')">全部客户端</button>
+            <button
+              v-for="client in observeDetail.clients"
+              :key="client.client_id"
+              :class="['observe-chip', { selected: observeClientId === client.client_id }]"
+              type="button"
+              @click="selectObserveClient(client.client_id)"
+            >
+              {{ client.hostname || client.client_id.slice(0, 8) }}
+              <span>{{ asNumber(client.session_count) }}</span>
+            </button>
+          </div>
+
+          <section class="observe-workspace">
+            <aside class="observe-session-list" aria-label="会话列表">
+              <div class="version-column-title">会话</div>
+              <button
+                v-for="session in observeDetail.sessions"
+                :key="session.id"
+                :class="['observe-session', { selected: String(observeDetail.selectedSessionId) === String(session.id) }]"
+                type="button"
+                @click="selectObserveSession(session)"
+              >
+                <strong>{{ clientLabel(session.client_name) }}</strong>
+                <span>{{ formatObserveTime(session.started_at) }}</span>
+                <code>{{ session.session_key }}</code>
+              </button>
+              <p v-if="!observeDetail.sessions.length" class="empty">这个筛选条件下没有会话。</p>
+            </aside>
+
+            <div class="observe-chain" aria-label="调用链路">
+              <div class="version-column-title">调用链路</div>
+              <p v-if="!observeDetail.selectedSession" class="empty">选择左侧会话查看逐步调用。</p>
+              <template v-else>
+                <article v-for="turn in observeDetail.selectedSession.turns" :key="turn.id || turn.turn_index" class="observe-turn">
+                  <header class="observe-turn-head">
+                    <span class="observe-pill">Turn {{ turn.turn_index }}</span>
+                    <time>{{ formatObserveTime(turn.started_at) }}</time>
+                  </header>
+                  <pre class="observe-user">{{ turn.user_text || '（无用户原文）' }}</pre>
+                  <ol class="observe-steps">
+                    <li v-for="step in turn.steps" :key="step.step_id" :class="['observe-step', step.type]">
+                      <span class="observe-step-type">{{ stepTypeLabel(step.type) }}</span>
+                      <div>
+                        <p class="observe-step-title">{{ stepTitle(step) }}</p>
+                        <article v-if="isObserveMarkdown(step)" class="markdown-body observe-markdown" v-html="renderMarkdownContent(stepBody(step))"></article>
+                        <pre v-else>{{ stepBody(step) }}</pre>
+                      </div>
+                    </li>
+                  </ol>
+                </article>
+              </template>
+            </div>
+          </section>
+        </template>
+      </section>
+
       <section v-else-if="isSearch" class="search-page">
         <section class="toolbar search-toolbar">
           <input v-model="query" placeholder="搜索技能名称、描述或标识" @keyup.enter="runSearch" />
@@ -1144,6 +1493,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           <button :class="{ selected: tab === 'overview' }" @click="tab = 'overview'">概览</button>
           <button :class="{ selected: tab === 'files' }" @click="tab = 'files'">文件 <span>{{ files.length }}</span></button>
           <button :class="{ selected: tab === 'versions' }" @click="tab = 'versions'">版本 <span>{{ detail.versions.length }}</span></button>
+          <RouterLink class="observe-tab-link" :to="`/observe/${detail.slug}`">观测</RouterLink>
         </div>
 
         <section v-if="tab === 'overview'" class="panel markdown">

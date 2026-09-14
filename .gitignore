@@ -31,3 +31,7 @@ backend/.factorypath
 backend/.idea/
 backend/*.iml
 backend/dependency-reduced-pom.xml
+
+# ===== Observer CLI (observer/) =====
+observer/node_modules/
+observer/dist/
