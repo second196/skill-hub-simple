@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { collectEvents } from './collect.js'
-import { fetchPlatformSkills, platformIndex, resolvePlatformSlug } from './platform.js'
+import { fetchPlatformSkills, platformIndex, resolvePlatformSlug, type PlatformIndex } from './platform.js'
 import { hostMeta, loadClientId } from './store.js'
-import { buildTimeline, type TimelineSession, type TimelineTurn } from './timeline.js'
-import type { ObservationEvent, PlatformSkill } from './types.js'
+import { buildTimeline, type TimelineSession } from './timeline.js'
+import { sanitizePayload } from './payload.js'
+import type { ObservationEvent } from './types.js'
 
 const MAX_BATCH_BYTES = 8 * 1024 * 1024
 
@@ -12,8 +13,8 @@ export { fetchPlatformSkills, platformIndex }
 export async function uploadObservations(serviceUrl: string): Promise<string> {
   const events = await collectEvents()
   const platform = await fetchPlatformSkills(serviceUrl)
-  const sessions = filterPlatformSessions(buildTimeline(events), platform)
-  if (!sessions.length) return '没有可上传的平台技能观测数据'
+  const sessions = annotateSessions(buildTimeline(events), platform)
+  if (!sessions.length) return '没有可上传的会话观测数据'
   const clientId = await loadClientId()
   const meta = hostMeta()
   const batches = splitBatches(sessions)
@@ -31,53 +32,32 @@ export async function uploadObservations(serviceUrl: string): Promise<string> {
   return `已上传 ${sessions.length} 个会话（完整原文，不含摘要）\n${summaries.join('\n')}`
 }
 
-export function filterPlatformSessions(sessions: TimelineSession[], platform: PlatformSkill[]): TimelineSession[] {
+export function annotateSessions(sessions: TimelineSession[], platform: Awaited<ReturnType<typeof fetchPlatformSkills>>): TimelineSession[] {
   const index = platformIndex(platform)
-  const result: TimelineSession[] = []
-  for (const session of sessions) {
-    const turns = session.turns.map((turn) => filterTurn(turn, index)).filter((turn): turn is TimelineTurn => Boolean(turn))
-    if (!turns.length) continue
-    result.push({ ...session, turns })
-  }
-  return result
+  return sessions.map((session) => ({
+    ...session,
+    turns: session.turns.map((turn) => ({
+      ...turn,
+      steps: annotateSteps(turn.steps, index)
+    }))
+  }))
 }
 
-function filterTurn(turn: TimelineTurn, index: ReturnType<typeof platformIndex>): TimelineTurn | undefined {
+function annotateSteps(steps: ObservationEvent[], index: PlatformIndex): ObservationEvent[] {
   let currentSlug: string | undefined
-  let hasPlatformSkill = false
-  const resolved = turn.steps.map((step) => {
-    const slug = resolvePlatformSlug(index, step.skill_slug, step.skill_name || payloadName(step), currentSlug)
-    if (step.type === 'skill' && slug) {
-      currentSlug = slug
-      hasPlatformSkill = true
-    } else if (slug) {
-      currentSlug = slug
-      hasPlatformSkill = true
-    }
-    return { step, slug }
-  })
-  if (!hasPlatformSkill) return undefined
-  currentSlug = undefined
-  const steps: ObservationEvent[] = []
-  for (const item of resolved) {
-    const step = item.step
+  const result: ObservationEvent[] = []
+  for (const step of steps) {
     let slug = resolvePlatformSlug(index, step.skill_slug, step.skill_name || payloadName(step), currentSlug)
     if (step.type === 'skill' && slug) currentSlug = slug
-    else if (step.type !== 'user' && step.type !== 'skill' && !slug) slug = currentSlug
-    if (step.type !== 'user' && (!slug || !index.slugs.has(slug))) continue
+    else if (step.type !== 'user' && step.type !== 'assistant' && !slug) slug = currentSlug
     if (step.type === 'skill' || (slug && index.slugs.has(slug))) currentSlug = slug || currentSlug
-    steps.push({
+    result.push({
       ...step,
       skill_slug: slug,
-      payload: clonePayload(step.payload) // full payload, never summarized
+      payload: clonePayload(step.payload)
     })
   }
-  if (!steps.some((step) => step.type === 'skill')) return undefined
-  return {
-    ...turn,
-    userText: turn.userText,
-    steps
-  }
+  return result
 }
 
 function toIngestSession(session: TimelineSession) {
@@ -146,8 +126,8 @@ function payloadName(step: ObservationEvent): string | undefined {
 
 function clonePayload(payload: Record<string, unknown>): Record<string, unknown> {
   try {
-    return JSON.parse(JSON.stringify(payload)) as Record<string, unknown>
+    return sanitizePayload(JSON.parse(JSON.stringify(payload)) as Record<string, unknown>)
   } catch {
-    return { ...payload }
+    return sanitizePayload({ ...payload })
   }
 }

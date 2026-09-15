@@ -84,7 +84,7 @@ public class ObservationRepository {
                         "payload=CASE WHEN length(EXCLUDED.payload::text) >= length(observation_step.payload::text) " +
                         "THEN EXCLUDED.payload ELSE observation_step.payload END, " +
                         "updated_at=CURRENT_TIMESTAMP",
-                turnId, stepId, seq, type, timestamp(ts), skillSlug, payloadJson == null ? "{}" : payloadJson);
+                turnId, stepId, seq, type, timestamp(ts), skillSlug, ObservationPayloads.forJsonb(payloadJson));
     }
 
     public void saveBatch(String batchId, String clientId, int sessions, int turns, int steps, int skipped) {
@@ -128,15 +128,56 @@ public class ObservationRepository {
         result.put("callCount", jdbc.queryForObject(
                 "SELECT COUNT(*) FROM observation_step st JOIN skill s ON s.slug=st.skill_slug WHERE st.type='skill'", Integer.class));
         result.put("sessionCount", jdbc.queryForObject(
-                "SELECT COUNT(DISTINCT sess.id) FROM observation_session sess " +
-                        "JOIN observation_turn t ON t.session_id=sess.id " +
-                        "JOIN observation_step st ON st.turn_id=t.id JOIN skill s ON s.slug=st.skill_slug", Integer.class));
+                "SELECT COUNT(*) FROM observation_session", Integer.class));
         result.put("clientCount", jdbc.queryForObject(
-                "SELECT COUNT(DISTINCT c.client_id) FROM observation_client c " +
-                        "JOIN observation_session sess ON sess.client_row_id=c.id " +
-                        "JOIN observation_turn t ON t.session_id=sess.id " +
-                        "JOIN observation_step st ON st.turn_id=t.id JOIN skill s ON s.slug=st.skill_slug", Integer.class));
+                "SELECT COUNT(*) FROM observation_client", Integer.class));
+        result.put("turnCount", jdbc.queryForObject("SELECT COUNT(*) FROM observation_turn", Integer.class));
         result.put("trend", fillTrend(trendBySkill(null).get("__all__")));
+        return result;
+    }
+
+    public Map<String, Object> sessionList(String clientId, Long sessionId) {
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put("clients", jdbc.queryForList(
+                "SELECT c.client_id, c.hostname, c.os, COUNT(DISTINCT sess.id) AS session_count, MAX(c.last_seen_at) AS last_seen_at " +
+                        "FROM observation_client c " +
+                        "LEFT JOIN observation_session sess ON sess.client_row_id=c.id " +
+                        "GROUP BY c.client_id, c.hostname, c.os ORDER BY last_seen_at DESC"));
+        String sessionSql = "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, " +
+                "sess.started_at, sess.ended_at, COUNT(DISTINCT t.id) AS turn_count " +
+                "FROM observation_session sess " +
+                "JOIN observation_client c ON c.id=sess.client_row_id " +
+                "LEFT JOIN observation_turn t ON t.session_id=sess.id";
+        List<Object> args = new ArrayList<Object>();
+        if (clientId != null && !clientId.trim().isEmpty()) {
+            sessionSql += " WHERE c.client_id=?";
+            args.add(clientId.trim());
+        }
+        sessionSql += " GROUP BY sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, sess.started_at, sess.ended_at " +
+                "ORDER BY sess.started_at DESC NULLS LAST, sess.id DESC";
+        List<Map<String, Object>> sessions = args.isEmpty()
+                ? jdbc.queryForList(sessionSql)
+                : jdbc.queryForList(sessionSql, args.toArray());
+        result.put("sessions", sessions);
+        Long selectedId = sessionId;
+        if (selectedId != null) {
+            boolean found = false;
+            for (int i = 0; i < sessions.size(); i++) {
+                Object id = sessions.get(i).get("id");
+                long value = id instanceof Number ? ((Number) id).longValue() : Long.parseLong(String.valueOf(id));
+                if (value == selectedId.longValue()) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) selectedId = null;
+        }
+        if (selectedId == null && !sessions.isEmpty()) {
+            Object id = sessions.get(0).get("id");
+            selectedId = id instanceof Number ? ((Number) id).longValue() : Long.valueOf(String.valueOf(id));
+        }
+        result.put("selectedSessionId", selectedId);
+        result.put("selectedSession", selectedId == null ? null : sessionChain(selectedId, null));
         return result;
     }
 
@@ -209,7 +250,7 @@ public class ObservationRepository {
             selectedId = id instanceof Number ? ((Number) id).longValue() : Long.valueOf(String.valueOf(id));
         }
         result.put("selectedSessionId", selectedId);
-        result.put("selectedSession", selectedId == null ? null : sessionChain(selectedId, slug));
+        result.put("selectedSession", selectedId == null ? null : sessionChain(selectedId, null));
         return result;
     }
 
@@ -220,11 +261,19 @@ public class ObservationRepository {
                 sessionId);
         if (sessions.isEmpty()) throw new IllegalArgumentException("观测会话不存在");
         Map<String, Object> result = new LinkedHashMap<String, Object>(sessions.get(0));
-        List<Map<String, Object>> turns = jdbc.queryForList(
-                "SELECT t.id, t.turn_index, t.started_at, t.user_text FROM observation_turn t " +
-                        "WHERE t.session_id=? AND EXISTS (SELECT 1 FROM observation_step st WHERE st.turn_id=t.id AND (? IS NULL OR st.skill_slug=?)) " +
-                        "ORDER BY t.turn_index",
-                sessionId, skillSlug, skillSlug);
+        List<Map<String, Object>> turns;
+        if (skillSlug == null || skillSlug.trim().isEmpty()) {
+            turns = jdbc.queryForList(
+                    "SELECT t.id, t.turn_index, t.started_at, t.user_text FROM observation_turn t " +
+                            "WHERE t.session_id=? ORDER BY t.turn_index",
+                    sessionId);
+        } else {
+            turns = jdbc.queryForList(
+                    "SELECT t.id, t.turn_index, t.started_at, t.user_text FROM observation_turn t " +
+                            "WHERE t.session_id=? AND EXISTS (SELECT 1 FROM observation_step st WHERE st.turn_id=t.id AND st.skill_slug=?) " +
+                            "ORDER BY t.turn_index",
+                    sessionId, skillSlug);
+        }
         List<Map<String, Object>> turnViews = new ArrayList<Map<String, Object>>();
         for (Map<String, Object> turn : turns) {
             Map<String, Object> view = new LinkedHashMap<String, Object>(turn);

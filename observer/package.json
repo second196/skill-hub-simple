@@ -8,11 +8,13 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node ./scripts/mark-executable.cjs dist/index.js && node ./scripts/copy-readme.cjs",
-    "test": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test dist/payload.test.js dist/scan.test.js",
     "prepublishOnly": "npm run build"
   },
   "engines": {

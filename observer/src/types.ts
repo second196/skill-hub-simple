@@ -1,5 +1,5 @@
 export type ClientName = 'claude-code' | 'codex'
-export type StepType = 'user' | 'skill' | 'tool' | 'document'
+export type StepType = 'user' | 'assistant' | 'skill' | 'tool' | 'document'
 export type EventSource = 'hook' | 'scan'
 
 export interface ObservationEvent {

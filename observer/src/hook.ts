@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { listInstalledSkills, matchSkill, slugify } from './catalog.js'
 import { extractPaths, isDocumentPath, readDocument } from './documents.js'
+import { sanitizePayload, sanitizeText } from './payload.js'
 import { scanAll } from './scan.js'
 import { appendEvents, mergeEvents, loadClientId } from './store.js'
 import type { ClientName, ObservationEvent, StepType } from './types.js'
@@ -78,7 +79,7 @@ async function eventsFromHook(phase: string, clientName: ClientName, payload: Re
     skill_slug: skillSlug,
     skill_name: skillName,
     source: 'hook',
-    payload: body
+    payload: sanitizePayload(body)
   }
   return [event]
 }
@@ -117,11 +118,11 @@ function isError(value: unknown): boolean {
 
 function stringify(value: unknown): string {
   if (value == null) return ''
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') return sanitizeText(value)
   try {
-    return JSON.stringify(value)
+    return sanitizeText(JSON.stringify(value))
   } catch {
-    return String(value)
+    return sanitizeText(String(value))
   }
 }
 

@@ -1,6 +1,6 @@
 # SkillHub Observer
 
-本地技能观测采集器。它负责安装 Agent hooks、扫描 Claude Code / Codex 会话、生成本地完整 HTML 报告，以及把**平台已有技能的完整调用内容**上传到 SkillHub。
+本地技能观测采集器。它负责安装 Agent hooks、扫描 Claude Code / Codex 会话、生成本地完整 HTML 报告，以及把**全部会话原文（含助手回复）**上传到 SkillHub。
 
 本包与 `@second196/skillhub-cli` 独立，不提供技能上传、查询、安装或删除命令。
 
@@ -35,7 +35,7 @@ skillhub-observer report --open
 skillhub-observer report -o ./observation-report.html --service-url http://127.0.0.1:8080
 ```
 
-报告包含本机全部技能调用，包括平台没有的技能。提供 `--service-url` 时，技能会标记为「可上传」或「仅本地」。
+报告包含本机全部会话、回合和助手回复。提供 `--service-url` 时，技能会标记是否出现在平台目录中。
 
 默认输出路径：
 
@@ -52,8 +52,8 @@ skillhub-observer upload --service-url http://127.0.0.1:8080
 上传规则：
 
 - 先扫描本地 Claude Code / Codex 的 jsonl，再与 hook 事件合并
-- 只上传平台已有技能（含已下架）出现过的会话回合
-- 上传完整用户原文、完整工具参数/结果、完整文档正文，不生成摘要
+- 上传本机全部会话和回合，包含用户原文、助手回复、工具参数/结果和文档正文
+- 平台技能只用于标注，不再作为过滤条件；不生成摘要
 - 保留 `SKILL.md` / `*.md` / `*.mdx` / `*.txt` / `*.rst`，丢弃代码和二进制
 - 按 `(client_id, session_id, turn_index, step_id)` 幂等写入
 

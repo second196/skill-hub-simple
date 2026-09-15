@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
 import { hostname, platform } from 'node:os'
+import { sanitizePayload } from './payload.js'
 import type { ClientRecord, ObservationEvent } from './types.js'
 import { clientPath, eventsPath, observabilityDir, spoolDir } from './paths.js'
 
@@ -37,7 +38,7 @@ export function fingerprint(event: ObservationEvent): string {
 export async function appendEvents(events: ObservationEvent[]): Promise<number> {
   if (!events.length) return 0
   await ensureStore()
-  await appendFile(eventsPath(), `${events.map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8')
+  await appendFile(eventsPath(), `${events.map((event) => JSON.stringify({ ...event, payload: sanitizePayload(event.payload) })).join('\n')}\n`, 'utf8')
   return events.length
 }
 

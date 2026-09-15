@@ -52,7 +52,7 @@ export function renderReport(events: ObservationEvent[], platform: PlatformSkill
   <header class="hero">
     <p class="kicker">SkillHub Observer</p>
     <h1>本地技能观测报告</h1>
-    <p class="copy">包含本机全部技能调用。平台未收录的技能会保留在本报告中，但不会被上传。</p>
+    <p class="copy">包含本机全部会话、回合和助手回复。上传到平台时同样保留完整原文，不只上传平台技能。</p>
     <p class="meta">生成时间 ${escapeHtml(new Date().toISOString())} · 事件 ${events.length} 条</p>
   </header>
   <section class="kpis" aria-label="汇总指标">
@@ -81,7 +81,7 @@ export function renderReport(events: ObservationEvent[], platform: PlatformSkill
     <div class="skill-list">
       ${skills.length ? skills.map((skill) => {
         const uploadable = compared && (index.slugs.has(skill.slug) || Boolean(index.slugByKey.get(normalize(skill.name))))
-        const badge = !compared ? '未对照平台' : uploadable ? '可上传' : '仅本地'
+        const badge = !compared ? '未对照平台' : uploadable ? '平台已收录' : '仅本地'
         return `<article class="skill-row">
           <div>
             <h3>${escapeHtml(skill.name)}</h3>
@@ -130,13 +130,14 @@ function renderSession(session: TimelineSession): string {
 
 function stepTitle(step: ObservationEvent): string {
   if (step.type === 'user') return '用户输入'
+  if (step.type === 'assistant') return '助手回复'
   if (step.type === 'skill') return String(step.payload.name || step.skill_name || step.skill_slug || '技能')
   if (step.type === 'document') return String(step.payload.path || '文档')
   return String(step.payload.name || '工具')
 }
 
 function stepBody(step: ObservationEvent): string {
-  if (step.type === 'user') return String(step.payload.text || '')
+  if (step.type === 'user' || step.type === 'assistant') return String(step.payload.text || '')
   if (step.type === 'document') return String(step.payload.content || '')
   try {
     return JSON.stringify(step.payload, null, 2)
@@ -183,6 +184,8 @@ function reportCss(): string {
     .kicker { color: #315cff; font-size: 12px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
     .copy, .meta, .card-head p { color: #667085; line-height: 1.7; }
     .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 28px 0; }
+    .step.assistant .type { color: #0f766e; background: #ecfdf5; }
+    .step.assistant pre { background: #f0fdf8; border-color: #bbf7d0; }
     .kpi, .card { background: #fff; border: 1px solid #e5e9f2; border-radius: 20px; box-shadow: 0 1px 2px rgba(20,33,61,.04); }
     .kpi { padding: 22px; display: grid; gap: 8px; }
     .kpi strong { font-size: 32px; letter-spacing: -.04em; }

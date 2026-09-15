@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { ClientName, ObservationEvent, StepType } from './types.js'
 import { listInstalledSkills, matchSkill, slugify } from './catalog.js'
 import { extractPaths, isDocumentPath, readDocument } from './documents.js'
+import { sanitizePayload, sanitizeText } from './payload.js'
 import { loadClientId } from './store.js'
 
 interface ScanOptions {
@@ -23,11 +24,11 @@ export async function scanAll(options: ScanOptions = {}): Promise<ObservationEve
 }
 
 async function scanClaude(clientId: string, skills: Awaited<ReturnType<typeof listInstalledSkills>>, options: ScanOptions): Promise<ObservationEvent[]> {
-  const files = await listFiles(join(homedir(), '.claude', 'projects'), 3, options)
+  const files = await listFiles(claudeProjectsRoot(), 6, options)
   const events: ObservationEvent[] = []
   for (const file of files) {
     const entries = await readJsonl(file)
-    const sessionId = String(entries.find((entry) => typeof entry.sessionId === 'string')?.sessionId || basename(file, '.jsonl'))
+    const sessionId = claudeSessionId(file, entries)
     if (options.sessionId && sessionId !== options.sessionId && !file.includes(options.sessionId)) continue
     let turnIndex = 0
     let seq = 0
@@ -56,6 +57,24 @@ async function scanClaude(clientId: string, skills: Awaited<ReturnType<typeof li
           payload: { text: extractText(content) }
         }))
         continue
+      }
+      if (role === 'assistant') {
+        const text = assistantText(content)
+        if (text) {
+          seq += 1
+          events.push(makeEvent({
+            clientId,
+            clientName: 'claude-code',
+            sessionId,
+            turnIndex: Math.max(turnIndex, 1),
+            seq,
+            type: 'assistant',
+            ts,
+            skillSlug: currentSlug,
+            skillName: currentName,
+            payload: { text }
+          }))
+        }
       }
       const blocks = Array.isArray(content) ? content : []
       for (const block of blocks) {
@@ -145,7 +164,7 @@ async function scanClaude(clientId: string, skills: Awaited<ReturnType<typeof li
 }
 
 async function scanCodex(clientId: string, skills: Awaited<ReturnType<typeof listInstalledSkills>>, options: ScanOptions): Promise<ObservationEvent[]> {
-  const files = await listFiles(join(homedir(), '.codex', 'sessions'), 4, options)
+  const files = await listFiles(codexSessionsRoot(), 6, options)
   const events: ObservationEvent[] = []
   for (const file of files) {
     const entries = await readJsonl(file)
@@ -183,6 +202,25 @@ async function scanCodex(clientId: string, skills: Awaited<ReturnType<typeof lis
           ts,
           payload: { text }
         }))
+        continue
+      }
+      if (entry.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
+        const text = assistantText(payload.content)
+        if (text) {
+          seq += 1
+          events.push(makeEvent({
+            clientId,
+            clientName: 'codex',
+            sessionId,
+            turnIndex: Math.max(turnIndex, 1),
+            seq,
+            type: 'assistant',
+            ts,
+            skillSlug: currentSlug,
+            skillName: currentName,
+            payload: { text }
+          }))
+        }
         continue
       }
       if (entry.type !== 'response_item') continue
@@ -251,7 +289,7 @@ async function scanCodex(clientId: string, skills: Awaited<ReturnType<typeof lis
       if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
         const event = pending.get(String(payload.call_id || ''))
         if (!event) continue
-        const result = typeof payload.output === 'string' ? payload.output : extractText(payload.output ?? payload)
+        const result = typeof payload.output === 'string' ? sanitizeText(payload.output) : extractText(payload.output ?? payload)
         if (event.type === 'tool') event.payload.result = result
         if (event.type === 'document' && (!event.payload.content || String(event.payload.content).length < result.length)) {
           event.payload.content = result
@@ -286,6 +324,7 @@ function makeEvent(input: {
     input.skillSlug || '',
     input.type === 'document' ? String(input.payload.path || '') : '',
     input.type === 'tool' ? String(input.payload.name || '') : '',
+    input.type === 'assistant' ? String(input.payload.text || '').slice(0, 80) : '',
     String(input.seq)
   ].join('|')
   const stepId = createHash('sha256').update(stable).digest('hex').slice(0, 24)
@@ -303,7 +342,7 @@ function makeEvent(input: {
     skill_slug: input.skillSlug,
     skill_name: input.skillName,
     source: 'scan',
-    payload: input.payload
+    payload: sanitizePayload(input.payload)
   }
 }
 
@@ -315,15 +354,43 @@ function isUserTurn(role: string, content: unknown): boolean {
   return !onlyToolResult && extractText(content).trim().length > 0
 }
 
+function claudeSessionId(file: string, entries: Record<string, unknown>[]): string {
+  const fromEntry = entries.find((entry) => typeof entry.sessionId === 'string')
+  const sessionId = String(fromEntry?.sessionId || basename(file, '.jsonl'))
+  const marker = `${sep()}subagents${sep()}`
+  const index = file.toLowerCase().lastIndexOf(marker)
+  if (index < 0) return sessionId
+  const parent = basename(file.slice(0, index))
+  return parent ? `${parent}/subagents/${sessionId}` : sessionId
+}
+
+function sep(): string {
+  return join('a', 'b').includes('\\') ? '\\' : '/'
+}
+
+function assistantText(content: unknown): string {
+  if (typeof content === 'string') return sanitizeText(content).trim()
+  if (!Array.isArray(content)) return extractText(content).trim()
+  const parts: string[] = []
+  for (const item of content) {
+    const record = asRecord(item)
+    const type = String(record.type || '')
+    if (type && type !== 'text' && type !== 'output_text') continue
+    const text = typeof record.text === 'string' ? sanitizeText(record.text) : extractText(item)
+    if (text.trim()) parts.push(text.trim())
+  }
+  return parts.join('\n').trim()
+}
+
 function extractText(content: unknown): string {
-  if (typeof content === 'string') return content
+  if (typeof content === 'string') return sanitizeText(content)
   if (Array.isArray(content)) return content.map((item) => extractText(item)).filter(Boolean).join('\n')
   if (content && typeof content === 'object') {
     const record = asRecord(content)
-    if (typeof record.text === 'string') return record.text
+    if (typeof record.text === 'string') return sanitizeText(record.text)
     if (record.content !== undefined) return extractText(record.content)
   }
-  return content == null ? '' : JSON.stringify(content)
+  return content == null ? '' : sanitizeText(JSON.stringify(content))
 }
 
 function parseMaybeJson(value: unknown): unknown {
@@ -337,6 +404,14 @@ function parseMaybeJson(value: unknown): unknown {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {}
+}
+
+function claudeProjectsRoot(): string {
+  return process.env.SKILLHUB_CLAUDE_PROJECTS || join(homedir(), '.claude', 'projects')
+}
+
+function codexSessionsRoot(): string {
+  return process.env.SKILLHUB_CODEX_SESSIONS || join(homedir(), '.codex', 'sessions')
 }
 
 async function listFiles(root: string, depth: number, options: ScanOptions): Promise<string[]> {

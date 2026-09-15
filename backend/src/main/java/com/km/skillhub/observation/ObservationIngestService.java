@@ -15,7 +15,7 @@ import java.util.Map;
 
 /**
  * Accepts full observation payloads (user text, tool args/results, document bodies).
- * Client and server both keep only turns that used a platform skill; nothing is summarized.
+ * Client and server keep complete sessions and turns, including assistant replies.
  */
 @Service
 public class ObservationIngestService {
@@ -74,23 +74,16 @@ public class ObservationIngestService {
                     steps.add(asMap(stepObj));
                 }
                 String currentSlug = null;
-                boolean hasPlatformSkill = false;
                 List<String> resolvedSlugs = new ArrayList<String>();
                 for (Map<String, Object> step : steps) {
                     String resolved = resolveSlug(step, platform, nameToSlug, currentSlug);
                     String type = typeOf(step);
                     if ("skill".equals(type) && resolved != null && platform.containsKey(resolved)) {
                         currentSlug = resolved;
-                        hasPlatformSkill = true;
                     } else if (resolved != null && platform.containsKey(resolved)) {
                         currentSlug = resolved;
-                        hasPlatformSkill = true;
                     }
                     resolvedSlugs.add(resolved);
-                }
-                if (!hasPlatformSkill) {
-                    skipped += steps.size();
-                    continue;
                 }
                 String userText = text(turn, "userText", "user_text");
                 if (isBlank(userText)) {
@@ -103,7 +96,7 @@ public class ObservationIngestService {
                 }
                 Instant turnStarted = instant(turn, "startedAt", "started_at");
                 if (turnStarted == null && !steps.isEmpty()) turnStarted = instant(steps.get(0), "ts", "timestamp");
-                long turnId = repository.upsertTurn(sessionId, turnIndex, turnStarted, userText == null ? "" : userText);
+                long turnId = repository.upsertTurn(sessionId, turnIndex, turnStarted, ObservationPayloads.sanitizeText(userText == null ? "" : userText));
                 currentSlug = null;
                 for (int i = 0; i < steps.size(); i++) {
                     Map<String, Object> step = steps.get(i);
@@ -112,18 +105,21 @@ public class ObservationIngestService {
                     if ("skill".equals(type) && resolved != null && platform.containsKey(resolved)) currentSlug = resolved;
                     else if (resolved != null && platform.containsKey(resolved)) currentSlug = resolved;
                     String slug = resolved != null ? resolved : currentSlug;
-                    if (!"user".equals(type) && (slug == null || !platform.containsKey(slug))) {
-                        skipped += 1;
-                        continue;
-                    }
+                    if ("user".equals(type) || "assistant".equals(type)) slug = resolved;
+                    else if (slug != null && !platform.containsKey(slug)) slug = currentSlug;
                     String stepId = text(step, "stepId", "step_id");
                     if (isBlank(stepId)) stepId = type + "-" + (i + 1);
                     int seq = integer(step.get("seq"), i + 1);
                     Instant ts = instant(step, "ts", "timestamp");
-                    String payloadJson = json(step.containsKey("payload") ? step.get("payload") : step.get("data"));
-                    if ("user".equals(type) && "{}".equals(payloadJson) && !isBlank(userText)) {
+                    Object rawPayload = step.containsKey("payload") ? step.get("payload") : step.get("data");
+                    String payloadJson = json(ObservationPayloads.sanitize(rawPayload));
+                    if (("user".equals(type) || "assistant".equals(type)) && "{}".equals(payloadJson) && !isBlank(payloadText(step))) {
                         Map<String, Object> payload = new LinkedHashMap<String, Object>();
-                        payload.put("text", userText);
+                        payload.put("text", ObservationPayloads.sanitizeText(payloadText(step)));
+                        payloadJson = json(payload);
+                    } else if ("user".equals(type) && "{}".equals(payloadJson) && !isBlank(userText)) {
+                        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+                        payload.put("text", ObservationPayloads.sanitizeText(userText));
                         payloadJson = json(payload);
                     }
                     repository.upsertStep(turnId, stepId, seq, type, ts, slug, payloadJson);
@@ -162,7 +158,7 @@ public class ObservationIngestService {
         String type = text(step, "type");
         if (isBlank(type)) return "tool";
         type = type.trim().toLowerCase(Locale.ROOT);
-        if ("user".equals(type) || "skill".equals(type) || "tool".equals(type) || "document".equals(type)) return type;
+        if ("user".equals(type) || "assistant".equals(type) || "skill".equals(type) || "tool".equals(type) || "document".equals(type)) return type;
         throw new IllegalArgumentException("观测步骤类型无效: " + type);
     }
 
@@ -221,17 +217,23 @@ public class ObservationIngestService {
 
     private String json(Object value) {
         if (value == null) return "{}";
-        if (value instanceof String) {
-            String raw = ((String) value).trim();
-            if (raw.startsWith("{") || raw.startsWith("[")) return raw;
-            try {
-                return mapper.writeValueAsString(Collections.singletonMap("text", value));
-            } catch (Exception e) {
-                throw new IllegalArgumentException("无法序列化观测内容");
-            }
-        }
         try {
-            return mapper.writeValueAsString(value);
+            String encoded;
+            if (value instanceof String) {
+                String raw = ((String) value).trim();
+                if (raw.startsWith("{") || raw.startsWith("[")) {
+                    try {
+                        encoded = mapper.writeValueAsString(ObservationPayloads.sanitize(mapper.readValue(raw, Object.class)));
+                    } catch (Exception ignored) {
+                        encoded = mapper.writeValueAsString(Collections.singletonMap("text", ObservationPayloads.sanitizeText((String) value)));
+                    }
+                } else {
+                    encoded = mapper.writeValueAsString(Collections.singletonMap("text", ObservationPayloads.sanitizeText((String) value)));
+                }
+            } else {
+                encoded = mapper.writeValueAsString(ObservationPayloads.sanitize(value));
+            }
+            return ObservationPayloads.forJsonb(encoded);
         } catch (Exception e) {
             throw new IllegalArgumentException("无法序列化观测内容");
         }

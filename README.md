@@ -7,7 +7,7 @@ SkillHub 是一个轻量的 Skill Hub，用于上传、浏览、下载、安装�
 - Web 端上传 ZIP、目录或单个 `SKILL.md`
 - Web 端和 CLI 查询平台技能
 - Web 端和 CLI 下载、安装指定技能
-- Observer CLI 采集本地技能调用，生成本地 HTML 报告，并把平台已有技能的完整观测内容上传到平台
+- Observer CLI 采集本地 Claude Code / Codex 会话，生成本地 HTML 报告，并把全部会话原文（含助手回复）上传到平台
 
 ## 一、启动项目
 
@@ -336,8 +336,8 @@ skillhub-observer upload --service-url http://127.0.0.1:8080
 ```
 
 - `install`：写入 Claude Code / Codex hooks。对话结束时扫描 `~/.claude/projects/**/*.jsonl` 和 `~/.codex/sessions/**/*.jsonl`，合并进本机 `events.jsonl`。Hook 失败不会阻塞 Agent。
-- `report`：生成本地完整 HTML 报告，包含平台没有的技能。提供 `--service-url` 时会标记「可上传」或「仅本地」。
-- `upload`：只上传平台已有技能（含已下架）出现过的回合；上传完整用户原文、完整工具参数/结果、完整文档正文，不生成摘要。
+- `report`：生成本地完整 HTML 报告，包含全部会话、回合和助手回复。提供 `--service-url` 时会标记技能是否出现在平台目录中。
+- `upload`：上传本机全部会话和回合，包含用户原文、助手回复、工具参数/结果和文档正文，不生成摘要。平台技能只用于标注，不再作为过滤条件。
 
 默认本地目录：
 
@@ -350,7 +350,7 @@ skillhub-observer upload --service-url http://127.0.0.1:8080
 `POST /api/observations/ingest` 接收完整观测内容，而不是摘要。
 
 - 无登录。数据按 `clientId` 区分来源，平台观测页对所有访问者可见。
-- 客户端先对照 `/api/skills?includeOffline=true` 过滤，服务端再过滤一次：没有用过平台技能的回合直接丢弃。
+- 客户端对照 `/api/skills?includeOffline=true` 标注平台技能；服务端保存全部会话和回合，不再丢弃未匹配技能的内容。
 - 同一回合里，未带 slug 的工具/文档步骤归到最近一个平台技能。
 - 保留 `SKILL.md` / `*.md` / `*.mdx` / `*.txt` / `*.rst` 正文，丢弃代码和二进制。
 - 幂等键是 `(clientId, sessionId, turnIndex, stepId)`。重复上传时保留更完整的 payload。
@@ -371,7 +371,7 @@ skill-hub_simple/
 │       │   └── observation/                   观测入库和查询
 │       └── resources/
 │           ├── application.yml                服务和数据库配置
-│           └── db/migration/                  Flyway 迁移 V1-V4
+│           └── db/migration/                  Flyway 迁移 V1-V5
 ├── frontend/                         Vue 3 + Vite 前端
 │   ├── src/App.vue                   页面和交互
 │   ├── src/router/                   路由
@@ -386,7 +386,7 @@ skill-hub_simple/
 ├── observer/                         TypeScript 观测 CLI
 │   ├── src/index.ts                  install/report/upload/hook
 │   ├── src/scan.ts                   扫描 Claude Code / Codex jsonl
-│   ├── src/upload.ts                 过滤并上传完整观测内容
+│   ├── src/upload.ts                 标注平台技能并上传完整观测内容
 │   └── src/report.ts                 生成本地 HTML 报告
 ├── docs/                             CLI 安装指南
 ├── skill/                            Agent 操作 Skill
@@ -424,6 +424,7 @@ flowchart LR
 
 - `POST /api/observations/ingest`：上传完整观测内容
 - `GET /api/observations`：观测总览和技能列表
+- `GET /api/observations/sessions`：全部会话列表和选中会话原文
 - `GET /api/observations/skills`：已观测技能
 - `GET /api/observations/skills/{slug}`：某个技能的客户端、会话和调用链路
 - `GET /api/observations/sessions/{id}`：某个会话的逐步链路
@@ -440,7 +441,7 @@ flowchart LR
 - `observation_client`：本机采集端 `client_id`、主机名和操作系统
 - `observation_session`：客户端会话
 - `observation_turn`：一次用户对话及完整用户原文
-- `observation_step`：该回合中的技能、工具、文档步骤，payload 为完整 JSONB
+- `observation_step`：该回合中的用户、助手、技能、工具、文档步骤，payload 为完整 JSONB
 - `observation_ingest_batch`：上传批次统计
 
 其中 `skill_file.content` 使用 PostgreSQL `BYTEA` 保存文件二进制内容。下载时，后端从这些记录重新组装 ZIP。`skill.download_count` 使用原子更新累计成功下载次数。观测步骤按 `(turn_id, step_id)` 幂等写入，重复上传时保留更长的完整内容。

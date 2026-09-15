@@ -25,7 +25,7 @@ public class ObservationController {
 
     /**
      * Upload contract: full session/turn/step payloads, no summaries.
-     * Only platform skills are stored; identity is (clientId, sessionId, turnIndex, stepId).
+     * Identity is (clientId, sessionId, turnIndex, stepId).
      */
     @PostMapping("/ingest")
     public Map<String, Object> ingest(@RequestBody Map<String, Object> body) {
@@ -38,6 +38,12 @@ public class ObservationController {
         result.put("overview", repository.overview());
         result.put("skills", repository.listObservedSkills());
         return result;
+    }
+
+    @GetMapping("/sessions")
+    public Map<String, Object> sessions(@RequestParam(required = false) String clientId,
+                                        @RequestParam(required = false) Long sessionId) {
+        return repository.sessionList(clientId, sessionId);
     }
 
     @GetMapping("/skills")
