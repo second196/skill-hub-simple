@@ -1,12 +1,15 @@
 import { createReadStream } from 'node:fs'
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
 import { hostname, platform } from 'node:os'
 import { sanitizePayload } from './payload.js'
+import { truncateText } from './documents.js'
 import type { ClientRecord, ObservationEvent } from './types.js'
 import { clientPath, eventsPath, observabilityDir, spoolDir } from './paths.js'
+
+const MAX_FIELD_CHARS = 256 * 1024
 
 export async function ensureStore(): Promise<void> {
   await mkdir(observabilityDir(), { recursive: true })
@@ -43,45 +46,22 @@ export async function appendEvents(events: ObservationEvent[]): Promise<number> 
 }
 
 export async function mergeEvents(events: ObservationEvent[]): Promise<number> {
-  if (!events.length) return 0
-  const existing = await readEvents()
-  const byId = new Map(existing.map((event) => [event.step_id, event]))
-  const fresh: ObservationEvent[] = []
-  for (const event of events) {
-    const previous = byId.get(event.step_id)
-    if (!previous) {
-      fresh.push(event)
-      byId.set(event.step_id, event)
-      continue
-    }
-    if (JSON.stringify(event.payload).length > JSON.stringify(previous.payload).length) {
-      fresh.push(event)
-      byId.set(event.step_id, event)
-    }
+  await ensureStore()
+  const byId = new Map<string, ObservationEvent>()
+  for await (const event of streamEvents()) {
+    putEvent(byId, event)
   }
-  return appendEvents(fresh)
+  for (const event of events) {
+    putEvent(byId, event)
+  }
+  await rewriteEvents([...byId.values()])
+  return events.length
 }
 
 export async function readEvents(): Promise<ObservationEvent[]> {
   const latest = new Map<string, ObservationEvent>()
-  try {
-    const rl = createInterface({ input: createReadStream(eventsPath(), { encoding: 'utf8' }), crlfDelay: Infinity })
-    for await (const line of rl) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      try {
-        const event = JSON.parse(trimmed) as ObservationEvent
-        if (!event?.step_id) continue
-        const previous = latest.get(event.step_id)
-        if (!previous || JSON.stringify(event.payload).length >= JSON.stringify(previous.payload).length) {
-          latest.set(event.step_id, event)
-        }
-      } catch {
-        // skip malformed
-      }
-    }
-  } catch {
-    return []
+  for await (const event of streamEvents()) {
+    putEvent(latest, event)
   }
   return [...latest.values()].sort((a, b) => {
     const time = a.ts.localeCompare(b.ts)
@@ -90,6 +70,80 @@ export async function readEvents(): Promise<ObservationEvent[]> {
     if (a.turn_index !== b.turn_index) return a.turn_index - b.turn_index
     return a.seq - b.seq
   })
+}
+
+async function* streamEvents(): AsyncGenerator<ObservationEvent> {
+  const path = eventsPath()
+  try {
+    await access(path)
+  } catch {
+    return
+  }
+  const handle = createReadStream(path, { encoding: 'utf8' })
+  const rl = createInterface({ input: handle, crlfDelay: Infinity })
+  try {
+    for await (const line of rl) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        const parsed = JSON.parse(trimmed) as ObservationEvent
+        if (!parsed?.step_id) continue
+        yield truncateEvent(parsed)
+      } catch {
+        // skip malformed
+      }
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code
+    if (code !== 'ENOENT') throw error
+  } finally {
+    rl.close()
+    handle.destroy()
+  }
+}
+
+function putEvent(byId: Map<string, ObservationEvent>, event: ObservationEvent): void {
+  const next = truncateEvent(event)
+  const previous = byId.get(next.step_id)
+  if (!previous || payloadSize(next) >= payloadSize(previous)) {
+    byId.set(next.step_id, next)
+  }
+}
+
+function payloadSize(event: ObservationEvent): number {
+  try {
+    return JSON.stringify(event.payload).length
+  } catch {
+    return 0
+  }
+}
+
+function truncateEvent(event: ObservationEvent): ObservationEvent {
+  return {
+    ...event,
+    payload: truncatePayload(event.payload) as Record<string, unknown>
+  }
+}
+
+function truncatePayload(value: unknown): unknown {
+  if (typeof value === 'string') return truncateText(value, MAX_FIELD_CHARS)
+  if (Array.isArray(value)) return value.map((item) => truncatePayload(item))
+  if (value && typeof value === 'object') {
+    const copy: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      copy[key] = truncatePayload(item)
+    }
+    return copy
+  }
+  return value
+}
+
+async function rewriteEvents(events: ObservationEvent[]): Promise<void> {
+  const target = eventsPath()
+  const tmp = `${target}.tmp-${Date.now()}`
+  await writeFile(tmp, events.map((event) => JSON.stringify(event)).join('\n') + (events.length ? '\n' : ''), 'utf8')
+  await rm(target, { force: true })
+  await rename(tmp, target)
 }
 
 export async function writeJson(path: string, value: unknown): Promise<void> {

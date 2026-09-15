@@ -78,9 +78,9 @@ public class ObservationIngestService {
                 for (Map<String, Object> step : steps) {
                     String resolved = resolveSlug(step, platform, nameToSlug, currentSlug);
                     String type = typeOf(step);
-                    if ("skill".equals(type) && resolved != null && platform.containsKey(resolved)) {
+                    if ("skill".equals(type) && resolved != null) {
                         currentSlug = resolved;
-                    } else if (resolved != null && platform.containsKey(resolved)) {
+                    } else if (resolved != null) {
                         currentSlug = resolved;
                     }
                     resolvedSlugs.add(resolved);
@@ -102,11 +102,16 @@ public class ObservationIngestService {
                     Map<String, Object> step = steps.get(i);
                     String type = typeOf(step);
                     String resolved = resolvedSlugs.get(i);
-                    if ("skill".equals(type) && resolved != null && platform.containsKey(resolved)) currentSlug = resolved;
-                    else if (resolved != null && platform.containsKey(resolved)) currentSlug = resolved;
-                    String slug = resolved != null ? resolved : currentSlug;
-                    if ("user".equals(type) || "assistant".equals(type)) slug = resolved;
-                    else if (slug != null && !platform.containsKey(slug)) slug = currentSlug;
+                    if (resolved != null) currentSlug = resolved;
+                    String slug;
+                    if ("user".equals(type) || "assistant".equals(type)) {
+                        slug = resolved;
+                    } else if ("skill".equals(type)) {
+                        // Unlisted child/local skills stay unattributed; parent rollup already resolved.
+                        slug = resolved;
+                    } else {
+                        slug = resolved != null ? resolved : currentSlug;
+                    }
                     String stepId = text(step, "stepId", "step_id");
                     if (isBlank(stepId)) stepId = type + "-" + (i + 1);
                     int seq = integer(step.get("seq"), i + 1);
@@ -144,14 +149,46 @@ public class ObservationIngestService {
 
     private String resolveSlug(Map<String, Object> step, Map<String, String> platform, Map<String, String> nameToSlug, String fallback) {
         String slug = text(step, "skillSlug", "skill_slug", "slug");
-        if (!isBlank(slug) && platform.containsKey(slug)) return slug;
-        if (!isBlank(slug) && nameToSlug.containsKey(normalize(slug))) return nameToSlug.get(normalize(slug));
+        if (!isBlank(slug)) {
+            if (platform.containsKey(slug)) return slug;
+            String mapped = nameToSlug.get(normalize(slug));
+            if (mapped != null) return mapped;
+            String parent = parentPlatformSlug(slug, platform);
+            if (parent != null) return parent;
+            // Explicit local skill identity: do not inherit the previous platform skill.
+            return null;
+        }
         String name = text(step, "skillName", "skill_name", "name");
         Map<String, Object> payload = asMap(step.get("payload"));
         if (isBlank(name)) name = text(payload, "name", "skill", "skillName", "skill_name");
-        if (!isBlank(name) && nameToSlug.containsKey(normalize(name))) return nameToSlug.get(normalize(name));
-        if (!isBlank(slug) && nameToSlug.containsKey(normalize(slug))) return nameToSlug.get(normalize(slug));
-        return fallback;
+        if (!isBlank(name)) {
+            if (platform.containsKey(name)) return name;
+            String mapped = nameToSlug.get(normalize(name));
+            if (mapped != null) return mapped;
+            String parent = parentPlatformSlug(name, platform);
+            if (parent != null) return parent;
+            // Only ignore non-skill payload names (tool names); keep null for explicit skill_name.
+            if (step.containsKey("skillName") || step.containsKey("skill_name") || step.containsKey("skillSlug") || step.containsKey("skill_slug")) {
+                return null;
+            }
+        }
+        if (!isBlank(fallback) && platform.containsKey(fallback)) return fallback;
+        return null;
+    }
+
+    /**
+     * Composite children roll up to a platform parent unless the child itself is listed.
+     */
+    private String parentPlatformSlug(String slugOrName, Map<String, String> platform) {
+        String key = normalize(slugOrName);
+        if (key.isEmpty()) return null;
+        if (key.startsWith("sop-") && platform.containsKey("using-product-development")) {
+            return "using-product-development";
+        }
+        if ("using-superpowers".equals(key) && platform.containsKey("superpowers")) {
+            return "superpowers";
+        }
+        return null;
     }
 
     private String typeOf(Map<String, Object> step) {

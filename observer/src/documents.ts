@@ -9,8 +9,8 @@ const DROP_EXT = new Set([
   '.wasm', '.bin', '.exe', '.dll', '.so'
 ])
 
-// Runaway/binary guard only. Text documents are stored in full and never summarized.
-export const MAX_DOCUMENT_BYTES = 1024 * 1024 * 1024
+// Keep payloads small enough for CLI upload/heap. Oversized text is truncated, not summarized.
+export const MAX_DOCUMENT_BYTES = 256 * 1024
 
 export function isDocumentPath(path: string | undefined): boolean {
   if (!path) return false
@@ -32,11 +32,19 @@ export async function readDocument(path: string): Promise<string | undefined> {
   try {
     const buf = await readFile(path)
     if (buf.includes(0)) return undefined
-    if (buf.length > MAX_DOCUMENT_BYTES) return undefined
+    if (buf.length > MAX_DOCUMENT_BYTES) {
+      const head = buf.subarray(0, MAX_DOCUMENT_BYTES).toString('utf8')
+      return `${head}\n\n[document truncated; original ${buf.length} bytes]`
+    }
     return buf.toString('utf8')
   } catch {
     return undefined
   }
+}
+
+export function truncateText(value: string, maxBytes = MAX_DOCUMENT_BYTES): string {
+  if (value.length <= maxBytes) return value
+  return `${value.slice(0, maxBytes)}\n\n[document truncated; original ${value.length} chars]`
 }
 
 export function extractPaths(value: unknown, found = new Set<string>()): string[] {

@@ -4,8 +4,8 @@ import { basename, join } from 'node:path'
 import { homedir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { createHash, randomUUID } from 'node:crypto'
-import type { ClientName, ObservationEvent, StepType } from './types.js'
-import { listInstalledSkills, matchSkill, slugify } from './catalog.js'
+import type { ClientName, InstalledSkill, ObservationEvent, SkillUsage, StepType } from './types.js'
+import { discoverProjectSkillRoots, listInstalledSkills, matchSlashSkillCommands, matchSkillUsage, parentSlugsFor, slugify } from './catalog.js'
 import { extractPaths, isDocumentPath, readDocument } from './documents.js'
 import { sanitizePayload, sanitizeText } from './payload.js'
 import { loadClientId } from './store.js'
@@ -17,19 +17,19 @@ interface ScanOptions {
 
 export async function scanAll(options: ScanOptions = {}): Promise<ObservationEvent[]> {
   const clientId = await loadClientId()
-  const skills = await listInstalledSkills()
-  const claude = await scanClaude(clientId, skills, options)
-  const codex = await scanCodex(clientId, skills, options)
+  const claudeFiles = await listFiles(claudeProjectsRoot(), 6, options)
+  const codexFiles = await listFiles(codexSessionsRoot(), 6, options)
+  const skills = await listInstalledSkills(await discoverProjectSkillRoots([...claudeFiles, ...codexFiles]))
+  const claude = await scanClaude(clientId, skills, claudeFiles, options)
+  const codex = await scanCodex(clientId, skills, codexFiles, options)
   return [...claude, ...codex]
 }
 
-async function scanClaude(clientId: string, skills: Awaited<ReturnType<typeof listInstalledSkills>>, options: ScanOptions): Promise<ObservationEvent[]> {
-  const files = await listFiles(claudeProjectsRoot(), 6, options)
+async function scanClaude(clientId: string, skills: InstalledSkill[], files: string[], _options: ScanOptions): Promise<ObservationEvent[]> {
   const events: ObservationEvent[] = []
   for (const file of files) {
     const entries = await readJsonl(file)
     const sessionId = claudeSessionId(file, entries)
-    if (options.sessionId && sessionId !== options.sessionId && !file.includes(options.sessionId)) continue
     let turnIndex = 0
     let seq = 0
     let currentSlug: string | undefined
@@ -46,6 +46,7 @@ async function scanClaude(clientId: string, skills: Awaited<ReturnType<typeof li
         currentSlug = undefined
         currentName = undefined
         seq += 1
+        const userText = extractText(content)
         events.push(makeEvent({
           clientId,
           clientName: 'claude-code',
@@ -54,8 +55,25 @@ async function scanClaude(clientId: string, skills: Awaited<ReturnType<typeof li
           seq,
           type: 'user',
           ts,
-          payload: { text: extractText(content) }
+          payload: { text: userText }
         }))
+        const textEvents = skillEventsFromUserText({
+          clientId,
+          clientName: 'claude-code',
+          sessionId,
+          turnIndex,
+          startSeq: seq,
+          ts,
+          text: userText
+        })
+        seq += textEvents.length
+        for (const event of textEvents) {
+          if (event.type === 'skill') {
+            currentSlug = event.skill_slug
+            currentName = event.skill_name
+          }
+          events.push(event)
+        }
         continue
       }
       if (role === 'assistant') {
@@ -84,26 +102,29 @@ async function scanClaude(clientId: string, skills: Awaited<ReturnType<typeof li
         const toolName = String(item.name || '')
         const input = item.input ?? {}
         const callId = String(item.id || seq)
-        const matched = toolName === 'Skill'
-          ? { slug: slugify(String(asRecord(input).skill || asRecord(input).name || '')), name: String(asRecord(input).skill || asRecord(input).name || '') }
-          : matchSkill(skills, input)
-        if (toolName === 'Skill' || matched) {
-          currentName = matched?.name || String(asRecord(input).skill || '')
-          currentSlug = matched?.slug || slugify(currentName)
-          const event = makeEvent({
+        const explicitSkill = toolName === 'Skill'
+          ? skillUsageFromExplicit(String(asRecord(input).skill || asRecord(input).name || ''))
+          : undefined
+        const usage = explicitSkill || matchSkillUsage(skills, input)
+        if (usage) {
+          currentName = usage.name
+          currentSlug = usage.slug
+          const matchedEvents = skillUsageEvents({
             clientId,
             clientName: 'claude-code',
             sessionId,
             turnIndex: Math.max(turnIndex, 1),
-            seq,
-            type: 'skill',
+            startSeq: seq,
             ts,
-            skillSlug: currentSlug,
-            skillName: currentName,
-            payload: { name: currentName, args: input, outcome: 'ok', duration_ms: undefined }
+            usage,
+            args: input,
+            outcome: 'ok'
           })
-          pending.set(callId, event)
-          events.push(event)
+          seq += matchedEvents.length - 1
+          for (const event of matchedEvents) {
+            pending.set(callId, event)
+            events.push(event)
+          }
           continue
         }
         const paths = extractPaths(input)
@@ -163,8 +184,7 @@ async function scanClaude(clientId: string, skills: Awaited<ReturnType<typeof li
   return events
 }
 
-async function scanCodex(clientId: string, skills: Awaited<ReturnType<typeof listInstalledSkills>>, options: ScanOptions): Promise<ObservationEvent[]> {
-  const files = await listFiles(codexSessionsRoot(), 6, options)
+async function scanCodex(clientId: string, skills: InstalledSkill[], files: string[], _options: ScanOptions): Promise<ObservationEvent[]> {
   const events: ObservationEvent[] = []
   for (const file of files) {
     const entries = await readJsonl(file)
@@ -176,7 +196,6 @@ async function scanCodex(clientId: string, skills: Awaited<ReturnType<typeof lis
       }
     }
     if (!sessionId) sessionId = basename(file, '.jsonl')
-    if (options.sessionId && sessionId !== options.sessionId && !file.includes(options.sessionId)) continue
     let turnIndex = 0
     let seq = 0
     let currentSlug: string | undefined
@@ -202,6 +221,23 @@ async function scanCodex(clientId: string, skills: Awaited<ReturnType<typeof lis
           ts,
           payload: { text }
         }))
+        const textEvents = skillEventsFromUserText({
+          clientId,
+          clientName: 'codex',
+          sessionId,
+          turnIndex,
+          startSeq: seq,
+          ts,
+          text
+        })
+        seq += textEvents.length
+        for (const event of textEvents) {
+          if (event.type === 'skill') {
+            currentSlug = event.skill_slug
+            currentName = event.skill_name
+          }
+          events.push(event)
+        }
         continue
       }
       if (entry.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
@@ -230,24 +266,27 @@ async function scanCodex(clientId: string, skills: Awaited<ReturnType<typeof lis
         const rawArgs = payload.type === 'function_call' ? payload.arguments : payload.input
         const args = parseMaybeJson(rawArgs)
         const callId = String(payload.call_id || seq)
-        const matched = matchSkill(skills, args) || matchSkill(skills, rawArgs)
-        if (matched) {
-          currentSlug = matched.slug
-          currentName = matched.name
-          const event = makeEvent({
+        const usage = matchSkillUsage(skills, args) || matchSkillUsage(skills, rawArgs)
+        if (usage) {
+          currentSlug = usage.slug
+          currentName = usage.name
+          const matchedEvents = skillUsageEvents({
             clientId,
             clientName: 'codex',
             sessionId,
             turnIndex: Math.max(turnIndex, 1),
-            seq,
-            type: 'skill',
+            startSeq: seq,
             ts,
-            skillSlug: currentSlug,
-            skillName: currentName,
-            payload: { name: currentName, args, outcome: 'ok' }
+            usage,
+            args,
+            outcome: 'ok',
+            toolName: name
           })
-          pending.set(callId, event)
-          events.push(event)
+          seq += matchedEvents.length - 1
+          for (const event of matchedEvents) {
+            pending.set(callId, event)
+            events.push(event)
+          }
           continue
         }
         const paths = extractPaths(args)
@@ -300,6 +339,114 @@ async function scanCodex(clientId: string, skills: Awaited<ReturnType<typeof lis
         }
       }
     }
+  }
+  return events
+}
+
+function skillUsageFromExplicit(name: string): SkillUsage | undefined {
+  if (!name) return undefined
+  const slug = slugify(name)
+  if (!slug || slug === 'skill') return undefined
+  return { slug, name: name || slug, parents: parentsForExplicit(slug), match: 'call' }
+}
+
+function parentsForExplicit(slug: string): string[] {
+  return parentSlugsFor(slug)
+}
+
+function skillUsageEvents(input: {
+  clientId: string
+  clientName: ClientName
+  sessionId: string
+  turnIndex: number
+  startSeq: number
+  ts: string
+  usage: SkillUsage
+  args: unknown
+  outcome: 'ok' | 'error'
+  toolName?: string
+}): ObservationEvent[] {
+  const events: ObservationEvent[] = []
+  let seq = input.startSeq
+  events.push(makeEvent({
+    clientId: input.clientId,
+    clientName: input.clientName,
+    sessionId: input.sessionId,
+    turnIndex: input.turnIndex,
+    seq,
+    type: 'skill',
+    ts: input.ts,
+    skillSlug: input.usage.slug,
+    skillName: input.usage.name,
+    payload: {
+      name: input.usage.name,
+      args: input.args,
+      outcome: input.outcome,
+      match: input.usage.match,
+      tool: input.toolName,
+      duration_ms: undefined
+    }
+  }))
+  for (const parent of input.usage.parents) {
+    seq += 1
+    events.push(makeEvent({
+      clientId: input.clientId,
+      clientName: input.clientName,
+      sessionId: input.sessionId,
+      turnIndex: input.turnIndex,
+      seq,
+      type: 'skill',
+      ts: input.ts,
+      skillSlug: parent,
+      skillName: parent,
+      payload: {
+        name: parent,
+        args: input.args,
+        outcome: input.outcome,
+        match: input.usage.match,
+        rollup: true,
+        child_slug: input.usage.slug,
+        child_name: input.usage.name,
+        duration_ms: undefined
+      }
+    }))
+  }
+  return events
+}
+
+function skillEventsFromUserText(input: {
+  clientId: string
+  clientName: ClientName
+  sessionId: string
+  turnIndex: number
+  startSeq: number
+  ts: string
+  text: string
+}): ObservationEvent[] {
+  const usages = matchSlashSkillCommands(input.text)
+  if (!usages.length) return []
+  const events: ObservationEvent[] = []
+  let seq = input.startSeq
+  for (const usage of usages) {
+    seq += 1
+    events.push(makeEvent({
+      clientId: input.clientId,
+      clientName: input.clientName,
+      sessionId: input.sessionId,
+      turnIndex: input.turnIndex,
+      seq,
+      type: 'skill',
+      ts: input.ts,
+      skillSlug: usage.slug,
+      skillName: usage.name,
+      payload: {
+        name: usage.name,
+        args: { source: 'user_text', text: input.text.slice(0, 400) },
+        outcome: 'ok',
+        match: usage.match,
+        from_user_text: true
+      }
+    }))
   }
   return events
 }

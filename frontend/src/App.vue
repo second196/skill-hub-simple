@@ -100,7 +100,8 @@ const isSearch = computed(() => route.path === '/search')
 const isPublish = computed(() => route.path === '/publish')
 const isDetail = computed(() => route.path.startsWith('/skills/'))
 const isObserve = computed(() => route.path === '/observe')
-const isObserveSkill = computed(() => /^\/observe\/[^/]+$/.test(route.path))
+const isObserveSessions = computed(() => route.path === '/observe/sessions')
+const isObserveSkill = computed(() => /^\/observe\/[^/]+$/.test(route.path) && !isObserveSessions.value)
 const observeSlug = computed(() => isObserveSkill.value ? decodeURIComponent(route.path.slice('/observe/'.length)) : '')
 
 const discoveryQuery = ref('')
@@ -499,6 +500,20 @@ function trendY(count: number, max: number, height: number) {
 async function loadObserveHome() {
   observeHomeLoading.value = true
   observeHomeError.value = ''
+  try {
+    const data = await request<{ overview: ObserveOverview; skills: ObserveSkillItem[] }>('/api/observations')
+    observeOverview.value = data.overview
+    observeSkills.value = data.skills || []
+  } catch (e) {
+    observeHomeError.value = e instanceof Error ? e.message : '观测数据加载失败'
+  } finally {
+    observeHomeLoading.value = false
+  }
+}
+
+async function loadObserveSessions() {
+  observeHomeLoading.value = true
+  observeHomeError.value = ''
   observeClientId.value = typeof route.query.client === 'string' ? route.query.client : ''
   observeSessionId.value = typeof route.query.session === 'string' ? route.query.session : ''
   try {
@@ -506,18 +521,14 @@ async function loadObserveHome() {
     if (observeClientId.value) params.set('clientId', observeClientId.value)
     if (observeSessionId.value) params.set('sessionId', observeSessionId.value)
     const suffix = params.toString() ? `?${params}` : ''
-    const [data, sessions] = await Promise.all([
-      request<{ overview: ObserveOverview; skills: ObserveSkillItem[] }>('/api/observations'),
-      request<ObserveSessionList>(`/api/observations/sessions${suffix}`)
-    ])
-    observeOverview.value = data.overview
-    observeSkills.value = data.skills || []
+    const sessions = await request<ObserveSessionList>(`/api/observations/sessions${suffix}`)
     observeSessions.value = sessions
     if (!observeSessionId.value && sessions.selectedSessionId) {
       observeSessionId.value = String(sessions.selectedSessionId)
     }
   } catch (e) {
-    observeHomeError.value = e instanceof Error ? e.message : '观测数据加载失败'
+    observeSessions.value = null
+    observeHomeError.value = e instanceof Error ? e.message : '会话数据加载失败'
   } finally {
     observeHomeLoading.value = false
   }
@@ -548,14 +559,14 @@ async function loadObserveSkill() {
 function selectObserveClient(clientId: string) {
   const query: Record<string, string> = {}
   if (clientId) query.client = clientId
-  const path = isObserveSkill.value ? `/observe/${observeSlug.value}` : '/observe'
+  const path = isObserveSkill.value ? `/observe/${observeSlug.value}` : '/observe/sessions'
   void router.push({ path, query })
 }
 
 function selectObserveSession(session: ObserveSession) {
   const query: Record<string, string> = { session: String(session.id) }
   if (observeClientId.value || session.client_id) query.client = observeClientId.value || session.client_id
-  const path = isObserveSkill.value ? `/observe/${observeSlug.value}` : '/observe'
+  const path = isObserveSkill.value ? `/observe/${observeSlug.value}` : '/observe/sessions'
   void router.push({ path, query })
 }
 
@@ -872,6 +883,10 @@ watch(
       await loadObserveSkill()
       return
     }
+    if (isObserveSessions.value) {
+      await loadObserveSessions()
+      return
+    }
     if (isObserve.value) {
       await loadObserveHome()
       return
@@ -943,7 +958,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             <Search :size="15" :stroke-width="1.9" aria-hidden="true" />
             <span>技能市场</span>
           </RouterLink>
-          <RouterLink class="site-nav-link" to="/observe" :class="{ 'router-link-active': isObserve || isObserveSkill }" :aria-current="isObserve || isObserveSkill ? 'page' : undefined">
+          <RouterLink class="site-nav-link" to="/observe" :class="{ 'router-link-active': isObserve || isObserveSkill || isObserveSessions }" :aria-current="isObserve || isObserveSkill || isObserveSessions ? 'page' : undefined">
             <Activity :size="15" :stroke-width="1.9" aria-hidden="true" />
             <span>观测</span>
           </RouterLink>
@@ -1215,7 +1230,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
         <div class="page-hero">
           <p class="home-kicker">Observability</p>
           <h1 class="page-title">技能观测</h1>
-          <p class="page-subtitle">查看本机上传的全部会话、回合和助手回复。上传保留完整原文，不生成摘要；平台技能仍可从下方卡片进入技能视角。</p>
+          <p class="page-subtitle">查看平台技能的调用情况和趋势。需要阅读完整对话时，从技能调用进入全部会话子页。</p>
           <p class="observe-hint">本机先执行 <code>skillhub-observer install</code>，再用 <code>skillhub-observer report --open</code> 查看完整报告，最后 <code>skillhub-observer upload --service-url http://127.0.0.1:8080</code> 上传全部会话。</p>
         </div>
 
@@ -1274,6 +1289,10 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                 <h2>技能调用</h2>
                 <p>点击卡片查看该技能在各客户端中的会话和逐步链路。</p>
               </div>
+              <RouterLink class="primary observe-sessions-entry" to="/observe/sessions">
+                全部会话
+                <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" />
+              </RouterLink>
             </div>
             <section class="skill-grid observe-skill-grid">
               <RouterLink
@@ -1297,65 +1316,90 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                   <span class="download-count">{{ asNumber(skill.session_count) }} 个会话</span>
                 </div>
               </RouterLink>
-              <p v-if="!observeSkills.length" class="empty">还没有匹配到平台技能调用。全部会话仍会上传，可在下方查看完整对话。</p>
+              <p v-if="!observeSkills.length" class="empty">还没有匹配到平台技能调用。全部会话仍会上传，可从右上角进入全部会话子页查看完整对话。</p>
             </section>
           </section>
 
-          <section class="observe-workspace">
-            <aside class="observe-session-list" aria-label="全部会话">
-              <div class="version-column-title">全部会话</div>
-              <div class="observe-filters observe-filters-compact" role="tablist" aria-label="客户端">
-                <button :class="['observe-chip', { selected: !observeClientId }]" type="button" @click="selectObserveClient('')">全部客户端</button>
-                <button
-                  v-for="client in observeSessions?.clients || []"
-                  :key="client.client_id"
-                  :class="['observe-chip', { selected: observeClientId === client.client_id }]"
-                  type="button"
-                  @click="selectObserveClient(client.client_id)"
-                >
-                  {{ client.hostname || client.client_id.slice(0, 8) }}
-                  <span>{{ asNumber(client.session_count) }}</span>
-                </button>
-              </div>
-              <button
-                v-for="session in observeSessions?.sessions || []"
-                :key="session.id"
-                :class="['observe-session', { selected: String(observeSessions?.selectedSessionId) === String(session.id) }]"
-                type="button"
-                @click="selectObserveSession(session)"
-              >
-                <strong>{{ clientLabel(session.client_name) }}</strong>
-                <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合</span>
-                <code>{{ session.session_key }}</code>
-              </button>
-              <p v-if="!(observeSessions?.sessions || []).length" class="empty">还没有上传会话。先在本机采集，再执行 <code>skillhub-observer upload --service-url http://127.0.0.1:8080</code> 上传全部会话原文。</p>
-            </aside>
+        </template>
+      </section>
 
-            <div class="observe-chain" aria-label="会话原文">
-              <div class="version-column-title">会话原文</div>
-              <p v-if="!observeSessions?.selectedSession" class="empty">选择左侧会话查看全部回合和助手回复。</p>
-              <template v-else>
-                <article v-for="turn in observeSessions.selectedSession.turns" :key="turn.id || turn.turn_index" class="observe-turn">
-                  <header class="observe-turn-head">
-                    <span class="observe-pill">Turn {{ turn.turn_index }}</span>
-                    <time>{{ formatObserveTime(turn.started_at) }}</time>
-                  </header>
-                  <pre class="observe-user">{{ turn.user_text || '（无用户原文）' }}</pre>
-                  <ol class="observe-steps">
-                    <li v-for="step in turn.steps" :key="step.step_id" :class="['observe-step', step.type]">
-                      <span class="observe-step-type">{{ stepTypeLabel(step.type) }}</span>
-                      <div>
-                        <p class="observe-step-title">{{ stepTitle(step) }}</p>
+      <section v-else-if="isObserveSessions" class="observe-page observe-sessions-page">
+        <RouterLink class="back" to="/observe">← 返回观测</RouterLink>
+
+        <p v-if="observeHomeError" class="error" role="alert">{{ observeHomeError }}</p>
+        <p v-else-if="observeHomeLoading && !observeSessions" class="empty">正在加载会话数据…</p>
+        <section v-else class="observe-workspace">
+          <aside class="observe-session-list" aria-label="全部会话">
+            <div class="version-column-title">全部会话</div>
+            <div class="observe-filters observe-filters-compact" role="tablist" aria-label="客户端">
+              <button :class="['observe-chip', { selected: !observeClientId }]" type="button" @click="selectObserveClient('')">全部客户端</button>
+              <button
+                v-for="client in observeSessions?.clients || []"
+                :key="client.client_id"
+                :class="['observe-chip', { selected: observeClientId === client.client_id }]"
+                type="button"
+                @click="selectObserveClient(client.client_id)"
+              >
+                {{ client.hostname || client.client_id.slice(0, 8) }}
+                <span>{{ asNumber(client.session_count) }}</span>
+              </button>
+            </div>
+            <button
+              v-for="session in observeSessions?.sessions || []"
+              :key="session.id"
+              :class="['observe-session', { selected: String(observeSessions?.selectedSessionId) === String(session.id) }]"
+              type="button"
+              @click="selectObserveSession(session)"
+            >
+              <strong>{{ clientLabel(session.client_name) }}</strong>
+              <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合</span>
+              <code>{{ session.session_key }}</code>
+            </button>
+            <p v-if="!(observeSessions?.sessions || []).length" class="empty">还没有上传会话。先在本机采集，再执行 <code>skillhub-observer upload --service-url http://127.0.0.1:8080</code> 上传全部会话原文。</p>
+          </aside>
+
+          <div class="observe-chain" aria-label="会话原文">
+            <div class="version-column-title observe-chain-title">
+              <span>会话原文</span>
+              <div class="observe-chain-filters" aria-label="会话原文筛选">
+                <label class="check">
+                  <input v-model="observeShowToolSteps" type="checkbox" />
+                  工具
+                </label>
+                <label class="check">
+                  <input v-model="observeShowStepContent" type="checkbox" />
+                  内容
+                </label>
+                <label class="check">
+                  <input v-model="observeShowAssistantSteps" type="checkbox" />
+                  AI
+                </label>
+              </div>
+            </div>
+            <p v-if="!observeSessions?.selectedSession" class="empty">选择左侧会话查看全部回合和助手回复。</p>
+            <template v-else>
+              <article v-for="turn in observeSessions.selectedSession.turns" :key="turn.id || turn.turn_index" class="observe-turn">
+                <header class="observe-turn-head">
+                  <span class="observe-pill">Turn {{ turn.turn_index }}</span>
+                  <time>{{ formatObserveTime(turn.started_at) }}</time>
+                </header>
+                <pre class="observe-user">{{ turn.user_text || '（无用户原文）' }}</pre>
+                <ol class="observe-steps">
+                  <li v-for="step in visibleObserveSteps(turn.steps)" :key="step.step_id" :class="['observe-step', step.type]">
+                    <span class="observe-step-type">{{ stepTypeLabel(step.type) }}</span>
+                    <div>
+                      <p class="observe-step-title">{{ stepTitle(step) }}</p>
+                      <template v-if="shouldShowObserveStepBody(step)">
                         <article v-if="isObserveMarkdown(step)" class="markdown-body observe-markdown" v-html="renderMarkdownContent(stepBody(step))"></article>
                         <pre v-else>{{ stepBody(step) }}</pre>
-                      </div>
-                    </li>
-                  </ol>
-                </article>
-              </template>
-            </div>
-          </section>
-        </template>
+                      </template>
+                    </div>
+                  </li>
+                </ol>
+              </article>
+            </template>
+          </div>
+        </section>
       </section>
 
       <section v-else-if="isObserveSkill" class="observe-page observe-skill-page">

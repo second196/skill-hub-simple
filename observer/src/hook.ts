@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { listInstalledSkills, matchSkill, slugify } from './catalog.js'
+import { listInstalledSkills, matchSlashSkillCommands, matchSkillUsage, parentSlugsFor, slugify } from './catalog.js'
 import { extractPaths, isDocumentPath, readDocument } from './documents.js'
 import { sanitizePayload, sanitizeText } from './payload.js'
 import { scanAll } from './scan.js'
 import { appendEvents, mergeEvents, loadClientId } from './store.js'
-import type { ClientName, ObservationEvent, StepType } from './types.js'
+import type { ClientName, ObservationEvent, SkillUsage, StepType } from './types.js'
 
 const STDIN_TIMEOUT_MS = 15000
 const STDIN_MAX_BYTES = 64 * 1024 * 1024
@@ -37,34 +37,48 @@ async function eventsFromHook(phase: string, clientName: ClientName, payload: Re
   const toolName = String(payload.tool_name || payload.toolName || '')
   const input = payload.tool_input || payload.toolInput || payload.toolArgs || {}
   const response = payload.tool_response || payload.toolResponse || payload.toolResult
-  const matched = toolName === 'Skill'
-    ? { slug: slugify(String(record(input).skill || record(input).name || '')), name: String(record(input).skill || record(input).name || '') }
-    : matchSkill(skills, input)
+  const explicit = toolName === 'Skill'
+    ? usageFromExplicit(String(record(input).skill || record(input).name || ''))
+    : undefined
+  const usage = explicit || matchSkillUsage(skills, input)
+  const userText = String(payload.prompt || payload.user_text || payload.message || '')
+  const textUsages = !usage && userText ? matchSlashSkillCommands(userText) : []
   const paths = extractPaths(input)
   const documentPath = paths.find(isDocumentPath)
   let type: StepType = 'tool'
-  let skillSlug = matched?.slug
-  let skillName = matched?.name
+  let skillSlug = usage?.slug
+  let skillName = usage?.name
   let body: Record<string, unknown> = { name: toolName, args: input, result: response ?? '' }
-  if (toolName === 'Skill' || matched) {
+  if (usage) {
     type = 'skill'
-    skillName = matched?.name || String(record(input).skill || '')
-    skillSlug = matched?.slug || slugify(skillName)
+    skillName = usage.name
+    skillSlug = usage.slug
     body = {
       name: skillName,
       args: input,
       result: stringify(response),
       outcome: isError(response) ? 'error' : 'ok',
+      match: usage.match,
       duration_ms: undefined
     }
   } else if (documentPath) {
     type = 'document'
     body = { path: documentPath, content: (await readDocument(documentPath)) || stringify(response) }
+  } else if (textUsages.length) {
+    const primary = textUsages[0]
+    type = 'skill'
+    skillSlug = primary.slug
+    skillName = primary.name
+    body = {
+      name: skillName,
+      args: { source: 'user_text', text: userText.slice(0, 400) },
+      result: stringify(response),
+      outcome: 'ok',
+      match: primary.match
+    }
   }
-  if (phase === 'pre' && type === 'tool' && !matched && !documentPath && clientName === 'codex') return []
-  if (phase === 'pre' && clientName === 'claude-code' && type === 'tool' && !documentPath && toolName !== 'Skill') {
-    // still record file-related tools; ignore unrelated noise from wildcard-less matcher
-  }
+  if (phase === 'pre' && type === 'tool' && !usage && !documentPath && clientName === 'codex') return []
+  const events: ObservationEvent[] = []
   const event: ObservationEvent = {
     v: 1,
     event_id: randomUUID(),
@@ -81,7 +95,35 @@ async function eventsFromHook(phase: string, clientName: ClientName, payload: Re
     source: 'hook',
     payload: sanitizePayload(body)
   }
-  return [event]
+  events.push(event)
+  if (usage && usage.parents.length) {
+    for (const parent of usage.parents) {
+      events.push({
+        ...event,
+        event_id: randomUUID(),
+        step_id: `hook:${clientName}:${sessionId}:skill:${parent}:${hashish(input)}`,
+        skill_slug: parent,
+        skill_name: parent,
+        payload: sanitizePayload({
+          name: parent,
+          args: input,
+          result: stringify(response),
+          outcome: isError(response) ? 'error' : 'ok',
+          rollup: true,
+          child_slug: usage.slug,
+          child_name: usage.name
+        })
+      })
+    }
+  }
+  return events
+}
+
+function usageFromExplicit(name: string): SkillUsage | undefined {
+  if (!name) return undefined
+  const slug = slugify(name)
+  if (!slug || slug === 'skill') return undefined
+  return { slug, name: name || slug, parents: parentSlugsFor(slug), match: 'call' }
 }
 
 async function readPayload(): Promise<Record<string, unknown>> {

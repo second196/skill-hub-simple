@@ -98,9 +98,12 @@ public class ObservationRepository {
     }
 
     public List<Map<String, Object>> listObservedSkills() {
+        // Platform observation cards only: skill must exist in the platform skill table.
+        // callCount = skill calls + file loads attributed to that platform skill.
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT s.slug, s.name, s.category, s.description, " +
-                        "COUNT(*) FILTER (WHERE st.type='skill') AS call_count, " +
+                        "COUNT(*) FILTER (WHERE st.type='skill') AS skill_calls, " +
+                        "COUNT(*) FILTER (WHERE st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL) AS file_loads, " +
                         "COUNT(DISTINCT sess.id) AS session_count, " +
                         "COUNT(DISTINCT c.client_id) AS client_count, " +
                         "MAX(st.ts) AS last_used_at " +
@@ -110,11 +113,16 @@ public class ObservationRepository {
                         "JOIN observation_session sess ON sess.id=t.session_id " +
                         "JOIN observation_client c ON c.id=sess.client_row_id " +
                         "GROUP BY s.slug, s.name, s.category, s.description " +
-                        "ORDER BY last_used_at DESC NULLS LAST, call_count DESC");
+                        "ORDER BY last_used_at DESC NULLS LAST, skill_calls DESC");
         List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
         Map<String, List<Map<String, Object>>> trends = trendBySkill(null);
         for (Map<String, Object> row : rows) {
             Map<String, Object> item = new LinkedHashMap<String, Object>(row);
+            Object skillCalls = row.get("skill_calls");
+            Object fileLoads = row.get("file_loads");
+            int callCount = (skillCalls instanceof Number ? ((Number) skillCalls).intValue() : 0)
+                    + (fileLoads instanceof Number ? ((Number) fileLoads).intValue() : 0);
+            item.put("call_count", Integer.valueOf(callCount));
             item.put("trend", fillTrend(trends.get(String.valueOf(row.get("slug")))));
             result.add(item);
         }
@@ -126,7 +134,8 @@ public class ObservationRepository {
         result.put("skillCount", jdbc.queryForObject(
                 "SELECT COUNT(DISTINCT st.skill_slug) FROM observation_step st JOIN skill s ON s.slug=st.skill_slug", Integer.class));
         result.put("callCount", jdbc.queryForObject(
-                "SELECT COUNT(*) FROM observation_step st JOIN skill s ON s.slug=st.skill_slug WHERE st.type='skill'", Integer.class));
+                "SELECT COUNT(*) FROM observation_step st JOIN skill s ON s.slug=st.skill_slug " +
+                        "WHERE (st.type='skill' OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL))", Integer.class));
         result.put("sessionCount", jdbc.queryForObject(
                 "SELECT COUNT(*) FROM observation_session", Integer.class));
         result.put("clientCount", jdbc.queryForObject(
@@ -182,15 +191,16 @@ public class ObservationRepository {
     }
 
     public Map<String, Object> skillDetail(String slug, String clientId, Long sessionId) {
-        List<Map<String, Object>> skills = jdbc.queryForList(
-                "SELECT slug, name, category, description FROM skill WHERE slug=?", slug);
-        if (skills.isEmpty()) throw new IllegalArgumentException("技能不存在");
+        Map<String, Object> skill = resolveSkillCard(slug);
+        if (skill == null) throw new IllegalArgumentException("技能不存在");
         Map<String, Object> result = new LinkedHashMap<String, Object>();
-        result.put("skill", skills.get(0));
+        result.put("skill", skill);
 
         Map<String, Object> kpis = new LinkedHashMap<String, Object>();
         kpis.put("callCount", jdbc.queryForObject(
-                "SELECT COUNT(*) FROM observation_step WHERE skill_slug=? AND type='skill'", Integer.class, slug));
+                "SELECT COUNT(*) FROM observation_step st " +
+                        "WHERE st.skill_slug=? AND (st.type='skill' " +
+                        "OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL))", Integer.class, slug));
         kpis.put("sessionCount", jdbc.queryForObject(
                 "SELECT COUNT(DISTINCT sess.id) FROM observation_session sess " +
                         "JOIN observation_turn t ON t.session_id=sess.id " +
@@ -250,8 +260,17 @@ public class ObservationRepository {
             selectedId = id instanceof Number ? ((Number) id).longValue() : Long.valueOf(String.valueOf(id));
         }
         result.put("selectedSessionId", selectedId);
+        // Always load the full session chain so the detail page keeps complete turn text.
         result.put("selectedSession", selectedId == null ? null : sessionChain(selectedId, null));
         return result;
+    }
+
+    private Map<String, Object> resolveSkillCard(String slug) {
+        // Observation detail only for platform-registered skills.
+        List<Map<String, Object>> platform = jdbc.queryForList(
+                "SELECT slug, name, category, description FROM skill WHERE slug=?", slug);
+        if (platform.isEmpty()) return null;
+        return platform.get(0);
     }
 
     public Map<String, Object> sessionChain(long sessionId, String skillSlug) {
@@ -295,9 +314,10 @@ public class ObservationRepository {
     }
 
     private Map<String, List<Map<String, Object>>> trendBySkill(String slug) {
-        String sql = "SELECT COALESCE(st.skill_slug, '__all__') AS skill_slug, (st.ts AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS count " +
+        String sql = "SELECT st.skill_slug, (st.ts AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS count " +
                 "FROM observation_step st JOIN skill s ON s.slug=st.skill_slug " +
-                "WHERE st.type='skill' AND st.ts >= CURRENT_TIMESTAMP - INTERVAL '7 days'";
+                "WHERE st.ts >= CURRENT_TIMESTAMP - INTERVAL '7 days' " +
+                "AND (st.type='skill' OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL))";
         List<Object> args = new ArrayList<Object>();
         if (slug != null && !slug.trim().isEmpty()) {
             sql += " AND st.skill_slug=?";
@@ -322,7 +342,9 @@ public class ObservationRepository {
             List<Map<String, Object>> all = jdbc.queryForList(
                     "SELECT (st.ts AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS count " +
                             "FROM observation_step st JOIN skill s ON s.slug=st.skill_slug " +
-                            "WHERE st.type='skill' AND st.ts >= CURRENT_TIMESTAMP - INTERVAL '7 days' GROUP BY 1");
+                            "WHERE st.ts >= CURRENT_TIMESTAMP - INTERVAL '7 days' " +
+                            "AND (st.type='skill' OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL)) " +
+                            "GROUP BY 1");
             grouped.put("__all__", all);
         }
         return grouped;

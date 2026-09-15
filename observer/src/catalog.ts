@@ -1,15 +1,31 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir, platform } from 'node:os'
-import { join } from 'node:path'
-import type { InstalledSkill } from './types.js'
+import { dirname, join } from 'node:path'
+import type { InstalledSkill, SkillUsage } from './types.js'
+
+export const UPD_SOP_CHILDREN = [
+  'sop-requirement',
+  'sop-design',
+  'sop-implement',
+  'sop-review',
+  'sop-verification',
+  'sop-release-check',
+  'sop-documentation'
+] as const
+
+const UPD_CHILD_SET = new Set<string>(UPD_SOP_CHILDREN)
+const UPD_SLUG = 'using-product-development'
+const SUPERPOWERS_SLUG = 'superpowers'
+const KNOWN_COMPOSITE_PARENTS = new Set([UPD_SLUG, SUPERPOWERS_SLUG])
+const KNOWN_STANDALONE = new Set(['ui-ux-pro-max'])
 
 export function slugify(value: string): string {
   const slug = value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
   return slug || 'skill'
 }
 
-export async function listInstalledSkills(): Promise<InstalledSkill[]> {
-  const roots = skillRoots()
+export async function listInstalledSkills(extraRoots: string[] = []): Promise<InstalledSkill[]> {
+  const roots = [...skillRoots(), ...extraRoots.map(normalizeRoot).filter(Boolean)]
   const found: InstalledSkill[] = []
   const seen = new Set<string>()
   for (const root of roots) {
@@ -20,13 +36,201 @@ export async function listInstalledSkills(): Promise<InstalledSkill[]> {
       found.push(parsed)
     }
   }
-  return found
+  return withCompositeParents(found)
 }
 
 export function parseSkillFile(path: string, content: string): InstalledSkill | undefined {
   const name = frontmatterName(content) || parentDirName(path)
   if (!name) return undefined
-  return { slug: slugify(name), name, path }
+  const slug = slugify(name)
+  const parentSlug = primaryParentSlug(slug, path)
+  const source = isProjectSkillPath(path) ? 'project' : 'global'
+  return parentSlug ? { slug, name, path, parentSlug, source } : { slug, name, path, source }
+}
+
+export function withCompositeParents(skills: InstalledSkill[]): InstalledSkill[] {
+  const bySlug = new Map<string, InstalledSkill>()
+  for (const skill of skills) {
+    if (!bySlug.has(skill.slug)) bySlug.set(skill.slug, skill)
+  }
+  for (const skill of skills) {
+    for (const parentSlug of parentSlugsFor(skill.slug, skill.path)) {
+      if (bySlug.has(parentSlug)) continue
+      const parent: InstalledSkill = {
+        slug: parentSlug,
+        name: parentSlug,
+        path: parentPathFor(skill.path, parentSlug),
+        source: isProjectSkillPath(skill.path) ? 'project' : 'global'
+      }
+      bySlug.set(parentSlug, parent)
+    }
+  }
+  return [...bySlug.values()]
+}
+
+export function parentSlugsFor(slug: string, path?: string): string[] {
+  const key = slugify(slug)
+  const parents: string[] = []
+  if (UPD_CHILD_SET.has(key) || key.startsWith('sop-')) {
+    if (key !== UPD_SLUG) parents.push(UPD_SLUG)
+  }
+  if (key === UPD_SLUG) {
+    // leaf only
+  }
+  if (path && isSuperpowersChildPath(path) && key !== SUPERPOWERS_SLUG) {
+    parents.push(SUPERPOWERS_SLUG)
+  }
+  if (key === 'using-superpowers' && !parents.includes(SUPERPOWERS_SLUG)) {
+    parents.push(SUPERPOWERS_SLUG)
+  }
+  return parents.filter((parent, index) => parents.indexOf(parent) === index && parent !== key)
+}
+
+export function primaryParentSlug(slug: string, path?: string): string | undefined {
+  return parentSlugsFor(slug, path)[0]
+}
+
+export function matchSkillUsage(skills: InstalledSkill[], value: unknown): SkillUsage | undefined {
+  const skill = matchSkill(skills, value)
+  if (skill) {
+    return {
+      slug: skill.slug,
+      name: skill.name,
+      path: skill.path,
+      parents: parentSlugsFor(skill.slug, skill.path),
+      match: 'path'
+    }
+  }
+  return matchSkillInText(serializeValue(value))
+}
+
+export function matchSkillInText(text: string): SkillUsage | undefined {
+  if (!text) return undefined
+  const fileUsage = matchSkillFilePath(text)
+  if (fileUsage) return fileUsage
+  const dirUsage = matchSkillDirectoryPath(text)
+  if (dirUsage) return dirUsage
+  return matchNamedSkillToken(text)
+}
+
+export function matchSlashSkillCommands(text: string): SkillUsage[] {
+  if (!text) return []
+  const found = new Map<string, SkillUsage>()
+  const pattern = /(?:^|[\s`'"(（\[>])([/$])([a-z][a-z0-9-]*)/gi
+  for (const match of text.matchAll(pattern)) {
+    const slug = slugify(match[2] || '')
+    if (!slug || slug === 'skill') continue
+    if (!UPD_CHILD_SET.has(slug) && slug !== UPD_SLUG && slug !== SUPERPOWERS_SLUG && !KNOWN_STANDALONE.has(slug) && !KNOWN_COMPOSITE_PARENTS.has(slug)) {
+      // Only hard-attribute known composite/UPD-related slash commands from free text.
+      continue
+    }
+    const parents = parentSlugsFor(slug)
+    const usage: SkillUsage = {
+      slug,
+      name: slug,
+      parents,
+      match: 'text'
+    }
+    found.set(slug, usage)
+    for (const parent of usage.parents) {
+      if (!found.has(parent)) {
+        found.set(parent, { slug: parent, name: parent, parents: [], match: 'text' })
+      }
+    }
+  }
+  // `/sop-requirement` also implies UPD even if parent loop already added it
+  if ([...found.keys()].some((slug) => UPD_CHILD_SET.has(slug)) && !found.has(UPD_SLUG)) {
+    found.set(UPD_SLUG, { slug: UPD_SLUG, name: UPD_SLUG, parents: [], match: 'text' })
+  }
+  return [...found.values()]
+}
+
+export function matchSkill(skills: InstalledSkill[], value: unknown): InstalledSkill | undefined {
+  const ordered = [...skills].sort((a, b) => b.path.length - a.path.length)
+  return ordered.find((skill) => contains(value, skill.path) || contains(value, skill.name) || contains(value, skill.slug))
+}
+
+export async function discoverProjectSkillRoots(seedPaths: string[]): Promise<string[]> {
+  const roots = new Set<string>()
+  for (const seed of seedPaths) {
+    if (!seed) continue
+    let dir = dirname(seed.replace(/[\\/]+$/, ''))
+    for (let i = 0; i < 8; i += 1) {
+      const candidate = join(dir, '.agents', 'skills')
+      roots.add(candidate)
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  const envRoots = (process.env.SKILLHUB_PROJECT_SKILL_ROOTS || '')
+    .split(/[;]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  for (const root of envRoots) roots.add(root)
+  return [...roots]
+}
+
+function matchSkillFilePath(text: string): SkillUsage | undefined {
+  const patterns = [
+    /(?:^|[\s'"=([{])((?:~|[A-Za-z]:[\\/]|\.\/|\.\.\/|\/)?[^\s'"()]*?\.agents[\\/]skills[\\/]([^\\/"'\s]+)(?:[\\/]skills[\\/]([^\\/"'\s]+))?[\\/][^\s'"()]+)/gi,
+    /(?:^|[\s'"=([{])((?:~|[A-Za-z]:[\\/]|\.\/|\.\.\/|\/)?[^\s'"()]*?\.(?:claude|codex|agents)[\\/]skills[\\/]([^\\/"'\s]+)(?:[\\/]skills[\\/]([^\\/"'\s]+))?[\\/][^\s'"()]+)/gi
+  ]
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0
+    const match = pattern.exec(text)
+    if (!match) continue
+    const fullPath = match[1] || ''
+    const first = slugify(match[2] || '')
+    const nested = match[3] ? slugify(match[3]) : ''
+    if (!first) continue
+    if (nested && first === SUPERPOWERS_SLUG) {
+      return {
+        slug: nested,
+        name: nested,
+        parents: [SUPERPOWERS_SLUG],
+        match: 'file'
+      }
+    }
+    return {
+      slug: first,
+      name: first,
+      parents: parentSlugsFor(first, fullPath),
+      match: 'file'
+    }
+  }
+  return undefined
+}
+
+function matchSkillDirectoryPath(text: string): SkillUsage | undefined {
+  const pattern = /(?:^|[\s'"=([{])((?:~|[A-Za-z]:[\\/]|\.\/|\.\.\/|\/)?[^\s'"()]*?\.agents[\\/]skills[\\/]([^\\/"'\s]+)(?:[\\/]skills[\\/]([^\\/"'\s]+))?(?=[\\/\s'"()]))/gi
+  pattern.lastIndex = 0
+  const match = pattern.exec(text)
+  if (!match) return undefined
+  const first = slugify(match[2] || '')
+  const nested = match[3] ? slugify(match[3]) : ''
+  if (!first) return undefined
+  if (nested && first === SUPERPOWERS_SLUG) {
+    return { slug: nested, name: nested, parents: [SUPERPOWERS_SLUG], match: 'path' }
+  }
+  return { slug: first, name: first, parents: parentSlugsFor(first), match: 'path' }
+}
+
+function matchNamedSkillToken(text: string): SkillUsage | undefined {
+  const lowered = text.toLowerCase()
+  const candidates = [
+    UPD_SLUG,
+    SUPERPOWERS_SLUG,
+    'using-superpowers',
+    ...UPD_SOP_CHILDREN,
+    ...KNOWN_STANDALONE
+  ]
+  for (const slug of candidates) {
+    if (lowered.includes(slug)) {
+      return { slug, name: slug, parents: parentSlugsFor(slug), match: 'path' }
+    }
+  }
+  return undefined
 }
 
 function frontmatterName(content: string): string | undefined {
@@ -78,14 +282,54 @@ async function findSkillFiles(dir: string, depth: number): Promise<string[]> {
   return found
 }
 
-export function matchSkill(skills: InstalledSkill[], value: unknown): InstalledSkill | undefined {
-  return skills.find((skill) => contains(value, skill.path) || contains(value, skill.name) || contains(value, skill.slug))
-}
-
 function contains(value: unknown, needle: string): boolean {
   if (!needle) return false
   if (typeof value === 'string') return value.includes(needle) || value.includes(JSON.stringify(needle).slice(1, -1))
   if (Array.isArray(value)) return value.some((item) => contains(item, needle))
   if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).some((item) => contains(item, needle))
   return false
+}
+
+function serializeValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value ?? '')
+  } catch {
+    return String(value ?? '')
+  }
+}
+
+function isSuperpowersChildPath(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/').toLowerCase()
+  if (normalized.includes('/superpowers/skills/')) return true
+  if (/\/\.(?:claude|codex|agents)\/skills\/superpowers\/[^/]+\//.test(normalized)) return true
+  if (/\/skillhub\/skills\/superpowers\/[^/]+\//.test(normalized)) return true
+  return false
+}
+
+function isProjectSkillPath(path: string): boolean {
+  return path.replace(/\\/g, '/').toLowerCase().includes('/.agents/skills/')
+}
+
+function parentPathFor(childPath: string, parentSlug: string): string {
+  const normalized = childPath.replace(/\\/g, '/')
+  const markers = [
+    `/${SUPERPOWERS_SLUG}/skills/`,
+    `/.agents/skills/${parentSlug}/skills/`,
+    `/.claude/skills/${parentSlug}/skills/`,
+    `/.codex/skills/${parentSlug}/skills/`,
+    `/.agents/skills/${parentSlug}/`,
+    `/.claude/skills/${parentSlug}/`,
+    `/.codex/skills/${parentSlug}/`
+  ]
+  for (const marker of markers) {
+    const index = normalized.toLowerCase().lastIndexOf(marker.toLowerCase())
+    if (index >= 0) return normalized.slice(0, index + marker.length - 1)
+  }
+  const lastSlash = normalized.lastIndexOf('/')
+  return lastSlash > 0 ? normalized.slice(0, lastSlash) : normalized
+}
+
+function normalizeRoot(root: string): string {
+  return root.trim().replace(/[\\/]+$/, '')
 }

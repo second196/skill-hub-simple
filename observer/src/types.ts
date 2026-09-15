@@ -23,6 +23,16 @@ export interface InstalledSkill {
   slug: string
   name: string
   path: string
+  parentSlug?: string
+  source?: 'global' | 'project'
+}
+
+export interface SkillUsage {
+  slug: string
+  name: string
+  path?: string
+  parents: string[]
+  match: 'call' | 'file' | 'text' | 'path'
 }
 
 export interface ClientRecord {

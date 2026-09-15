@@ -1,5 +1,6 @@
 import type { PlatformSkill } from './types.js'
 import { normalizeSkillKey } from './timeline.js'
+import { parentSlugsFor } from './catalog.js'
 
 export interface PlatformIndex {
   slugs: Set<string>
@@ -41,12 +42,34 @@ export function platformIndex(skills: PlatformSkill[]): PlatformIndex {
   return { slugs, names, slugByKey }
 }
 
+/**
+ * Map any observed skill identity onto a platform skill slug.
+ * - Independent platform skills keep their own slug (child included).
+ * - Composite children roll up to parent only when the child is not itself listed.
+ * - Local-only skills resolve to undefined and are not uploaded as observation cards.
+ */
 export function resolvePlatformSlug(index: PlatformIndex, slug?: string, name?: string, fallback?: string): string | undefined {
-  if (slug && index.slugs.has(slug)) return slug
-  const fromSlug = slug ? index.slugByKey.get(normalizeSkillKey(slug)) : undefined
-  if (fromSlug) return fromSlug
-  const fromName = name ? index.slugByKey.get(normalizeSkillKey(name)) : undefined
+  const exact = matchPlatform(index, slug)
+  if (exact) return exact
+  const fromName = matchPlatform(index, name)
   if (fromName) return fromName
-  if (fallback && index.slugs.has(fallback)) return fallback
+  const fromFallback = matchPlatform(index, fallback)
+  if (fromFallback) return fromFallback
+  if (slug) {
+    for (const parent of parentSlugsFor(slug)) {
+      if (index.slugs.has(parent)) return parent
+    }
+  }
+  if (name) {
+    for (const parent of parentSlugsFor(normalizeSkillKey(name))) {
+      if (index.slugs.has(parent)) return parent
+    }
+  }
   return undefined
+}
+
+function matchPlatform(index: PlatformIndex, value?: string): string | undefined {
+  if (!value) return undefined
+  if (index.slugs.has(value)) return value
+  return index.slugByKey.get(normalizeSkillKey(value))
 }

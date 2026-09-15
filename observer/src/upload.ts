@@ -17,19 +17,38 @@ export async function uploadObservations(serviceUrl: string): Promise<string> {
   if (!sessions.length) return '没有可上传的会话观测数据'
   const clientId = await loadClientId()
   const meta = hostMeta()
-  const batches = splitBatches(sessions)
+  const base = serviceUrl.replace(/\/+$/, '')
   const summaries: string[] = []
-  for (const batch of batches) {
+  let batch: ReturnType<typeof toIngestSession>[] = []
+  let batchBytes = 0
+  let sessionCount = 0
+
+  const flush = async () => {
+    if (!batch.length) return
     const body = {
       client: { clientId, hostname: meta.hostname, os: meta.os },
       batchId: randomUUID(),
       generatedAt: new Date().toISOString(),
-      sessions: batch.map(toIngestSession)
+      sessions: batch
     }
-    const result = await postJson(`${serviceUrl.replace(/\/+$/, '')}/api/observations/ingest`, body)
+    const result = await postJson(`${base}/api/observations/ingest`, body)
     summaries.push(`batch ${result.batchId || body.batchId}: sessions=${result.sessionCount ?? batch.length} turns=${result.turnCount ?? '-'} steps=${result.stepCount ?? '-'} skipped=${result.skippedStepCount ?? 0}`)
+    batch = []
+    batchBytes = 0
   }
-  return `已上传 ${sessions.length} 个会话（完整原文，不含摘要）\n${summaries.join('\n')}`
+
+  for (const session of sessions) {
+    const payload = toIngestSession(session)
+    const encoded = Buffer.byteLength(JSON.stringify(payload))
+    if (batch.length && batchBytes + encoded > MAX_BATCH_BYTES) {
+      await flush()
+    }
+    batch.push(payload)
+    batchBytes += encoded
+    sessionCount += 1
+  }
+  await flush()
+  return `已上传 ${sessionCount} 个会话（完整原文，不含摘要）\n${summaries.join('\n')}`
 }
 
 export function annotateSessions(sessions: TimelineSession[], platform: Awaited<ReturnType<typeof fetchPlatformSkills>>): TimelineSession[] {
@@ -47,14 +66,29 @@ function annotateSteps(steps: ObservationEvent[], index: PlatformIndex): Observa
   let currentSlug: string | undefined
   const result: ObservationEvent[] = []
   for (const step of steps) {
-    let slug = resolvePlatformSlug(index, step.skill_slug, step.skill_name || payloadName(step), currentSlug)
-    if (step.type === 'skill' && slug) currentSlug = slug
-    else if (step.type !== 'user' && step.type !== 'assistant' && !slug) slug = currentSlug
-    if (step.type === 'skill' || (slug && index.slugs.has(slug))) currentSlug = slug || currentSlug
+    const stepName = step.skill_name || payloadName(step)
+    // Only platform-listed skills (or parent rollups onto platform skills) are uploaded.
+    const resolved = resolvePlatformSlug(index, step.skill_slug, stepName)
+    let slug: string | undefined
+    if (step.type === 'user' || step.type === 'assistant') {
+      slug = undefined
+    } else {
+      slug = resolved
+      if (step.type === 'skill') {
+        if (resolved) currentSlug = resolved
+      } else if (!slug) {
+        slug = currentSlug
+      }
+      if (resolved) currentSlug = resolved
+    }
+    const skillName = slug && index.slugs.has(slug)
+      ? (slug === step.skill_slug ? step.skill_name || slug : slug)
+      : undefined
     result.push({
       ...step,
       skill_slug: slug,
-      payload: clonePayload(step.payload)
+      skill_name: skillName,
+      payload: sanitizePayload(step.payload)
     })
   }
   return result
@@ -76,28 +110,11 @@ function toIngestSession(session: TimelineSession) {
         type: step.type,
         ts: step.ts,
         skillSlug: step.skill_slug,
-        payload: clonePayload(step.payload)
+        skillName: step.skill_name,
+        payload: sanitizePayload(step.payload)
       }))
     }))
   }
-}
-
-function splitBatches(sessions: TimelineSession[]): TimelineSession[][] {
-  const batches: TimelineSession[][] = []
-  let current: TimelineSession[] = []
-  let size = 0
-  for (const session of sessions) {
-    const encoded = Buffer.byteLength(JSON.stringify(toIngestSession(session)))
-    if (current.length && size + encoded > MAX_BATCH_BYTES) {
-      batches.push(current)
-      current = []
-      size = 0
-    }
-    current.push(session)
-    size += encoded
-  }
-  if (current.length) batches.push(current)
-  return batches
 }
 
 async function postJson(url: string, body: unknown): Promise<Record<string, unknown>> {
@@ -122,12 +139,4 @@ async function postJson(url: string, body: unknown): Promise<Record<string, unkn
 function payloadName(step: ObservationEvent): string | undefined {
   const name = step.payload.name
   return typeof name === 'string' ? name : undefined
-}
-
-function clonePayload(payload: Record<string, unknown>): Record<string, unknown> {
-  try {
-    return sanitizePayload(JSON.parse(JSON.stringify(payload)) as Record<string, unknown>)
-  } catch {
-    return sanitizePayload({ ...payload })
-  }
 }

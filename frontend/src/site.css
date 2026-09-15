@@ -404,6 +404,14 @@ input::placeholder {
   color: #7c3aed;
 }
 
+.observe-sessions-entry {
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 14px;
+  white-space: nowrap;
+  align-self: center;
+}
+
 .quickstart-section {
   margin-top: -4px;
 }
