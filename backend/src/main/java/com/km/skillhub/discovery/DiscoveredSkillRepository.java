@@ -61,7 +61,7 @@ public class DiscoveredSkillRepository {
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT id,source_type,source_owner,source_repository,source_branch,source_path,source_url,install_url,package_type,name,description,category,supported_agents,github_stars,github_forks,external_install_count,discovery_download_count,trend_score,quality_score,trust_level,license,source_updated_at,last_synced_at FROM discovered_skill WHERE id=?",
                 id);
-        if (rows.isEmpty()) throw new IllegalArgumentException("发现技能不存在");
+        if (rows.isEmpty()) throw new IllegalArgumentException("发现Skill不存在");
         Map<String, Object> result = new LinkedHashMap<String, Object>(rows.get(0));
         result.put("files", files(id));
         return result;
@@ -75,7 +75,7 @@ public class DiscoveredSkillRepository {
     public Map<String, Object> file(long id, String path) {
         ensureExists(id);
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT id,path,source_url,content,content_type,size_bytes,is_binary FROM discovered_skill_file WHERE discovered_skill_id=? AND path=?", id, path);
-        if (rows.isEmpty()) throw new IllegalArgumentException("发现技能文件不存在");
+        if (rows.isEmpty()) throw new IllegalArgumentException("发现Skill文件不存在");
         return rows.get(0);
     }
 
@@ -85,7 +85,7 @@ public class DiscoveredSkillRepository {
 
     public void incrementDownloadCount(long id) {
         if (jdbc.update("UPDATE discovered_skill SET discovery_download_count=discovery_download_count+1 WHERE id=? AND visibility_status='ACTIVE'", id) != 1) {
-            throw new IllegalArgumentException("发现技能不存在或已不可用");
+            throw new IllegalArgumentException("发现Skill不存在或已不可用");
         }
     }
 
@@ -125,7 +125,7 @@ public class DiscoveredSkillRepository {
 
     private void ensureExists(long id) {
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM discovered_skill WHERE id=? AND visibility_status='ACTIVE'", Integer.class, id);
-        if (count == null || count == 0) throw new IllegalArgumentException("发现技能不存在或已不可用");
+        if (count == null || count == 0) throw new IllegalArgumentException("发现Skill不存在或已不可用");
     }
 
     private String sortClause(String sort) {

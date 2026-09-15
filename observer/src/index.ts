@@ -12,7 +12,7 @@ cli.command('install', '安装 Claude Code / Codex 采集 hooks')
 cli.command('report', '扫描本地会话并生成完整 HTML 报告')
   .option('--open', '生成后打开报告')
   .option('-o, --output <file>', '报告输出路径')
-  .option('--service-url <url>', '对照平台技能目录，标记是否已收录')
+  .option('--service-url <url>', '对照平台Skill目录，标记是否已收录')
   .action(async (options) => run(async () => {
     const output = await writeReport({
       output: options.output,

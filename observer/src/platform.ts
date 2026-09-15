@@ -12,10 +12,10 @@ export async function fetchPlatformSkills(serviceUrl: string): Promise<PlatformS
   const base = serviceUrl.replace(/\/+$/, '')
   const response = await fetch(`${base}/api/skills?includeOffline=true`)
   if (!response.ok) {
-    throw new Error(`读取平台技能失败（${response.status}）`)
+    throw new Error(`读取平台Skill失败（${response.status}）`)
   }
   const body = await response.json() as unknown
-  if (!Array.isArray(body)) throw new Error('平台技能列表格式无效')
+  if (!Array.isArray(body)) throw new Error('平台Skill列表格式无效')
   return body.map((item) => {
     const record = item && typeof item === 'object' ? item as Record<string, unknown> : {}
     return {

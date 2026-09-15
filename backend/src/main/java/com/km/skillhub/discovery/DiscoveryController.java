@@ -71,7 +71,7 @@ public class DiscoveryController {
             for (Map<String, Object> item : files) {
                 String path = String.valueOf(item.get("path"));
                 if (Boolean.TRUE.equals(item.get("is_binary")) && ((Number) item.get("size_bytes")).longValue() > 50L * 1024L * 1024L) {
-                    throw new IllegalArgumentException("发现技能包含超过 50MB 的文件");
+                    throw new IllegalArgumentException("发现Skill包含超过 50MB 的文件");
                 }
                 byte[] content = syncService.loadFileContent(id, path);
                 zip.putNextEntry(new ZipEntry(path));

@@ -124,8 +124,8 @@ function addGeneratedRootSkill(
     metadataOverrides.description
       || packageMetadata.description
       || readmeDescription(files)
-      || `复合技能包，包含 ${nestedSkillCount} 个子技能。`,
-    `复合技能包，包含 ${nestedSkillCount} 个子技能。`,
+      || `复合Skill包，包含 ${nestedSkillCount} 个子Skill。`,
+    `复合Skill包，包含 ${nestedSkillCount} 个子Skill。`,
     2000
   )
   const body = [
@@ -137,7 +137,7 @@ function addGeneratedRootSkill(
     '',
     `# ${name}`,
     '',
-    '这是一个复合技能包，包含若干可独立使用的子技能。子技能及其资源保留在原始目录结构中。',
+    '这是一个复合Skill包，包含若干可独立使用的子Skill。子Skill及其资源保留在原始目录结构中。',
     ''
   ].join('\n')
   return [{ path: 'SKILL.md', content: new TextEncoder().encode(body) }, ...files]

@@ -42,7 +42,7 @@ public class SkillRepository {
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT s.id,s.slug,s.name,s.description,s.category,s.status,s.download_count,s.created_at,s.updated_at," +
                 "v.id AS version_id,v.version_label,v.version_digest,v.created_at AS version_created_at FROM skill s " +
                 "JOIN LATERAL (SELECT * FROM skill_version WHERE skill_id=s.id ORDER BY created_at DESC,id DESC LIMIT 1) v ON true WHERE s.slug=?", slug);
-        if (rows.isEmpty()) throw new IllegalArgumentException("技能不存在");
+        if (rows.isEmpty()) throw new IllegalArgumentException("Skill不存在");
         Map<String, Object> result = rows.get(0);
         result.put("versions", jdbc.queryForList("SELECT version_label,version_digest,created_at FROM skill_version WHERE skill_id=? ORDER BY created_at DESC,id DESC", result.get("id")));
         return result;
@@ -71,7 +71,7 @@ public class SkillRepository {
             args = new Object[] { slug, digest };
         }
         List<Long> ids = jdbc.queryForList(sql, Long.class, args);
-        if (ids.isEmpty()) throw new IllegalArgumentException("技能版本不存在");
+        if (ids.isEmpty()) throw new IllegalArgumentException("Skill版本不存在");
         return ids.get(0);
     }
 
@@ -106,17 +106,17 @@ public class SkillRepository {
     }
 
     public void offline(String slug) {
-        if (jdbc.update("UPDATE skill SET status='OFFLINE',updated_at=CURRENT_TIMESTAMP WHERE slug=?", slug) != 1) throw new IllegalArgumentException("技能不存在");
+        if (jdbc.update("UPDATE skill SET status='OFFLINE',updated_at=CURRENT_TIMESTAMP WHERE slug=?", slug) != 1) throw new IllegalArgumentException("Skill不存在");
     }
 
     @Transactional
     public void delete(String slug) {
-        if (jdbc.update("DELETE FROM skill WHERE slug=?", slug) != 1) throw new IllegalArgumentException("技能不存在");
+        if (jdbc.update("DELETE FROM skill WHERE slug=?", slug) != 1) throw new IllegalArgumentException("Skill不存在");
     }
 
     public void incrementDownloadCount(String slug) {
         if (jdbc.update("UPDATE skill SET download_count=download_count+1 WHERE slug=?", slug) != 1) {
-            throw new IllegalArgumentException("技能不存在");
+            throw new IllegalArgumentException("Skill不存在");
         }
     }
 
@@ -124,7 +124,7 @@ public class SkillRepository {
         if (status == null || status.trim().isEmpty()) return null;
         String normalized = status.trim().toUpperCase(java.util.Locale.ROOT);
         if (!"ACTIVE".equals(normalized) && !"OFFLINE".equals(normalized)) {
-            throw new IllegalArgumentException("技能状态只能是 ACTIVE 或 OFFLINE");
+            throw new IllegalArgumentException("Skill状态只能是 ACTIVE 或 OFFLINE");
         }
         return normalized;
     }

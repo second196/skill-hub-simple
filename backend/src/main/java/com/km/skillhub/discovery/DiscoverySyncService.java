@@ -125,13 +125,13 @@ public class DiscoverySyncService {
             if (!"raw.githubusercontent.com".equalsIgnoreCase(host)
                     && !"codeload.github.com".equalsIgnoreCase(host)
                     && !"github.com".equalsIgnoreCase(host)) {
-                throw new IllegalArgumentException("发现技能来源不受支持");
+                throw new IllegalArgumentException("发现Skill来源不受支持");
             }
-            if (!"https".equalsIgnoreCase(uri.getScheme())) throw new IllegalArgumentException("发现技能来源必须使用 HTTPS");
+            if (!"https".equalsIgnoreCase(uri.getScheme())) throw new IllegalArgumentException("发现Skill来源必须使用 HTTPS");
         } catch (IllegalArgumentException exception) {
             throw exception;
         } catch (RuntimeException exception) {
-            throw new IllegalArgumentException("发现技能来源地址无效", exception);
+            throw new IllegalArgumentException("发现Skill来源地址无效", exception);
         }
     }
 
@@ -163,8 +163,8 @@ public class DiscoverySyncService {
             String commonRoot = commonRoot(skillPaths);
             List<DiscoveredFileRecord> compositeFiles = filesForRoot(owner, repo, branch, commonRoot, blobs);
             DiscoveredSkillRecord composite = record(metadata, owner, repo, branch, commonRoot, "COMPOSITE",
-                    text(metadata, "name", repo) + " 技能集合",
-                    text(metadata, "description", "包含多个可独立使用的 Agent Skill。") + "，包含 " + skillPaths.size() + " 个子技能。");
+                    text(metadata, "name", repo) + " Skill集合",
+                    text(metadata, "description", "包含多个可独立使用的 Agent Skill。") + "，包含 " + skillPaths.size() + " 个子Skill。");
             repository.upsert(composite, compositeFiles);
             count++;
         }

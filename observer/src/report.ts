@@ -20,7 +20,7 @@ export async function writeReport(options: {
       platform = await fetchPlatformSkills(options.serviceUrl)
     } catch (error) {
       platform = []
-      process.stderr.write(`未能读取平台技能列表，报告将标记为未对照平台：${error instanceof Error ? error.message : String(error)}\n`)
+      process.stderr.write(`未能读取平台Skill列表，报告将标记为未对照平台：${error instanceof Error ? error.message : String(error)}\n`)
     }
   }
   const html = renderReport(events, platform, Boolean(options.serviceUrl))
@@ -51,20 +51,20 @@ export function renderReport(events: ObservationEvent[], platform: PlatformSkill
 <body>
   <header class="hero">
     <p class="kicker">SkillHub Observer</p>
-    <h1>本地技能观测报告</h1>
-    <p class="copy">包含本机全部会话、回合和助手回复。上传到平台时同样保留完整原文，不只上传平台技能。</p>
+    <h1>本地Skill观测报告</h1>
+    <p class="copy">包含本机全部会话、回合和助手回复。上传到平台时同样保留完整原文，不只上传平台Skill。</p>
     <p class="meta">生成时间 ${escapeHtml(new Date().toISOString())} · 事件 ${events.length} 条</p>
   </header>
   <section class="kpis" aria-label="汇总指标">
-    ${kpi('已观测技能', skillCount)}
-    ${kpi('技能调用', callCount)}
+    ${kpi('已观测Skill', skillCount)}
+    ${kpi('Skill调用', callCount)}
     ${kpi('会话', sessionCount)}
     ${kpi('客户端', clientCount)}
   </section>
   <section class="card">
     <div class="card-head">
       <h2>近 7 日调用趋势</h2>
-      <p>按技能调用次数统计。</p>
+      <p>按Skill调用次数统计。</p>
     </div>
     ${lineChart(trend)}
     <table class="a11y-table">
@@ -75,8 +75,8 @@ export function renderReport(events: ObservationEvent[], platform: PlatformSkill
   </section>
   <section class="card">
     <div class="card-head">
-      <h2>技能列表</h2>
-      <p>${compared ? '已对照平台技能目录。' : '未提供 --service-url，无法判断是否可上传。'}</p>
+      <h2>Skill列表</h2>
+      <p>${compared ? '已对照平台Skill目录。' : '未提供 --service-url，无法判断是否可上传。'}</p>
     </div>
     <div class="skill-list">
       ${skills.length ? skills.map((skill) => {
@@ -90,7 +90,7 @@ export function renderReport(events: ObservationEvent[], platform: PlatformSkill
           <p>${skill.callCount} 次调用 · ${skill.sessionCount} 个会话</p>
           <span class="badge ${uploadable ? 'ok' : 'muted'}">${badge}</span>
         </article>`
-      }).join('') : '<p class="empty">还没有采集到技能调用。</p>'}
+      }).join('') : '<p class="empty">还没有采集到Skill调用。</p>'}
     </div>
   </section>
   ${sessions.map((session) => renderSession(session)).join('')}
@@ -131,7 +131,7 @@ function renderSession(session: TimelineSession): string {
 function stepTitle(step: ObservationEvent): string {
   if (step.type === 'user') return '用户输入'
   if (step.type === 'assistant') return '助手回复'
-  if (step.type === 'skill') return String(step.payload.name || step.skill_name || step.skill_slug || '技能')
+  if (step.type === 'skill') return String(step.payload.name || step.skill_name || step.skill_slug || 'Skill')
   if (step.type === 'document') return String(step.payload.path || '文档')
   return String(step.payload.name || '工具')
 }
@@ -169,7 +169,7 @@ function lineChart(points: Array<{ day: string; count: number }>): string {
     const x = points.length === 1 ? width / 2 : (index / (points.length - 1)) * (width - 32) + 16
     return `<text x="${x}" y="${height - 6}" text-anchor="middle">${escapeHtml(point.day.slice(5))} · ${point.count}</text>`
   }).join('')
-  return `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="近七日技能调用趋势">
+  return `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="近七日Skill调用趋势">
     <polyline fill="none" stroke="#315cff" stroke-width="3" points="${coords.join(' ')}"></polyline>
     ${coords.map((point) => `<circle cx="${point.split(',')[0]}" cy="${point.split(',')[1]}" r="4" fill="#315cff"></circle>`).join('')}
     ${labels}

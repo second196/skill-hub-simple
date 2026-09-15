@@ -99,7 +99,6 @@ public class ObservationRepository {
 
     public List<Map<String, Object>> listObservedSkills() {
         // Platform observation cards only: skill must exist in the platform skill table.
-        // callCount = skill calls + file loads attributed to that platform skill.
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT s.slug, s.name, s.category, s.description, " +
                         "COUNT(*) FILTER (WHERE st.type='skill') AS skill_calls, " +
@@ -123,10 +122,178 @@ public class ObservationRepository {
             int callCount = (skillCalls instanceof Number ? ((Number) skillCalls).intValue() : 0)
                     + (fileLoads instanceof Number ? ((Number) fileLoads).intValue() : 0);
             item.put("call_count", Integer.valueOf(callCount));
-            item.put("trend", fillTrend(trends.get(String.valueOf(row.get("slug")))));
+            String slug = String.valueOf(row.get("slug"));
+            Map<String, Object> quality = skillQuality(slug);
+            item.put("quality", quality);
+            item.put("health_score", quality.get("healthScore"));
+            item.put("error_rate", quality.get("errorRate"));
+            item.put("reload_rate", quality.get("reloadRate"));
+            item.put("load_complete_rate", quality.get("loadCompleteRate"));
+            item.put("progress_label", quality.get("progressLabel"));
+            item.put("trend", fillTrend(trends.get(slug)));
             result.add(item);
         }
         return result;
+    }
+
+    /**
+     * Behavioral quality metrics for one platform skill (no global aggregate score).
+     * health = 0.35*loadComplete + 0.30*(1-error) + 0.25*(1-reload) + 0.10*progress
+     */
+    public Map<String, Object> skillQuality(String slug) {
+        Map<String, Object> row = firstOrNull(jdbc.queryForList(
+                "WITH skill_steps AS (" +
+                        " SELECT st.id, st.turn_id, st.seq, st.payload, t.session_id" +
+                        " FROM observation_step st JOIN observation_turn t ON t.id=st.turn_id" +
+                        " WHERE st.skill_slug=? AND st.type='skill'" +
+                        "), session_loads AS (" +
+                        " SELECT session_id, COUNT(*) AS loads" +
+                        " FROM skill_steps GROUP BY session_id" +
+                        " )" +
+                        "SELECT" +
+                        " (SELECT COUNT(*) FROM skill_steps) AS calls," +
+                        " (SELECT COUNT(*) FROM session_loads) AS sessions," +
+                        " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'outcome','ok')='error') AS errors," +
+                        " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','') IN ('file','path') OR payload::text ILIKE '%SKILL.md%') AS complete_loads," +
+                        " (SELECT COUNT(*) FROM session_loads WHERE loads >= 2) AS reload_sessions," +
+                        " (SELECT COALESCE(AVG(tool_cnt),0) FROM (" +
+                        "   SELECT (SELECT COUNT(*) FROM observation_step tool WHERE tool.turn_id=ss.turn_id AND tool.type='tool' AND tool.seq > ss.seq) AS tool_cnt" +
+                        "   FROM skill_steps ss" +
+                        " ) tools_after)",
+                slug));
+        int calls = intOf(row == null ? null : row.get("calls"));
+        int sessions = intOf(row == null ? null : row.get("sessions"));
+        int errors = intOf(row == null ? null : row.get("errors"));
+        int complete = intOf(row == null ? null : row.get("complete_loads"));
+        int reloadSessions = intOf(row == null ? null : row.get("reload_sessions"));
+        double avgToolsAfter = row == null ? 0d : doubleOf(row.get("tools_after"));
+
+        double errorRate = calls == 0 ? 0d : (double) errors / calls;
+        double reloadRate = sessions == 0 ? 0d : (double) reloadSessions / sessions;
+        double loadCompleteRate = calls == 0 ? 0d : (double) complete / calls;
+        double progress = clamp01(avgToolsAfter / 3.0d);
+        double health = 100d * (0.35d * loadCompleteRate + 0.30d * (1d - errorRate) + 0.25d * (1d - reloadRate) + 0.10d * progress);
+
+        Map<String, Object> quality = new LinkedHashMap<String, Object>();
+        quality.put("calls", Integer.valueOf(calls));
+        quality.put("sessions", Integer.valueOf(sessions));
+        quality.put("errors", Integer.valueOf(errors));
+        quality.put("completeLoads", Integer.valueOf(complete));
+        quality.put("reloadSessions", Integer.valueOf(reloadSessions));
+        quality.put("errorRate", Double.valueOf(round2(errorRate)));
+        quality.put("reloadRate", Double.valueOf(round2(reloadRate)));
+        quality.put("loadCompleteRate", Double.valueOf(round2(loadCompleteRate)));
+        quality.put("progress", Double.valueOf(round2(progress)));
+        quality.put("progressLabel", progressLabel(progress));
+        quality.put("healthScore", Integer.valueOf((int) Math.round(health)));
+        quality.put("healthLabel", healthLabel(health));
+        quality.put("pathDistribution", pathDistribution(slug));
+        quality.put("formula", "健康分 = 载入完整 × 35% +（1 − 错误率）× 30% +（1 − 重读率）× 25% + 推进 × 10%");
+        return quality;
+    }
+
+    public List<Map<String, Object>> skillProblemSessions(String slug, int limit) {
+        return jdbc.queryForList(
+                "WITH skill_steps AS (" +
+                        " SELECT st.id, st.turn_id, st.seq, st.payload, t.session_id" +
+                        " FROM observation_step st JOIN observation_turn t ON t.id=st.turn_id" +
+                        " WHERE st.skill_slug=? AND st.type='skill'" +
+                        "), flags AS (" +
+                        " SELECT session_id," +
+                        "   COUNT(*) AS loads," +
+                        "   COUNT(*) FILTER (WHERE COALESCE(payload->>'outcome','ok')='error') AS errors," +
+                        "   COUNT(*) FILTER (WHERE COALESCE(payload->>'match','') IN ('file','path') OR payload::text ILIKE '%SKILL.md%') AS complete_loads," +
+                        "   MAX(CASE WHEN COALESCE(payload->>'match','') IN ('call') THEN 1 ELSE 0 END) AS has_call," +
+                        "   MAX(CASE WHEN COALESCE(payload->>'match','') IN ('file','path') THEN 1 ELSE 0 END) AS has_file" +
+                        " FROM skill_steps GROUP BY session_id" +
+                        " )" +
+                        "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, sess.started_at," +
+                        " f.loads, f.errors, f.complete_loads, f.has_call, f.has_file," +
+                        " CASE WHEN f.errors > 0 THEN 0 ELSE 1 END AS error_rank," +
+                        " CASE WHEN f.loads >= 2 THEN 0 ELSE 1 END AS reload_rank," +
+                        " CASE WHEN f.complete_loads = 0 THEN 0 ELSE 1 END AS complete_rank" +
+                        " FROM flags f" +
+                        " JOIN observation_session sess ON sess.id=f.session_id" +
+                        " JOIN observation_client c ON c.id=sess.client_row_id" +
+                        " ORDER BY error_rank ASC, reload_rank ASC, complete_rank ASC, sess.started_at DESC NULLS LAST" +
+                        " LIMIT ?",
+                slug, Integer.valueOf(limit));
+    }
+
+    private List<Map<String, Object>> pathDistribution(String slug) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT COALESCE(payload->>'match','other') AS match_key, COUNT(*) AS count" +
+                        " FROM observation_step" +
+                        " WHERE skill_slug=? AND type='skill'" +
+                        " GROUP BY 1 ORDER BY count DESC", slug);
+        List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
+        int total = 0;
+        for (Map<String, Object> row : rows) total += intOf(row.get("count"));
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> item = new LinkedHashMap<String, Object>();
+            String key = String.valueOf(row.get("match_key"));
+            int count = intOf(row.get("count"));
+            item.put("key", key);
+            item.put("label", pathLabel(key));
+            item.put("count", Integer.valueOf(count));
+            item.put("ratio", Double.valueOf(total == 0 ? 0d : round2((double) count / total)));
+            result.add(item);
+        }
+        return result;
+    }
+
+    private static String pathLabel(String key) {
+        if ("call".equals(key)) return "Skill 工具调用";
+        if ("file".equals(key)) return "读 SKILL.md / 文件";
+        if ("path".equals(key)) return "读Skill目录路径";
+        if ("text".equals(key)) return "用户 /$slash 文本";
+        return "其他";
+    }
+
+    private static String progressLabel(double progress) {
+        if (progress >= 0.67d) return "高";
+        if (progress >= 0.33d) return "中";
+        return "低";
+    }
+
+    private static String healthLabel(double health) {
+        if (health >= 75d) return "健康";
+        if (health >= 60d) return "一般";
+        return "偏弱";
+    }
+
+    private static double clamp01(double value) {
+        if (value < 0d) return 0d;
+        if (value > 1d) return 1d;
+        return value;
+    }
+
+    private static double round2(double value) {
+        return Math.round(value * 100d) / 100d;
+    }
+
+    private static int intOf(Object value) {
+        if (value instanceof Number) return ((Number) value).intValue();
+        if (value == null) return 0;
+        try {
+            return Integer.parseInt(String.valueOf(value).trim());
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private static double doubleOf(Object value) {
+        if (value instanceof Number) return ((Number) value).doubleValue();
+        if (value == null) return 0d;
+        try {
+            return Double.parseDouble(String.valueOf(value).trim());
+        } catch (Exception ignored) {
+            return 0d;
+        }
+    }
+
+    private static Map<String, Object> firstOrNull(List<Map<String, Object>> rows) {
+        return rows == null || rows.isEmpty() ? null : rows.get(0);
     }
 
     public Map<String, Object> overview() {
@@ -192,7 +359,7 @@ public class ObservationRepository {
 
     public Map<String, Object> skillDetail(String slug, String clientId, Long sessionId) {
         Map<String, Object> skill = resolveSkillCard(slug);
-        if (skill == null) throw new IllegalArgumentException("技能不存在");
+        if (skill == null) throw new IllegalArgumentException("Skill不存在");
         Map<String, Object> result = new LinkedHashMap<String, Object>();
         result.put("skill", skill);
 
@@ -215,6 +382,8 @@ public class ObservationRepository {
                         "JOIN observation_step st ON st.turn_id=t.id WHERE st.skill_slug=?", Integer.class, slug));
         result.put("kpis", kpis);
         result.put("trend", fillTrend(trendBySkill(slug).get(slug)));
+        result.put("quality", skillQuality(slug));
+        result.put("problemSessions", skillProblemSessions(slug, 20));
 
         result.put("clients", jdbc.queryForList(
                 "SELECT c.client_id, c.hostname, c.os, COUNT(DISTINCT sess.id) AS session_count, MAX(c.last_seen_at) AS last_seen_at " +

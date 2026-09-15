@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
@@ -127,6 +127,34 @@ let discoveryCopyResetTimer: number | undefined
 const discoveryHasMore = computed(() => discoverySkills.value.length < discoveryTotal.value)
 
 type ObserveTrendPoint = { day: string; count: number }
+type ObservePathDist = { key: string; label: string; count: number; ratio: number }
+type ObserveQuality = {
+  healthScore: number
+  healthLabel: string
+  errorRate: number
+  reloadRate: number
+  loadCompleteRate: number
+  progress: number
+  progressLabel: string
+  calls: number
+  sessions: number
+  errors: number
+  completeLoads: number
+  reloadSessions: number
+  pathDistribution?: ObservePathDist[]
+  formula?: string
+}
+type ObserveProblemSession = {
+  id: number
+  session_key: string
+  client_name: string
+  client_id?: string
+  hostname?: string
+  started_at?: string
+  loads: number
+  errors: number
+  complete_loads: number
+}
 type ObserveOverview = { skillCount: number; callCount: number; sessionCount: number; clientCount: number; turnCount?: number; trend: ObserveTrendPoint[] }
 type ObserveSkillItem = {
   slug: string
@@ -138,6 +166,12 @@ type ObserveSkillItem = {
   client_count: number
   last_used_at?: string
   trend?: ObserveTrendPoint[]
+  quality?: ObserveQuality
+  health_score?: number
+  error_rate?: number
+  reload_rate?: number
+  load_complete_rate?: number
+  progress_label?: string
 }
 type ObserveClient = { client_id: string; hostname?: string; os?: string; session_count?: number; last_seen_at?: string }
 type ObserveSession = {
@@ -154,6 +188,8 @@ type ObserveStep = { step_id: string; seq: number; type: string; ts?: string; sk
 type ObserveTurn = { id?: number; turn_index: number; started_at?: string; user_text?: string; steps: ObserveStep[] }
 type ObserveChain = ObserveSession & { os?: string; turns: ObserveTurn[] }
 type ObserveSkillDetail = {
+  quality?: ObserveQuality
+  problemSessions?: ObserveProblemSession[]
   skill: { slug: string; name: string; category?: string; description?: string }
   kpis: { callCount: number; sessionCount: number; clientCount: number; turnCount: number }
   trend: ObserveTrendPoint[]
@@ -182,6 +218,94 @@ const observeSessionId = ref('')
 const observeShowToolSteps = ref(true)
 const observeShowStepContent = ref(true)
 const observeShowAssistantSteps = ref(true)
+const observeDetailTab = ref<'quality' | 'chain'>('quality')
+type ObserveQualitySortKey = 'calls' | 'health' | 'error' | 'reload' | 'complete'
+const observeSortKey = ref<ObserveQualitySortKey>('calls')
+type ObserveChainView = 'text' | 'tree'
+const observeChainView = ref<ObserveChainView>('text')
+const observeOnlySkillTurns = ref(false)
+const observeExpandedTurns = ref<Set<number>>(new Set())
+const observeTreeSelection = ref<{ turnIndex: number; stepId: string; title: string; body: string } | null>(null)
+let chainSwipeStartX = 0
+let chainSwipeStartY = 0
+let chainSwipeActive = false
+
+function qualityOf(item: ObserveSkillItem): ObserveQuality {
+  if (item.quality) return item.quality
+  return {
+    healthScore: Number(item.health_score ?? 0),
+    healthLabel: healthLabel(Number(item.health_score ?? 0)),
+    errorRate: Number(item.error_rate ?? 0),
+    reloadRate: Number(item.reload_rate ?? 0),
+    loadCompleteRate: Number(item.load_complete_rate ?? 0),
+    progress: 0,
+    progressLabel: item.progress_label || '低',
+    calls: Number(item.call_count ?? 0),
+    sessions: Number(item.session_count ?? 0),
+    errors: 0,
+    completeLoads: 0,
+    reloadSessions: 0
+  }
+}
+
+function healthLabel(score: number): string {
+  if (score >= 75) return '健康'
+  if (score >= 60) return '一般'
+  return '偏弱'
+}
+
+function formatPercent(value: number | undefined): string {
+  return `${Math.round(Number(value || 0) * 100)}%`
+}
+
+function qualityTone(score: number): string {
+  if (score >= 75) return 'tone-good'
+  if (score >= 60) return 'tone-mid'
+  return 'tone-bad'
+}
+
+function qualitySortValue(item: ObserveSkillItem, key: ObserveQualitySortKey): number {
+  const q = qualityOf(item)
+  switch (key) {
+    case 'health':
+      return q.healthScore
+    case 'error':
+      return q.errorRate
+    case 'reload':
+      return q.reloadRate
+    case 'complete':
+      return q.loadCompleteRate
+    case 'calls':
+    default:
+      return Number(item.call_count || 0)
+  }
+}
+
+function sortedObserveSkills(): ObserveSkillItem[] {
+  const key = observeSortKey.value
+  return [...observeSkills.value].sort((a, b) => {
+    const diff = qualitySortValue(b, key) - qualitySortValue(a, key)
+    if (diff !== 0) return diff
+    return Number(b.call_count || 0) - Number(a.call_count || 0)
+  })
+}
+
+function setQualitySort(key: ObserveQualitySortKey) {
+  observeSortKey.value = key
+}
+
+function qualitySortIndicator(key: ObserveQualitySortKey): string {
+  return observeSortKey.value === key ? ' ↓' : ''
+}
+
+function maxCallCount(): number {
+  return Math.max(...observeSkills.value.map((skill) => Number(skill.call_count || 0)), 1)
+}
+
+function callBarWidth(count: number): string {
+  const ratio = Number(count || 0) / maxCallCount()
+  return `${Math.max(4, Math.round(ratio * 100))}%`
+}
 
 const activeSkills = computed(() => skills.value.filter((skill) => skill.status === 'ACTIVE'))
 const featuredSkills = computed(() => activeSkills.value.slice(0, 6))
@@ -191,9 +315,9 @@ const copiedSnippet = ref(false)
 const installationPrompt = computed(() => {
   if (!detail.value) return ''
   return [
-    `请帮我安装技能：${detail.value.name}`,
+    `请帮我安装Skill：${detail.value.name}`,
     '',
-    `技能标识：${detail.value.slug}`,
+    `Skill标识：${detail.value.slug}`,
     '',
     `请使用 skillhub install ${detail.value.slug} 完成安装。`
   ].join('\n')
@@ -278,7 +402,7 @@ async function loadSkills() {
     params.set('status', includeOffline.value ? 'OFFLINE' : 'ACTIVE')
     skills.value = await request<Skill[]>(`/api/skills?${params}`)
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '技能加载失败'
+    error.value = e instanceof Error ? e.message : 'Skill加载失败'
   } finally {
     loading.value = false
   }
@@ -308,7 +432,7 @@ async function loadDiscoverySkills() {
     discoverySkills.value = result.items
     discoveryTotal.value = result.total
   } catch (e) {
-    discoveryError.value = e instanceof Error ? e.message : '发现技能加载失败'
+    discoveryError.value = e instanceof Error ? e.message : '发现Skill加载失败'
   } finally {
     discoveryLoading.value = false
   }
@@ -336,14 +460,14 @@ async function loadDiscoveryDetail() {
       if (!readme.is_binary) discoveryContent.value = await requestDiscoveryText(readme.path)
     }
   } catch (e) {
-    discoveryDetailError.value = e instanceof Error ? e.message : '发现技能详情加载失败'
+    discoveryDetailError.value = e instanceof Error ? e.message : '发现Skill详情加载失败'
   }
 }
 
 async function requestDiscoveryText(path: string) {
   const id = encodeURIComponent(String(route.params.id))
   const response = await fetch(`/api/discovery/skills/${id}/files/content?path=${encodeURIComponent(path)}`)
-  if (!response.ok) throw new Error('发现技能文件读取失败')
+  if (!response.ok) throw new Error('发现Skill文件读取失败')
   return response.text()
 }
 
@@ -355,7 +479,7 @@ async function selectDiscoveryFile(path: string) {
   try {
     discoveryContent.value = await requestDiscoveryText(path)
   } catch (e) {
-    discoveryContent.value = e instanceof Error ? e.message : '发现技能文件读取失败'
+    discoveryContent.value = e instanceof Error ? e.message : '发现Skill文件读取失败'
   }
 }
 
@@ -365,7 +489,7 @@ const discoveryInstallationPrompt = computed(() => {
   return [
     `请帮我下载并安装这个 Skill：${discoveryDetail.value.name}`,
     '',
-    `技能来源：`,
+    `Skill来源：`,
     discoveryDetail.value.install_url,
     '',
     `请使用以下命令：`,
@@ -410,7 +534,7 @@ async function loadDetail() {
     selectedVersionFile.value = readme?.path || ''
     versionContent.value = content.value
   } catch (e) {
-    detailError.value = e instanceof Error ? e.message : '技能详情加载失败'
+    detailError.value = e instanceof Error ? e.message : 'Skill详情加载失败'
   }
 }
 
@@ -438,7 +562,7 @@ function stepTitle(step: ObserveStep) {
   const payload = step.payload || {}
   if (step.type === 'user') return '用户输入'
   if (step.type === 'assistant') return '助手回复'
-  if (step.type === 'skill') return String(payload.name || step.skill_slug || '技能')
+  if (step.type === 'skill') return String(payload.name || step.skill_slug || 'Skill')
   if (step.type === 'document') return String(payload.path || '文档')
   return String(payload.name || '工具')
 }
@@ -460,10 +584,213 @@ function isObserveMarkdown(step: ObserveStep) {
 function stepTypeLabel(type?: string) {
   if (type === 'user') return '用户'
   if (type === 'assistant') return '助手'
-  if (type === 'skill') return '技能'
+  if (type === 'skill') return 'Skill'
   if (type === 'document') return '文档'
   if (type === 'tool') return '工具'
   return type || '步骤'
+}
+
+type ChainTreeNode = {
+  kind: 'user' | 'skill' | 'rollup' | 'tool' | 'document' | 'assistant'
+  id: string
+  title: string
+  meta?: string
+  children: ChainTreeNode[]
+  step?: ObserveStep
+}
+
+type ChainTurnTree = {
+  turnIndex: number
+  startedAt?: string
+  skillSlugs: string[]
+  nodes: ChainTreeNode[]
+}
+
+function matchLabel(match?: unknown) {
+  if (match === 'call') return 'Skill 调用'
+  if (match === 'file') return '文件载入'
+  if (match === 'path') return '路径载入'
+  if (match === 'text') return '文本命令'
+  return match ? String(match) : ''
+}
+
+function excerpt(text: string, max = 48) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim()
+  if (normalized.length <= max) return normalized
+  return `${normalized.slice(0, max)}…`
+}
+
+function turnHasSkill(turn: ObserveTurn) {
+  return (turn.steps || []).some((step) => step.type === 'skill' && step.skill_slug)
+}
+
+function visibleChainTurns(turns: ObserveTurn[]) {
+  const list = turns || []
+  if (!observeOnlySkillTurns.value) return list
+  return list.filter(turnHasSkill)
+}
+
+function buildTurnTree(turn: ObserveTurn): ChainTurnTree {
+  const steps = visibleObserveSteps(turn.steps)
+  const nodes: ChainTreeNode[] = []
+  const skillSlugs = new Set<string>()
+  let currentSkill: ChainTreeNode | null = null
+
+  if (turn.user_text || steps.some((step) => step.type === 'user')) {
+    const userText = turn.user_text || String(steps.find((step) => step.type === 'user')?.payload?.text || '')
+    nodes.push({
+      kind: 'user',
+      id: `user-${turn.turn_index}`,
+      title: '用户输入',
+      meta: excerpt(userText || '（无用户原文）'),
+      children: []
+    })
+  }
+
+  for (const step of steps) {
+    if (step.type === 'user') continue
+    if (step.type === 'assistant') {
+      currentSkill = null
+      nodes.push({
+        kind: 'assistant',
+        id: step.step_id,
+        title: '助手回复',
+        meta: excerpt(stepBody(step) || ''),
+        children: [],
+        step
+      })
+      continue
+    }
+    if (step.type === 'skill') {
+      const payload = step.payload || {}
+      const isRollup = payload.rollup === true || payload.rollup === 'true'
+      const title = String(payload.name || step.skill_slug || '技能')
+      if (step.skill_slug) skillSlugs.add(step.skill_slug)
+      const node: ChainTreeNode = {
+        kind: isRollup ? 'rollup' : 'skill',
+        id: step.step_id,
+        title: isRollup ? `归入父技能 · ${title}` : title,
+        meta: [matchLabel(payload.match), payload.outcome ? String(payload.outcome) : '', step.skill_slug || ''].filter(Boolean).join(' · '),
+        children: [],
+        step
+      }
+      if (isRollup && currentSkill) currentSkill.children.push(node)
+      else {
+        nodes.push(node)
+        if (!isRollup) currentSkill = node
+      }
+      continue
+    }
+    const payload = step.payload || {}
+    const leaf: ChainTreeNode = {
+      kind: step.type === 'document' ? 'document' : 'tool',
+      id: step.step_id,
+      title: stepTitle(step),
+      meta: step.type === 'document'
+        ? String(payload.path || '')
+        : excerpt(String(payload.name || ''), 36),
+      children: [],
+      step
+    }
+    if (currentSkill) currentSkill.children.push(leaf)
+    else nodes.push(leaf)
+  }
+
+  return {
+    turnIndex: turn.turn_index,
+    startedAt: turn.started_at,
+    skillSlugs: [...skillSlugs],
+    nodes
+  }
+}
+
+function chainTurnTrees(): ChainTurnTree[] {
+  const session = observeDetail.value?.selectedSession
+  if (!session) return []
+  const trees = visibleChainTurns(session.turns).map(buildTurnTree)
+  if (!observeExpandedTurns.value.size) {
+    observeExpandedTurns.value = new Set(trees.filter((tree) => tree.skillSlugs.length).map((tree) => tree.turnIndex))
+  }
+  return trees
+}
+
+function isTurnExpanded(turnIndex: number) {
+  return observeExpandedTurns.value.has(turnIndex)
+}
+
+function toggleTurnExpanded(turnIndex: number) {
+  const next = new Set(observeExpandedTurns.value)
+  if (next.has(turnIndex)) next.delete(turnIndex)
+  else next.add(turnIndex)
+  observeExpandedTurns.value = next
+}
+
+function expandAllTurns() {
+  observeExpandedTurns.value = new Set(chainTurnTrees().map((tree) => tree.turnIndex))
+}
+
+function collapseAllTurns() {
+  observeExpandedTurns.value = new Set()
+}
+
+function treeKindLabel(kind: ChainTreeNode['kind']) {
+  if (kind === 'user') return '用户'
+  if (kind === 'assistant') return 'AI'
+  if (kind === 'skill') return '技能'
+  if (kind === 'rollup') return '父技能'
+  if (kind === 'document') return '文档'
+  return '工具'
+}
+
+function selectTreeNode(turnIndex: number, node: ChainTreeNode) {
+  if (!node.step) {
+    observeTreeSelection.value = {
+      turnIndex,
+      stepId: node.id,
+      title: node.title,
+      body: node.meta || ''
+    }
+    return
+  }
+  observeTreeSelection.value = {
+    turnIndex,
+    stepId: node.id,
+    title: node.title,
+    body: observeShowStepContent.value ? stepBody(node.step) : (node.meta || '')
+  }
+}
+
+function locateTreeStepInText() {
+  if (!observeTreeSelection.value) return
+  observeChainView.value = 'text'
+  void nextTick(() => {
+    const el = document.getElementById(`step-${observeTreeSelection.value?.stepId || ''}`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  })
+}
+
+function setChainView(view: ObserveChainView) {
+  observeChainView.value = view
+  const query: Record<string, string> = { tab: 'chain', view }
+  if (observeClientId.value) query.client = observeClientId.value
+  if (observeSessionId.value) query.session = observeSessionId.value
+  void router.replace({ path: `/observe/${observeSlug.value}`, query })
+}
+
+function onChainPointerDown(event: PointerEvent) {
+  chainSwipeActive = true
+  chainSwipeStartX = event.clientX
+  chainSwipeStartY = event.clientY
+}
+
+function onChainPointerUp(event: PointerEvent) {
+  if (!chainSwipeActive) return
+  chainSwipeActive = false
+  const dx = event.clientX - chainSwipeStartX
+  const dy = event.clientY - chainSwipeStartY
+  if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy)) return
+  if (dx < 0 && observeChainView.value === 'text') setChainView('tree')
+  else if (dx > 0 && observeChainView.value === 'tree') setChainView('text')
 }
 
 function visibleObserveSteps(steps: ObserveStep[] | undefined) {
@@ -539,6 +866,10 @@ async function loadObserveSkill() {
   observeDetailError.value = ''
   observeClientId.value = typeof route.query.client === 'string' ? route.query.client : ''
   observeSessionId.value = typeof route.query.session === 'string' ? route.query.session : ''
+  observeDetailTab.value = route.query.tab === 'chain' ? 'chain' : 'quality'
+  observeChainView.value = route.query.view === 'tree' ? 'tree' : 'text'
+  observeExpandedTurns.value = new Set()
+  observeTreeSelection.value = null
   try {
     const params = new URLSearchParams()
     if (observeClientId.value) params.set('clientId', observeClientId.value)
@@ -550,7 +881,7 @@ async function loadObserveSkill() {
     }
   } catch (e) {
     observeDetail.value = null
-    observeDetailError.value = e instanceof Error ? e.message : '技能观测加载失败'
+    observeDetailError.value = e instanceof Error ? e.message : 'Skill观测加载失败'
   } finally {
     observeDetailLoading.value = false
   }
@@ -559,6 +890,7 @@ async function loadObserveSkill() {
 function selectObserveClient(clientId: string) {
   const query: Record<string, string> = {}
   if (clientId) query.client = clientId
+  if (isObserveSkill.value) query.tab = observeDetailTab.value
   const path = isObserveSkill.value ? `/observe/${observeSlug.value}` : '/observe/sessions'
   void router.push({ path, query })
 }
@@ -566,8 +898,32 @@ function selectObserveClient(clientId: string) {
 function selectObserveSession(session: ObserveSession) {
   const query: Record<string, string> = { session: String(session.id) }
   if (observeClientId.value || session.client_id) query.client = observeClientId.value || session.client_id
+  if (isObserveSkill.value && observeDetailTab.value === 'quality') query.tab = 'quality'
+  if (isObserveSkill.value && observeDetailTab.value === 'chain') query.tab = 'chain'
   const path = isObserveSkill.value ? `/observe/${observeSlug.value}` : '/observe/sessions'
   void router.push({ path, query })
+}
+
+function setObserveDetailTab(tab: 'quality' | 'chain') {
+  observeDetailTab.value = tab
+  const query: Record<string, string> = { tab }
+  if (observeClientId.value) query.client = observeClientId.value
+  if (observeSessionId.value) query.session = observeSessionId.value
+  if (tab === 'chain') query.view = observeChainView.value
+  void router.replace({ path: `/observe/${observeSlug.value}`, query })
+}
+
+function openProblemSession(session: ObserveProblemSession) {
+  observeDetailTab.value = 'chain'
+  observeSessionId.value = String(session.id)
+  const match = (observeDetail.value?.sessions || []).find((item) => String(item.id) === String(session.id))
+  if (match) {
+    void selectObserveSession(match)
+    return
+  }
+  const query: Record<string, string> = { tab: 'chain', view: observeChainView.value, session: String(session.id) }
+  if (session.client_id) query.client = session.client_id
+  void router.push({ path: `/observe/${observeSlug.value}`, query })
 }
 
 async function requestText(path: string, version = detail.value?.version_digest || '') {
@@ -797,7 +1153,7 @@ async function loadMoreDiscoverySkills() {
     discoveryTotal.value = result.total
   } catch (e) {
     discoveryPage.value = Math.max(1, discoveryPage.value - 1)
-    discoveryError.value = e instanceof Error ? e.message : '更多发现技能加载失败'
+    discoveryError.value = e instanceof Error ? e.message : '更多发现Skill加载失败'
   } finally {
     discoveryLoading.value = false
   }
@@ -952,11 +1308,11 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           </RouterLink>
           <RouterLink class="site-nav-link" to="/discover" :class="{ 'router-link-active': isDiscover || isDiscoverDetail }" :aria-current="isDiscover || isDiscoverDetail ? 'page' : undefined">
             <Compass :size="15" :stroke-width="1.9" aria-hidden="true" />
-            <span>发现技能</span>
+            <span>发现Skill</span>
           </RouterLink>
           <RouterLink :class="['site-nav-link', { 'router-link-active': isSearch || isDetail }]" to="/search" :aria-current="isSearch || isDetail ? 'page' : undefined">
             <Search :size="15" :stroke-width="1.9" aria-hidden="true" />
-            <span>技能市场</span>
+            <span>Skill市场</span>
           </RouterLink>
           <RouterLink class="site-nav-link" to="/observe" :class="{ 'router-link-active': isObserve || isObserveSkill || isObserveSessions }" :aria-current="isObserve || isObserveSkill || isObserveSessions ? 'page' : undefined">
             <Activity :size="15" :stroke-width="1.9" aria-hidden="true" />
@@ -969,15 +1325,15 @@ function handleGlobalKeydown(event: KeyboardEvent) {
     <main class="site-main">
       <section v-if="isHome" class="home-page">
         <div class="home-hero">
-          <h1 class="home-title">上传与分享 AI 技能</h1>
+          <h1 class="home-title">上传与分享 AI Skill</h1>
           <p class="home-copy">直接与Agent对话，上传和下载Skill，方便管理企业开发使用的Skill。</p>
           <form class="hero-search" @submit.prevent="goSearch">
             <Search :size="18" :stroke-width="1.8" aria-hidden="true" />
-            <input v-model="navQuery" placeholder="搜索技能..." />
+            <input v-model="navQuery" placeholder="搜索Skill..." />
           </form>
           <div class="hero-actions">
-            <button class="primary large" @click="goSearch">探索技能</button>
-            <RouterLink class="secondary large" to="/publish">发布技能</RouterLink>
+            <button class="primary large" @click="goSearch">探索Skill</button>
+            <RouterLink class="secondary large" to="/publish">发布Skill</RouterLink>
           </div>
         </div>
 
@@ -1008,7 +1364,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           <div class="section-head">
             <div>
               <h2>热门下载</h2>
-              <p>企业最常用的技能</p>
+              <p>企业最常用的Skill</p>
             </div>
             <RouterLink class="section-link" to="/search">查看全部 <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" /></RouterLink>
           </div>
@@ -1020,7 +1376,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
               :key="skill.id"
               class="skill-card home-card skill-card-link"
               :to="marketDetailLink(skill.slug)"
-              :aria-label="`查看技能 ${skill.name}`"
+              :aria-label="`查看Skill ${skill.name}`"
             >
               <div class="card-top">
                 <span class="category">{{ skill.category }}</span>
@@ -1046,21 +1402,21 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           <div class="page-heading-row">
             <div>
               <p class="home-kicker">公开生态</p>
-              <h1 class="page-title">发现技能</h1>
+              <h1 class="page-title">发现Skill</h1>
               <p class="page-subtitle">从 GitHub 公开生态中发现正在流行的 Agent Skills。</p>
             </div>
             <span class="discovery-source-note"><GitBranch :size="15" :stroke-width="1.8" aria-hidden="true" /> GitHub 公开来源</span>
           </div>
         </div>
 
-        <section class="discovery-toolbar" aria-label="发现技能筛选">
+        <section class="discovery-toolbar" aria-label="发现Skill筛选">
           <div class="discovery-search">
             <Search :size="17" :stroke-width="1.8" aria-hidden="true" />
-            <input v-model="discoveryQuery" placeholder="搜索技能名称、用途或仓库" @keyup.enter="runDiscoverySearch" />
+            <input v-model="discoveryQuery" placeholder="搜索Skill名称、用途或仓库" @keyup.enter="runDiscoverySearch" />
             <button class="secondary" type="button" @click="runDiscoverySearch">搜索</button>
           </div>
           <div class="discovery-filter-row">
-            <div class="filter-chips" aria-label="技能分类">
+            <div class="filter-chips" aria-label="Skill分类">
               <button :class="['filter-chip', { selected: !discoveryCategory }]" type="button" @click="discoveryCategory = ''; runDiscoverySearch()">全部</button>
               <button v-for="item in discoveryCategories" :key="item" :class="['filter-chip', { selected: discoveryCategory === item }]" type="button" @click="discoveryCategory = item; runDiscoverySearch()">{{ item }}</button>
             </div>
@@ -1078,21 +1434,21 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 
         <p v-if="discoveryError" class="error">{{ discoveryError }}</p>
         <div class="discovery-results-head">
-          <span>{{ discoveryLoading && !discoverySkills.length ? '正在加载…' : `发现 ${discoveryTotal} 个技能` }}</span>
+          <span>{{ discoveryLoading && !discoverySkills.length ? '正在加载…' : `发现 ${discoveryTotal} 个Skill` }}</span>
           <span class="discovery-results-caption">外部指标仅用于参考，不代表 SkillHub 下载量</span>
         </div>
-        <p v-if="discoveryLoading && !discoverySkills.length" class="empty">正在同步公开技能目录…</p>
+        <p v-if="discoveryLoading && !discoverySkills.length" class="empty">正在同步公开Skill目录…</p>
         <section v-else class="discovery-grid">
           <RouterLink
             v-for="skill in discoverySkills"
             :key="skill.id"
             class="discovery-card"
             :to="discoveryDetailLink(skill.id)"
-            :aria-label="`查看发现技能 ${skill.name}`"
+            :aria-label="`查看发现Skill ${skill.name}`"
           >
             <div class="discovery-card-top">
               <span class="discovery-source"><GitBranch :size="14" :stroke-width="1.8" aria-hidden="true" /> {{ skill.source_owner }}/{{ skill.source_repository }}</span>
-              <span v-if="skill.package_type === 'COMPOSITE'" class="discovery-badge">技能集合</span>
+              <span v-if="skill.package_type === 'COMPOSITE'" class="discovery-badge">Skill集合</span>
             </div>
             <h2>{{ skill.name }}</h2>
             <p>{{ skill.description }}</p>
@@ -1105,7 +1461,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
               <span>{{ skill.source_updated_at ? new Date(skill.source_updated_at).toLocaleDateString() : '最近更新' }}</span>
             </div>
           </RouterLink>
-          <p v-if="!discoverySkills.length" class="empty">暂时没有可展示的发现技能。</p>
+          <p v-if="!discoverySkills.length" class="empty">暂时没有可展示的发现Skill。</p>
         </section>
         <button v-if="discoveryHasMore" class="secondary discovery-load-more" type="button" :disabled="discoveryLoading" @click="loadMoreDiscoverySkills">
           {{ discoveryLoading ? '加载中…' : '加载更多' }}
@@ -1113,7 +1469,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
       </section>
 
       <section v-else-if="isDiscoverDetail && discoveryDetail" class="discovery-detail">
-        <RouterLink class="back" :to="discoveryBackLocation">← 返回发现技能</RouterLink>
+        <RouterLink class="back" :to="discoveryBackLocation">← 返回发现Skill</RouterLink>
 
         <header class="detail-head discovery-detail-head">
           <div class="discovery-detail-main">
@@ -1124,7 +1480,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             </a>
             <div class="discovery-detail-title-row">
               <div>
-                <p class="eyebrow">{{ discoveryDetail.category }}<span v-if="discoveryDetail.package_type === 'COMPOSITE'" class="discovery-badge inline">技能集合</span></p>
+                <p class="eyebrow">{{ discoveryDetail.category }}<span v-if="discoveryDetail.package_type === 'COMPOSITE'" class="discovery-badge inline">Skill集合</span></p>
                 <h1>{{ discoveryDetail.name }}</h1>
                 <p>{{ discoveryDetail.description }}</p>
                 <code class="discovery-detail-path">
@@ -1132,7 +1488,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                 </code>
               </div>
             </div>
-            <div class="discovery-detail-stats" aria-label="技能指标">
+            <div class="discovery-detail-stats" aria-label="Skill指标">
               <span><Star :size="15" :stroke-width="1.8" aria-hidden="true" /><strong>{{ discoveryDetail.github_stars || 0 }}</strong> Star</span>
               <span><Download :size="15" :stroke-width="1.8" aria-hidden="true" /><strong>{{ discoveryDetail.discovery_download_count || 0 }}</strong> 次下载</span>
               <span><strong>{{ discoveryDetail.external_install_count || 0 }}</strong> 社区安装</span>
@@ -1141,7 +1497,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             </div>
           </div>
           <div class="discovery-detail-actions">
-            <a class="primary link" :href="`/api/discovery/skills/${discoveryDetail.id}/download`">下载技能包</a>
+            <a class="primary link" :href="`/api/discovery/skills/${discoveryDetail.id}/download`">下载Skill包</a>
             <a class="secondary link" :href="discoveryDetail.source_url" target="_blank" rel="noreferrer">
               打开来源
               <ExternalLink :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -1180,16 +1536,16 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           <div class="discovery-panel-heading">
             <div>
               <p class="eyebrow">README / SKILL.md</p>
-              <h2>{{ discoverySelectedFile || '技能说明' }}</h2>
+              <h2>{{ discoverySelectedFile || 'Skill说明' }}</h2>
             </div>
             <span v-if="discoverySelectedFile" class="file-type-label">{{ isMarkdownPath(discoverySelectedFile) ? 'Markdown' : '文件' }}</span>
           </div>
           <article v-if="discoverySelectedFile && isMarkdownPath(discoverySelectedFile)" class="markdown-body" v-html="discoveryRenderedMarkdown"></article>
-          <pre v-else class="discovery-plain-content">{{ discoveryContent || '暂无技能说明。' }}</pre>
+          <pre v-else class="discovery-plain-content">{{ discoveryContent || '暂无Skill说明。' }}</pre>
         </section>
 
         <section v-else class="panel file-layout discovery-file-layout">
-          <aside class="file-tree" aria-label="发现技能文件树">
+          <aside class="file-tree" aria-label="发现Skill文件树">
             <button
               v-for="row in flattenFileTree(buildFileTree(discoveryFiles, discoveryDetail.name), discoveryExpandedFolders)"
               :key="row.key"
@@ -1224,102 +1580,158 @@ function handleGlobalKeydown(event: KeyboardEvent) {
       </section>
 
       <p v-else-if="isDiscoverDetail && discoveryDetailError" class="error">{{ discoveryDetailError }}</p>
-      <p v-else-if="isDiscoverDetail" class="empty">正在加载发现技能详情…</p>
+      <p v-else-if="isDiscoverDetail" class="empty">正在加载发现Skill详情…</p>
 
       <section v-else-if="isObserve" class="observe-page">
-        <div class="page-hero">
-          <p class="home-kicker">Observability</p>
-          <h1 class="page-title">技能观测</h1>
-          <p class="page-subtitle">查看平台技能的调用情况和趋势。需要阅读完整对话时，从技能调用进入全部会话子页。</p>
-          <p class="observe-hint">本机先执行 <code>skillhub-observer install</code>，再用 <code>skillhub-observer report --open</code> 查看完整报告，最后 <code>skillhub-observer upload --service-url http://127.0.0.1:8080</code> 上传全部会话。</p>
+        <div class="page-hero page-hero-row">
+          <div>
+            <p class="home-kicker">Observability</p>
+            <h1 class="page-title">Skill观测</h1>
+            <p class="page-subtitle">按平台Skill查看质量：载入完整、错误、重读、推进。点卡片进入质量详情。</p>
+          </div>
+          <RouterLink class="primary observe-sessions-entry" to="/observe/sessions">
+            全部会话
+            <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" />
+          </RouterLink>
         </div>
 
         <p v-if="observeHomeError" class="error" role="alert">{{ observeHomeError }}</p>
         <p v-else-if="observeHomeLoading" class="empty">正在加载观测数据…</p>
         <template v-else>
-          <section class="observe-kpis" aria-label="观测汇总">
-            <article class="observe-kpi">
-              <span>已观测技能</span>
-              <strong>{{ observeOverview?.skillCount || 0 }}</strong>
-            </article>
-            <article class="observe-kpi">
-              <span>技能调用</span>
+          <section class="observe-kpis observe-kpis-hero" aria-label="观测规模">
+            <article class="observe-kpi observe-kpi-primary">
+              <span>调用量</span>
               <strong>{{ observeOverview?.callCount || 0 }}</strong>
+              <small>次载入 / 调用</small>
             </article>
-            <article class="observe-kpi">
-              <span>会话</span>
+            <article class="observe-kpi observe-kpi-primary">
+              <span>会话量</span>
               <strong>{{ observeOverview?.sessionCount || 0 }}</strong>
+              <small>可下钻样本</small>
             </article>
             <article class="observe-kpi">
-              <span>回合</span>
-              <strong>{{ observeOverview?.turnCount || 0 }}</strong>
-            </article>
-            <article class="observe-kpi">
-              <span>客户端</span>
-              <strong>{{ observeOverview?.clientCount || 0 }}</strong>
+              <span>观测Skill</span>
+              <strong>{{ observeOverview?.skillCount || 0 }}</strong>
+              <small>仅平台Skill</small>
             </article>
           </section>
 
-          <section class="observe-chart-card" aria-label="近七日调用趋势">
+          <section class="observe-quality-section">
             <div class="section-head">
               <div>
-                <h2>近 7 日调用</h2>
-                <p>按技能调用次数统计，颜色不作为唯一信息。</p>
+                <h2>Skill质量总览</h2>
+                <p>健康分只算在单个Skill上，不做平台总分。健康分 = 载入完整 × 35% +（1 − 错误率）× 30% +（1 − 重读率）× 25% + 推进 × 10%。</p>
               </div>
             </div>
-            <svg class="observe-chart" viewBox="0 0 720 180" role="img" aria-label="近七日技能调用折线图">
-              <polyline fill="none" stroke="#315cff" stroke-width="3" :points="sparklinePoints(observeOverview?.trend, 720, 180)" />
-              <circle
-                v-for="(point, index) in (observeOverview?.trend || [])"
-                :key="point.day"
-                :cx="trendX(index, (observeOverview?.trend || []).length, 720)"
-                :cy="trendY(asNumber(point.count), trendMax(observeOverview?.trend), 180)"
-                r="4"
-                fill="#315cff"
-              />
-            </svg>
-            <div class="observe-chart-legend">
-              <span v-for="point in observeOverview?.trend || []" :key="point.day">{{ point.day.slice(5) }} · {{ asNumber(point.count) }}</span>
+            <div class="observe-quality-table-wrap">
+              <table class="observe-quality-table">
+                <thead>
+                  <tr>
+                    <th>Skill</th>
+                    <th>
+                      <button type="button" class="th-sort" :class="{ active: observeSortKey === 'calls' }" @click="setQualitySort('calls')">
+                        调用量{{ qualitySortIndicator('calls') }}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" class="th-sort" :class="{ active: observeSortKey === 'health' }" @click="setQualitySort('health')">
+                        健康分{{ qualitySortIndicator('health') }}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" class="th-sort" :class="{ active: observeSortKey === 'error' }" @click="setQualitySort('error')">
+                        错误{{ qualitySortIndicator('error') }}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" class="th-sort" :class="{ active: observeSortKey === 'reload' }" @click="setQualitySort('reload')">
+                        重读{{ qualitySortIndicator('reload') }}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" class="th-sort" :class="{ active: observeSortKey === 'complete' }" @click="setQualitySort('complete')">
+                        载入完整{{ qualitySortIndicator('complete') }}
+                      </button>
+                    </th>
+                    <th>推进</th>
+                    <th>会话</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="skill in sortedObserveSkills()" :key="skill.slug">
+                    <td>
+                      <RouterLink class="quality-skill-link" :to="`/observe/${skill.slug}`">
+                        <strong>{{ skill.name }}</strong>
+                        <code>{{ skill.slug }}</code>
+                      </RouterLink>
+                    </td>
+                    <td>
+                      <div class="call-volume-cell" :aria-label="`调用量 ${asNumber(skill.call_count)}`">
+                        <span class="call-volume-bar-track" aria-hidden="true">
+                          <span class="call-volume-bar" :style="{ width: callBarWidth(skill.call_count) }"></span>
+                        </span>
+                        <span class="num">{{ asNumber(skill.call_count) }}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span :class="['health-badge', qualityTone(qualityOf(skill).healthScore)]">
+                        {{ qualityOf(skill).healthScore }} {{ qualityOf(skill).healthLabel }}
+                      </span>
+                    </td>
+                    <td class="num">{{ formatPercent(qualityOf(skill).errorRate) }}</td>
+                    <td class="num" :class="{ warn: qualityOf(skill).reloadRate >= 0.1 }">{{ formatPercent(qualityOf(skill).reloadRate) }}</td>
+                    <td class="num">{{ formatPercent(qualityOf(skill).loadCompleteRate) }}</td>
+                    <td>{{ qualityOf(skill).progressLabel }}</td>
+                    <td class="num">{{ asNumber(skill.session_count) }}</td>
+                    <td>
+                      <RouterLink class="observe-row-action" :to="`/observe/${skill.slug}`">详情</RouterLink>
+                    </td>
+                  </tr>
+                  <tr v-if="!observeSkills.length">
+                    <td colspan="9" class="empty">还没有匹配到平台Skill调用。请先在本机 upload 观测数据。</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </section>
 
           <section>
             <div class="section-head">
               <div>
-                <h2>技能调用</h2>
-                <p>点击卡片查看该技能在各客户端中的会话和逐步链路。</p>
+                <h2>Skill卡片</h2>
+                <p>点击进入该Skill质量详情（质量 / 会话链路）。</p>
               </div>
-              <RouterLink class="primary observe-sessions-entry" to="/observe/sessions">
-                全部会话
-                <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" />
-              </RouterLink>
             </div>
             <section class="skill-grid observe-skill-grid">
               <RouterLink
                 v-for="skill in observeSkills"
                 :key="skill.slug"
-                class="skill-card skill-card-link"
+                class="skill-card skill-card-link observe-quality-card"
                 :to="`/observe/${skill.slug}`"
-                :aria-label="`查看 ${skill.name} 的观测结果`"
+                :aria-label="`查看 ${skill.name} 的质量观测`"
               >
                 <div class="card-top">
                   <span class="category">{{ skill.category || '未分类' }}</span>
-                  <span class="download-count">{{ asNumber(skill.call_count) }} 次调用</span>
+                  <span :class="['health-badge', qualityTone(qualityOf(skill).healthScore)]">
+                    健康 {{ qualityOf(skill).healthScore }}
+                  </span>
                 </div>
                 <h3>{{ skill.name }}</h3>
                 <p>{{ skill.description || '暂无描述' }}</p>
-                <svg class="observe-mini-chart" viewBox="0 0 168 44" aria-hidden="true">
-                  <polyline fill="none" stroke="#315cff" stroke-width="2" :points="sparklinePoints(skill.trend)" />
-                </svg>
+                <div class="quality-card-metrics">
+                  <span>调用 {{ asNumber(skill.call_count) }}</span>
+                  <span>会话 {{ asNumber(skill.session_count) }}</span>
+                  <span :class="{ warn: qualityOf(skill).reloadRate >= 0.1 }">重读 {{ formatPercent(qualityOf(skill).reloadRate) }}</span>
+                </div>
                 <div class="skill-card-footer">
                   <code>{{ skill.slug }}</code>
-                  <span class="download-count">{{ asNumber(skill.session_count) }} 个会话</span>
+                  <span class="download-count">{{ qualityOf(skill).healthLabel }} · {{ qualityOf(skill).progressLabel }}推进</span>
                 </div>
               </RouterLink>
-              <p v-if="!observeSkills.length" class="empty">还没有匹配到平台技能调用。全部会话仍会上传，可从右上角进入全部会话子页查看完整对话。</p>
+              <p v-if="!observeSkills.length" class="empty">还没有匹配到平台Skill调用。</p>
             </section>
           </section>
-
         </template>
       </section>
 
@@ -1405,7 +1817,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
       <section v-else-if="isObserveSkill" class="observe-page observe-skill-page">
         <RouterLink class="back" to="/observe">← 返回观测</RouterLink>
         <p v-if="observeDetailError" class="error" role="alert">{{ observeDetailError }}</p>
-        <p v-else-if="observeDetailLoading && !observeDetail" class="empty">正在加载技能观测…</p>
+        <p v-else-if="observeDetailLoading && !observeDetail" class="empty">正在加载Skill观测…</p>
         <template v-else-if="observeDetail">
           <header class="detail-head">
             <div>
@@ -1419,92 +1831,348 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             </div>
           </header>
 
-          <section class="observe-kpis observe-kpis-compact" aria-label="该技能观测汇总">
+          <section class="observe-kpis observe-kpis-compact" aria-label="该Skill观测汇总">
             <article class="observe-kpi"><span>调用</span><strong>{{ asNumber(observeDetail.kpis.callCount) }}</strong></article>
             <article class="observe-kpi"><span>会话</span><strong>{{ asNumber(observeDetail.kpis.sessionCount) }}</strong></article>
             <article class="observe-kpi"><span>客户端</span><strong>{{ asNumber(observeDetail.kpis.clientCount) }}</strong></article>
             <article class="observe-kpi"><span>回合</span><strong>{{ asNumber(observeDetail.kpis.turnCount) }}</strong></article>
           </section>
 
-          <div class="observe-filters" role="tablist" aria-label="客户端">
-            <button :class="['observe-chip', { selected: !observeClientId }]" type="button" @click="selectObserveClient('')">全部客户端</button>
+          <div class="tabs observe-detail-tabs" role="tablist" aria-label="观测视图">
             <button
-              v-for="client in observeDetail.clients"
-              :key="client.client_id"
-              :class="['observe-chip', { selected: observeClientId === client.client_id }]"
               type="button"
-              @click="selectObserveClient(client.client_id)"
-            >
-              {{ client.hostname || client.client_id.slice(0, 8) }}
-              <span>{{ asNumber(client.session_count) }}</span>
-            </button>
+              :class="{ selected: observeDetailTab === 'quality' }"
+              role="tab"
+              :aria-selected="observeDetailTab === 'quality'"
+              @click="setObserveDetailTab('quality')"
+            >质量</button>
+            <button
+              type="button"
+              :class="{ selected: observeDetailTab === 'chain' }"
+              role="tab"
+              :aria-selected="observeDetailTab === 'chain'"
+              @click="setObserveDetailTab('chain')"
+            >会话链路</button>
           </div>
 
-          <section class="observe-workspace">
-            <aside class="observe-session-list" aria-label="会话列表">
-              <div class="version-column-title">会话</div>
-              <button
-                v-for="session in observeDetail.sessions"
-                :key="session.id"
-                :class="['observe-session', { selected: String(observeDetail.selectedSessionId) === String(session.id) }]"
-                type="button"
-                @click="selectObserveSession(session)"
-              >
-                <strong>{{ clientLabel(session.client_name) }}</strong>
-                <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合</span>
-                <code>{{ session.session_key }}</code>
-              </button>
-              <p v-if="!observeDetail.sessions.length" class="empty">这个筛选条件下没有会话。</p>
-            </aside>
-
-            <div class="observe-chain" aria-label="调用链路">
-              <div class="version-column-title observe-chain-title">
-                <span>调用链路</span>
-                <div class="observe-chain-filters" aria-label="调用链路筛选">
-                  <label class="check">
-                    <input v-model="observeShowToolSteps" type="checkbox" />
-                    工具
-                  </label>
-                  <label class="check">
-                    <input v-model="observeShowStepContent" type="checkbox" />
-                    内容
-                  </label>
-                  <label class="check">
-                    <input v-model="observeShowAssistantSteps" type="checkbox" />
-                    AI
-                  </label>
+          <section v-if="observeDetailTab === 'quality'" class="observe-quality-panel">
+            <article class="quality-hero-card">
+              <div>
+                <p class="eyebrow">健康分</p>
+                <div class="health-score-row">
+                  <strong :class="['health-score', qualityTone(observeDetail.quality?.healthScore || 0)]">
+                    {{ observeDetail.quality?.healthScore ?? 0 }}
+                  </strong>
+                  <span :class="['health-badge', qualityTone(observeDetail.quality?.healthScore || 0)]">
+                    {{ observeDetail.quality?.healthLabel || healthLabel(observeDetail.quality?.healthScore || 0) }}
+                  </span>
+                </div>
+                <p class="quality-formula">健康分 = 载入完整 × 35% +（1 − 错误率）× 30% +（1 − 重读率）× 25% + 推进 × 10%</p>
+              </div>
+              <div class="quality-metric-grid">
+                <div>
+                  <span>载入完整</span>
+                  <strong>{{ formatPercent(observeDetail.quality?.loadCompleteRate) }}</strong>
+                </div>
+                <div>
+                  <span>错误率</span>
+                  <strong>{{ formatPercent(observeDetail.quality?.errorRate) }}</strong>
+                </div>
+                <div>
+                  <span>重读率</span>
+                  <strong :class="{ warn: (observeDetail.quality?.reloadRate || 0) >= 0.1 }">{{ formatPercent(observeDetail.quality?.reloadRate) }}</strong>
+                </div>
+                <div>
+                  <span>推进</span>
+                  <strong>{{ observeDetail.quality?.progressLabel || '—' }}</strong>
                 </div>
               </div>
-              <p v-if="!observeDetail.selectedSession" class="empty">选择左侧会话查看逐步调用。</p>
-              <template v-else>
-                <article v-for="turn in observeDetail.selectedSession.turns" :key="turn.id || turn.turn_index" class="observe-turn">
-                  <header class="observe-turn-head">
-                    <span class="observe-pill">Turn {{ turn.turn_index }}</span>
-                    <time>{{ formatObserveTime(turn.started_at) }}</time>
-                  </header>
-                  <pre class="observe-user">{{ turn.user_text || '（无用户原文）' }}</pre>
-                  <ol class="observe-steps">
-                    <li v-for="step in visibleObserveSteps(turn.steps)" :key="step.step_id" :class="['observe-step', step.type]">
-                      <span class="observe-step-type">{{ stepTypeLabel(step.type) }}</span>
-                      <div>
-                        <p class="observe-step-title">{{ stepTitle(step) }}</p>
-                        <template v-if="shouldShowObserveStepBody(step)">
-                          <article v-if="isObserveMarkdown(step)" class="markdown-body observe-markdown" v-html="renderMarkdownContent(stepBody(step))"></article>
-                          <pre v-else>{{ stepBody(step) }}</pre>
-                        </template>
-                      </div>
-                    </li>
-                  </ol>
-                </article>
-              </template>
+            </article>
+
+            <div class="quality-two-col">
+              <article class="panel quality-panel-block">
+                <h2>诊断</h2>
+                <ul class="quality-diagnosis">
+                  <li v-if="(observeDetail.quality?.reloadRate || 0) >= 0.1">
+                    重读率 {{ formatPercent(observeDetail.quality?.reloadRate) }} 偏高（{{ observeDetail.quality?.reloadSessions || 0 }} 个会话重复载入）
+                  </li>
+                  <li v-if="(observeDetail.quality?.errorRate || 0) > 0">
+                    错误率 {{ formatPercent(observeDetail.quality?.errorRate) }}，错误载入 {{ observeDetail.quality?.errors || 0 }} 次
+                  </li>
+                  <li v-if="(observeDetail.quality?.loadCompleteRate || 0) < 0.9">
+                    载入完整率 {{ formatPercent(observeDetail.quality?.loadCompleteRate) }}，低于 90%
+                  </li>
+                  <li v-if="(observeDetail.quality?.progress || 0) < 0.33">
+                    推进偏弱（{{ observeDetail.quality?.progressLabel }}），载入后产出型步骤偏少
+                  </li>
+                  <li v-if="!(observeDetail.quality?.reloadRate || 0) && !(observeDetail.quality?.errorRate || 0) && (observeDetail.quality?.loadCompleteRate || 0) >= 0.9">
+                    当前样本质量稳定：一次载入为主、错误少
+                  </li>
+                </ul>
+              </article>
+              <article class="panel quality-panel-block">
+                <h2>路径分布</h2>
+                <ul class="path-dist-list">
+                  <li v-for="item in observeDetail.quality?.pathDistribution || []" :key="item.key">
+                    <span class="path-label">{{ item.label }}</span>
+                    <span class="path-bar-track" aria-hidden="true">
+                      <span class="path-bar" :style="{ width: `${Math.round((item.ratio || 0) * 100)}%` }"></span>
+                    </span>
+                    <span class="num">{{ item.count }} · {{ formatPercent(item.ratio) }}</span>
+                  </li>
+                  <li v-if="!(observeDetail.quality?.pathDistribution || []).length" class="empty">暂无路径数据</li>
+                </ul>
+              </article>
             </div>
+
+            <article class="panel quality-panel-block">
+              <h2>问题会话</h2>
+              <p class="panel-hint">负样本优先：错误 / 重读 / 未完整载入。点「链路」切到会话原文。</p>
+              <table class="observe-quality-table">
+                <thead>
+                  <tr>
+                    <th>会话</th>
+                    <th>客户端</th>
+                    <th>时间</th>
+                    <th>载入</th>
+                    <th>错误</th>
+                    <th>完整</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="session in observeDetail.problemSessions || []" :key="session.id">
+                    <td><code>{{ session.session_key }}</code></td>
+                    <td>{{ clientLabel(session.client_name) }}</td>
+                    <td>{{ formatObserveTime(session.started_at) }}</td>
+                    <td class="num">{{ asNumber(session.loads) }}</td>
+                    <td class="num" :class="{ warn: Number(session.errors) > 0 }">{{ asNumber(session.errors) }}</td>
+                    <td class="num" :class="{ warn: Number(session.complete_loads) === 0 }">{{ asNumber(session.complete_loads) }}</td>
+                    <td>
+                      <button
+                        type="button"
+                        class="observe-row-action"
+                        @click="openProblemSession(session)"
+                      >链路</button>
+                    </td>
+                  </tr>
+                  <tr v-if="!(observeDetail.problemSessions || []).length">
+                    <td colspan="7" class="empty">暂无问题样本。</td>
+                  </tr>
+                </tbody>
+              </table>
+            </article>
           </section>
+
+          <template v-else>
+            <div class="observe-filters" role="tablist" aria-label="客户端">
+              <button :class="['observe-chip', { selected: !observeClientId }]" type="button" @click="selectObserveClient('')">全部客户端</button>
+              <button
+                v-for="client in observeDetail.clients"
+                :key="client.client_id"
+                :class="['observe-chip', { selected: observeClientId === client.client_id }]"
+                type="button"
+                @click="selectObserveClient(client.client_id)"
+              >
+                {{ client.hostname || client.client_id.slice(0, 8) }}
+                <span>{{ asNumber(client.session_count) }}</span>
+              </button>
+            </div>
+
+            <section class="observe-workspace">
+              <aside class="observe-session-list" aria-label="会话列表">
+                <div class="version-column-title">会话</div>
+                <button
+                  v-for="session in observeDetail.sessions"
+                  :key="session.id"
+                  :class="['observe-session', { selected: String(observeDetail.selectedSessionId) === String(session.id) }]"
+                  type="button"
+                  @click="selectObserveSession(session)"
+                >
+                  <strong>{{ clientLabel(session.client_name) }}</strong>
+                  <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合</span>
+                  <code>{{ session.session_key }}</code>
+                </button>
+                <p v-if="!observeDetail.sessions.length" class="empty">这个筛选条件下没有会话。</p>
+              </aside>
+
+              <div
+                class="observe-chain"
+                aria-label="调用链路"
+                @pointerdown="onChainPointerDown"
+                @pointerup="onChainPointerUp"
+                @pointercancel="chainSwipeActive = false"
+              >
+                <div class="version-column-title observe-chain-title">
+                  <span>调用链路</span>
+                  <div class="observe-chain-tools">
+                    <div class="observe-chain-view" role="tablist" aria-label="链路视图">
+                      <button
+                        type="button"
+                        role="tab"
+                        :class="{ selected: observeChainView === 'text' }"
+                        :aria-selected="observeChainView === 'text'"
+                        @click="setChainView('text')"
+                      >文字链路</button>
+                      <button
+                        type="button"
+                        role="tab"
+                        :class="{ selected: observeChainView === 'tree' }"
+                        :aria-selected="observeChainView === 'tree'"
+                        @click="setChainView('tree')"
+                      >链路树</button>
+                    </div>
+                    <div class="observe-chain-filters" aria-label="调用链路筛选">
+                      <label class="check">
+                        <input v-model="observeShowToolSteps" type="checkbox" />
+                        工具
+                      </label>
+                      <label class="check">
+                        <input v-model="observeShowStepContent" type="checkbox" />
+                        内容
+                      </label>
+                      <label class="check">
+                        <input v-model="observeShowAssistantSteps" type="checkbox" />
+                        AI
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <p v-if="!observeDetail.selectedSession" class="empty">选择左侧会话查看逐步调用。</p>
+                <template v-else-if="observeChainView === 'text'">
+                  <article v-for="turn in observeDetail.selectedSession.turns" :key="turn.id || turn.turn_index" class="observe-turn">
+                    <header class="observe-turn-head">
+                      <span class="observe-pill">Turn {{ turn.turn_index }}</span>
+                      <time>{{ formatObserveTime(turn.started_at) }}</time>
+                    </header>
+                    <pre class="observe-user">{{ turn.user_text || '（无用户原文）' }}</pre>
+                    <ol class="observe-steps">
+                      <li
+                        v-for="step in visibleObserveSteps(turn.steps)"
+                        :id="`step-${step.step_id}`"
+                        :key="step.step_id"
+                        :class="['observe-step', step.type]"
+                      >
+                        <span class="observe-step-type">{{ stepTypeLabel(step.type) }}</span>
+                        <div>
+                          <p class="observe-step-title">{{ stepTitle(step) }}</p>
+                          <template v-if="shouldShowObserveStepBody(step)">
+                            <article v-if="isObserveMarkdown(step)" class="markdown-body observe-markdown" v-html="renderMarkdownContent(stepBody(step))"></article>
+                            <pre v-else>{{ stepBody(step) }}</pre>
+                          </template>
+                        </div>
+                      </li>
+                    </ol>
+                  </article>
+                </template>
+                <template v-else>
+                  <div class="tree-toolbar">
+                    <label class="check">
+                      <input v-model="observeOnlySkillTurns" type="checkbox" @change="observeExpandedTurns = new Set()" />
+                      仅显示含技能的 Turn
+                    </label>
+                    <div class="tree-toolbar-actions">
+                      <button type="button" class="observe-chip" @click="expandAllTurns">全部展开</button>
+                      <button type="button" class="observe-chip" @click="collapseAllTurns">全部折叠</button>
+                    </div>
+                  </div>
+                  <section class="chain-tree-layout">
+                    <div class="chain-tree-list" role="tree" aria-label="Turn 调用树">
+                      <article
+                        v-for="tree in chainTurnTrees()"
+                        :key="tree.turnIndex"
+                        class="chain-turn-block"
+                      >
+                        <button
+                          type="button"
+                          class="chain-turn-head"
+                          :aria-expanded="isTurnExpanded(tree.turnIndex)"
+                          @click="toggleTurnExpanded(tree.turnIndex)"
+                        >
+                          <span class="observe-pill">Turn {{ tree.turnIndex }}</span>
+                          <span class="chain-turn-meta">
+                            {{ formatObserveTime(tree.startedAt) }}
+                            <template v-if="tree.skillSlugs.length"> · 含 {{ tree.skillSlugs.join(' / ') }}</template>
+                            <template v-else> · 无技能</template>
+                          </span>
+                        </button>
+                        <div v-if="isTurnExpanded(tree.turnIndex)" class="chain-tree">
+                          <template v-if="tree.nodes.length">
+                            <div
+                              v-for="node in tree.nodes"
+                              :key="node.id"
+                              :class="['chain-node', `kind-${node.kind}`, { selected: observeTreeSelection?.stepId === node.id }]"
+                              role="treeitem"
+                              :aria-selected="observeTreeSelection?.stepId === node.id"
+                              tabindex="0"
+                              @click="selectTreeNode(tree.turnIndex, node)"
+                              @keyup.enter="selectTreeNode(tree.turnIndex, node)"
+                            >
+                              <span class="chain-node-dot" aria-hidden="true"></span>
+                              <span v-if="node.kind !== 'user' && node.kind !== 'assistant' && node.kind !== 'skill'" class="chain-node-kind">{{ treeKindLabel(node.kind) }}</span>
+                              <span class="chain-node-title">{{ node.title }}</span>
+                              <span v-if="node.meta" class="chain-node-meta">{{ node.meta }}</span>
+                              <div
+                                v-for="child in node.children"
+                                :key="child.id"
+                                :class="['chain-node', `kind-${child.kind}`, 'is-child', { selected: observeTreeSelection?.stepId === child.id }]"
+                                role="treeitem"
+                                :aria-selected="observeTreeSelection?.stepId === child.id"
+                                @click.stop="selectTreeNode(tree.turnIndex, child)"
+                              >
+                                <span class="chain-node-dot" aria-hidden="true"></span>
+                                <span class="chain-node-kind">{{ treeKindLabel(child.kind) }}</span>
+                                <span class="chain-node-title">{{ child.title }}</span>
+                                <span v-if="child.meta" class="chain-node-meta">{{ child.meta }}</span>
+                                <div
+                                  v-for="grand in child.children"
+                                  :key="grand.id"
+                                  :class="['chain-node', `kind-${grand.kind}`, 'is-grand', { selected: observeTreeSelection?.stepId === grand.id }]"
+                                  role="treeitem"
+                                  :aria-selected="observeTreeSelection?.stepId === grand.id"
+                                  @click.stop="selectTreeNode(tree.turnIndex, grand)"
+                                >
+                                  <span class="chain-node-dot" aria-hidden="true"></span>
+                                  <span class="chain-node-kind">{{ treeKindLabel(grand.kind) }}</span>
+                                  <span class="chain-node-title">{{ grand.title }}</span>
+                                  <span v-if="grand.meta" class="chain-node-meta">{{ grand.meta }}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </template>
+                          <p v-else class="empty">该 Turn 没有可展示的步骤。</p>
+                        </div>
+                      </article>
+                      <p v-if="!chainTurnTrees().length" class="empty">本会话没有可展示的 Turn。</p>
+                    </div>
+                    <aside class="chain-tree-side" aria-label="节点摘要">
+                      <div class="version-column-title">节点摘要</div>
+                      <template v-if="observeTreeSelection">
+                        <h3>{{ observeTreeSelection.title }}</h3>
+                        <p class="chain-side-meta">Turn {{ observeTreeSelection.turnIndex }}</p>
+                        <pre class="chain-side-body">{{ observeTreeSelection.body || '（无内容）' }}</pre>
+                        <button type="button" class="observe-row-action" @click="locateTreeStepInText">在文字链路中定位</button>
+                      </template>
+                      <p v-else class="empty">点击左侧节点查看摘要。</p>
+                      <div class="chain-legend">
+                        <span><i class="legend-dot kind-skill"></i>技能</span>
+                        <span><i class="legend-dot kind-rollup"></i>父技能</span>
+                        <span><i class="legend-dot kind-tool"></i>工具</span>
+                        <span><i class="legend-dot kind-document"></i>文档</span>
+                        <span><i class="legend-dot kind-assistant"></i>AI</span>
+                      </div>
+                    </aside>
+                  </section>
+                </template>
+              </div>
+            </section>
+          </template>
         </template>
       </section>
 
       <section v-else-if="isSearch" class="search-page">
         <section class="toolbar search-toolbar">
-          <input v-model="query" placeholder="搜索技能名称、描述或标识" @keyup.enter="runSearch" />
+          <input v-model="query" placeholder="搜索Skill名称、描述或标识" @keyup.enter="runSearch" />
           <select v-model="category" @change="runSearch">
             <option value="">全部分类</option>
             <option v-for="item in categories" :key="item" :value="item">{{ item }}</option>
@@ -1525,7 +2193,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
               :key="skill.id"
               class="skill-card skill-card-link"
               :to="marketDetailLink(skill.slug)"
-              :aria-label="`查看技能 ${skill.name}`"
+              :aria-label="`查看Skill ${skill.name}`"
             >
               <div class="card-top">
                 <span class="category">{{ skill.category }}</span>
@@ -1541,7 +2209,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                 </span>
               </div>
             </RouterLink>
-            <p v-if="!skills.length" class="empty">没有找到技能。</p>
+            <p v-if="!skills.length" class="empty">没有找到Skill。</p>
           </section>
         </template>
       </section>
@@ -1551,7 +2219,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           <div class="page-heading-row">
             <div>
               <p class="home-kicker">发布</p>
-              <h1 class="page-title">把技能发到平台</h1>
+              <h1 class="page-title">把Skill发到平台</h1>
               <p class="page-subtitle">支持 ZIP 和单个 SKILL.md。</p>
             </div>
           </div>
@@ -1560,7 +2228,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
         <form class="publish-card publish-form" @submit.prevent="upload">
           <div class="publish-main">
             <div class="publish-field">
-              <label for="skill-category">填写技能的类别</label>
+              <label for="skill-category">填写Skill的类别</label>
               <input id="skill-category" v-model="uploadCategory" list="category-options" maxlength="128" required />
               <datalist id="category-options">
                 <option v-for="item in categories" :key="item" :value="item" />
@@ -1573,7 +2241,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                 <span class="drop-icon"><Upload :size="22" :stroke-width="1.8" aria-hidden="true" /></span>
                 <span class="drop-action">选择文件</span>
               </span>
-              <span class="drop-title">{{ uploadFiles.length ? `已选择 ${uploadFiles.length} 个文件` : '上传技能包' }}</span>
+              <span class="drop-title">{{ uploadFiles.length ? `已选择 ${uploadFiles.length} 个文件` : '上传Skill包' }}</span>
               <span class="drop-subtitle">{{ uploadFiles.length ? '可以提交批量发布' : '支持 ZIP、目录压缩包或多个 SKILL.md 文件' }}</span>
             </label>
 
@@ -1591,15 +2259,15 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 
             <div class="upload-actions">
               <RouterLink class="secondary" to="/search">返回搜索</RouterLink>
-              <button class="primary" :disabled="uploadBusy || !uploadFiles.length">{{ uploadBusy ? '批量上传中...' : `发布 ${uploadFiles.length || ''} 个技能` }}</button>
+              <button class="primary" :disabled="uploadBusy || !uploadFiles.length">{{ uploadBusy ? '批量上传中...' : `发布 ${uploadFiles.length || ''} 个Skill` }}</button>
             </div>
           </div>
 
           <aside class="publish-notes">
             <p class="eyebrow">发布说明</p>
-            <h2>准备好你的技能包</h2>
+            <h2>准备好你的Skill包</h2>
             <div class="note-list">
-              <p>每个文件会独立上传，复合技能包会保留完整目录结构。</p>
+              <p>每个文件会独立上传，复合Skill包会保留完整目录结构。</p>
               <p>也可以直接交给Agent创建并上传。</p>
             </div>
           </aside>
@@ -1622,9 +2290,9 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             </div>
           </div>
           <div class="card-actions">
-            <a class="primary link" :href="`/api/skills/${detail.slug}/download?version=${detail.version_digest}`">下载技能</a>
-            <button v-if="detail.status === 'ACTIVE'" class="danger" @click="openConfirmation('offline', detail)">下架技能</button>
-            <button class="danger" @click="openConfirmation('delete', detail)">删除技能</button>
+            <a class="primary link" :href="`/api/skills/${detail.slug}/download?version=${detail.version_digest}`">下载Skill</a>
+            <button v-if="detail.status === 'ACTIVE'" class="danger" @click="openConfirmation('offline', detail)">下架Skill</button>
+            <button class="danger" @click="openConfirmation('delete', detail)">删除Skill</button>
           </div>
         </header>
 
@@ -1654,7 +2322,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           <button :class="{ selected: tab === 'overview' }" @click="tab = 'overview'">概览</button>
           <button :class="{ selected: tab === 'files' }" @click="tab = 'files'">文件 <span>{{ files.length }}</span></button>
           <button :class="{ selected: tab === 'versions' }" @click="tab = 'versions'">版本 <span>{{ detail.versions.length }}</span></button>
-          <RouterLink class="observe-tab-link" :to="`/observe/${detail.slug}`">观测</RouterLink>
+          <RouterLink class="observe-tab-link" :to="`/observe/${detail.slug}?tab=quality`">观测</RouterLink>
         </div>
 
         <section v-if="tab === 'overview'" class="panel markdown">
@@ -1663,7 +2331,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
         </section>
 
         <section v-else-if="tab === 'files'" class="panel file-layout">
-          <aside class="file-tree" aria-label="技能文件树">
+          <aside class="file-tree" aria-label="Skill文件树">
             <button
               v-for="row in flattenFileTree(buildFileTree(files), expandedFolders)"
               :key="row.key"
@@ -1750,10 +2418,10 @@ function handleGlobalKeydown(event: KeyboardEvent) {
         </div>
         <p class="eyebrow">{{ confirmation.action === 'delete' ? '永久删除' : '下架确认' }}</p>
         <h2 :id="`${confirmation.action}-dialog-title`">
-          {{ confirmation.action === 'delete' ? '确定删除这个技能吗？' : '确定下架这个技能吗？' }}
+          {{ confirmation.action === 'delete' ? '确定删除这个Skill吗？' : '确定下架这个Skill吗？' }}
         </h2>
         <p class="confirm-modal-copy">
-          {{ confirmation.action === 'delete' ? '删除后将永久移除技能、所有版本和文件，且无法恢复。' : '下架后技能将不再出现在默认的技能市场列表中。' }}
+          {{ confirmation.action === 'delete' ? '删除后将永久移除Skill、所有版本和文件，且无法恢复。' : '下架后Skill将不再出现在默认的Skill市场列表中。' }}
         </p>
         <div class="confirm-modal-skill">{{ confirmation.name }}</div>
         <p v-if="confirmationError" class="error">{{ confirmationError }}</p>

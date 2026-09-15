@@ -132,7 +132,7 @@ public class SkillPackageParser {
                 100);
         String description = cleanMetadata(
                 packageMetadata.get("description"),
-                firstNonBlank(readmeDescription(files), "复合技能包，包含 " + nestedSkillCount + " 个子技能。"),
+                firstNonBlank(readmeDescription(files), "复合Skill包，包含 " + nestedSkillCount + " 个子Skill。"),
                 2048);
         String generated = "---\n"
                 + "name: " + yamlQuote(name) + "\n"
@@ -140,7 +140,7 @@ public class SkillPackageParser {
                 + "version: 0.0.0\n"
                 + "---\n\n"
                 + "# " + name + "\n\n"
-                + "这是一个复合技能包，包含若干可独立使用的子技能。子技能及其资源保留在原始目录结构中。\n";
+                + "这是一个复合Skill包，包含若干可独立使用的子Skill。子Skill及其资源保留在原始目录结构中。\n";
         List<SkillPackage.FileEntry> result = new ArrayList<SkillPackage.FileEntry>(files.size() + 1);
         result.add(entry("SKILL.md", generated.getBytes(StandardCharsets.UTF_8)));
         result.addAll(files);
