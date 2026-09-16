@@ -140,9 +140,16 @@ type ObserveQuality = {
   sessions: number
   errors: number
   completeLoads: number
-  reloadSessions: number
+  reloadTurns?: number
+  skillTurns?: number
+  reloadSessions?: number
+  reloadNote?: string
   pathDistribution?: ObservePathDist[]
   formula?: string
+  evidence?: {
+    denominator: number
+    levels: Array<{ code: string; title: string; hint: string; count: number; rate: number }>
+  }
 }
 type ObserveProblemSession = {
   id: number
@@ -224,6 +231,7 @@ const observeSortKey = ref<ObserveQualitySortKey>('calls')
 type ObserveChainView = 'text' | 'tree'
 const observeChainView = ref<ObserveChainView>('text')
 const observeOnlySkillTurns = ref(false)
+const observeVisibleTurnCount = ref(30)
 const observeExpandedTurns = ref<Set<number>>(new Set())
 const observeTreeSelection = ref<{ turnIndex: number; stepId: string; title: string; body: string } | null>(null)
 let chainSwipeStartX = 0
@@ -578,7 +586,15 @@ function stepBody(step: ObserveStep) {
 }
 
 function isObserveMarkdown(step: ObserveStep) {
-  return step.type === 'document' && isMarkdownPath(String(step.payload?.path || ''))
+  if (step.type !== 'document') return false
+  if (!isMarkdownPath(String(step.payload?.path || ''))) return false
+  return stepBody(step).length <= 8000
+}
+
+function stepBodyPreview(step: ObserveStep, max = 2000) {
+  const body = stepBody(step)
+  if (body.length <= max) return body
+  return `${body.slice(0, max)}\n…[内容较长已预览截断，共 ${body.length} 字符]`
 }
 
 function stepTypeLabel(type?: string) {
@@ -704,14 +720,36 @@ function buildTurnTree(turn: ObserveTurn): ChainTurnTree {
   }
 }
 
-function chainTurnTrees(): ChainTurnTree[] {
+const chainTurnTrees = computed<ChainTurnTree[]>(() => {
   const session = observeDetail.value?.selectedSession
   if (!session) return []
-  const trees = visibleChainTurns(session.turns).map(buildTurnTree)
-  if (!observeExpandedTurns.value.size) {
-    observeExpandedTurns.value = new Set(trees.filter((tree) => tree.skillSlugs.length).map((tree) => tree.turnIndex))
-  }
-  return trees
+  return visibleChainTurns(session.turns).map(buildTurnTree)
+})
+
+function observeTextTurns() {
+  const session = observeDetail.value?.selectedSession
+  if (!session) return [] as ObserveTurn[]
+  return visibleChainTurns(session.turns)
+}
+
+function observeVisibleTextTurns() {
+  return observeTextTurns().slice(0, observeVisibleTurnCount.value)
+}
+
+function observeHasMoreTextTurns() {
+  return observeTextTurns().length > observeVisibleTurnCount.value
+}
+
+function observeLoadMoreTurns() {
+  observeVisibleTurnCount.value += 30
+}
+
+function observeVisibleTreeTurns() {
+  return chainTurnTrees.value.slice(0, observeVisibleTurnCount.value)
+}
+
+function observeHasMoreTreeTurns() {
+  return chainTurnTrees.value.length > observeVisibleTurnCount.value
 }
 
 function isTurnExpanded(turnIndex: number) {
@@ -726,7 +764,7 @@ function toggleTurnExpanded(turnIndex: number) {
 }
 
 function expandAllTurns() {
-  observeExpandedTurns.value = new Set(chainTurnTrees().map((tree) => tree.turnIndex))
+  observeExpandedTurns.value = new Set(chainTurnTrees.value.map((tree) => tree.turnIndex))
 }
 
 function collapseAllTurns() {
@@ -771,6 +809,10 @@ function locateTreeStepInText() {
 
 function setChainView(view: ObserveChainView) {
   observeChainView.value = view
+  observeVisibleTurnCount.value = 30
+  if (view === 'tree' && !observeExpandedTurns.value.size) {
+    observeExpandedTurns.value = new Set(chainTurnTrees.value.filter((tree) => tree.skillSlugs.length).map((tree) => tree.turnIndex))
+  }
   const query: Record<string, string> = { tab: 'chain', view }
   if (observeClientId.value) query.client = observeClientId.value
   if (observeSessionId.value) query.session = observeSessionId.value
@@ -843,6 +885,7 @@ async function loadObserveSessions() {
   observeHomeError.value = ''
   observeClientId.value = typeof route.query.client === 'string' ? route.query.client : ''
   observeSessionId.value = typeof route.query.session === 'string' ? route.query.session : ''
+  observeVisibleTurnCount.value = 30
   try {
     const params = new URLSearchParams()
     if (observeClientId.value) params.set('clientId', observeClientId.value)
@@ -870,6 +913,7 @@ async function loadObserveSkill() {
   observeChainView.value = route.query.view === 'tree' ? 'tree' : 'text'
   observeExpandedTurns.value = new Set()
   observeTreeSelection.value = null
+  observeVisibleTurnCount.value = 30
   try {
     const params = new URLSearchParams()
     if (observeClientId.value) params.set('clientId', observeClientId.value)
@@ -1790,12 +1834,16 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             </div>
             <p v-if="!observeSessions?.selectedSession" class="empty">选择左侧会话查看全部回合和助手回复。</p>
             <template v-else>
-              <article v-for="turn in observeSessions.selectedSession.turns" :key="turn.id || turn.turn_index" class="observe-turn">
+              <article
+                v-for="turn in (observeSessions.selectedSession.turns || []).slice(0, observeVisibleTurnCount)"
+                :key="turn.id || turn.turn_index"
+                class="observe-turn"
+              >
                 <header class="observe-turn-head">
                   <span class="observe-pill">Turn {{ turn.turn_index }}</span>
                   <time>{{ formatObserveTime(turn.started_at) }}</time>
                 </header>
-                <pre class="observe-user">{{ turn.user_text || '（无用户原文）' }}</pre>
+                <pre class="observe-user">{{ String(turn.user_text || '（无用户原文）').slice(0, 2000) }}</pre>
                 <ol class="observe-steps">
                   <li v-for="step in visibleObserveSteps(turn.steps)" :key="step.step_id" :class="['observe-step', step.type]">
                     <span class="observe-step-type">{{ stepTypeLabel(step.type) }}</span>
@@ -1803,12 +1851,18 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                       <p class="observe-step-title">{{ stepTitle(step) }}</p>
                       <template v-if="shouldShowObserveStepBody(step)">
                         <article v-if="isObserveMarkdown(step)" class="markdown-body observe-markdown" v-html="renderMarkdownContent(stepBody(step))"></article>
-                        <pre v-else>{{ stepBody(step) }}</pre>
+                        <pre v-else>{{ stepBodyPreview(step) }}</pre>
                       </template>
                     </div>
                   </li>
                 </ol>
               </article>
+              <button
+                v-if="(observeSessions.selectedSession.turns || []).length > observeVisibleTurnCount"
+                type="button"
+                class="observe-load-more"
+                @click="observeLoadMoreTurns"
+              >加载更多回合</button>
             </template>
           </div>
         </section>
@@ -1890,11 +1944,30 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             </article>
 
             <div class="quality-two-col">
+              <article class="panel quality-panel-block evidence-panel">
+                <h2>证据层级（按 Turn）</h2>
+                <p class="panel-hint">分母 = 已归因到该技能的 Turn（L1）。L4 为「正常使用」主指标。</p>
+                <ul v-if="observeDetail.quality?.evidence?.levels?.length" class="evidence-funnel">
+                  <li v-for="level in observeDetail.quality.evidence.levels" :key="level.code">
+                    <span class="evidence-code">{{ level.code }}</span>
+                    <span class="evidence-title">{{ level.title }}</span>
+                    <span class="evidence-bar-track" aria-hidden="true">
+                      <span class="evidence-bar" :style="{ width: `${Math.round((level.rate || 0) * 100)}%` }"></span>
+                    </span>
+                    <span class="num evidence-rate">{{ formatPercent(level.rate) }}</span>
+                    <span class="evidence-hint">{{ level.hint }}</span>
+                  </li>
+                </ul>
+                <p v-else class="empty">暂无证据层级数据。</p>
+              </article>
               <article class="panel quality-panel-block">
                 <h2>诊断</h2>
                 <ul class="quality-diagnosis">
                   <li v-if="(observeDetail.quality?.reloadRate || 0) >= 0.1">
-                    重读率 {{ formatPercent(observeDetail.quality?.reloadRate) }} 偏高（{{ observeDetail.quality?.reloadSessions || 0 }} 个会话重复载入）
+                    重读率 {{ formatPercent(observeDetail.quality?.reloadRate) }} 偏高（{{ observeDetail.quality?.reloadTurns || observeDetail.quality?.reloadSessions || 0 }} 个 Turn 内重复载入）
+                  </li>
+                  <li v-if="observeDetail.quality?.reloadNote">
+                    {{ observeDetail.quality.reloadNote }}
                   </li>
                   <li v-if="(observeDetail.quality?.errorRate || 0) > 0">
                     错误率 {{ formatPercent(observeDetail.quality?.errorRate) }}，错误载入 {{ observeDetail.quality?.errors || 0 }} 次
@@ -2040,12 +2113,12 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                 </div>
                 <p v-if="!observeDetail.selectedSession" class="empty">选择左侧会话查看逐步调用。</p>
                 <template v-else-if="observeChainView === 'text'">
-                  <article v-for="turn in observeDetail.selectedSession.turns" :key="turn.id || turn.turn_index" class="observe-turn">
+                  <article v-for="turn in observeVisibleTextTurns()" :key="turn.id || turn.turn_index" class="observe-turn">
                     <header class="observe-turn-head">
                       <span class="observe-pill">Turn {{ turn.turn_index }}</span>
                       <time>{{ formatObserveTime(turn.started_at) }}</time>
                     </header>
-                    <pre class="observe-user">{{ turn.user_text || '（无用户原文）' }}</pre>
+                    <pre class="observe-user">{{ String(turn.user_text || '（无用户原文）').slice(0, 2000) }}</pre>
                     <ol class="observe-steps">
                       <li
                         v-for="step in visibleObserveSteps(turn.steps)"
@@ -2058,12 +2131,15 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                           <p class="observe-step-title">{{ stepTitle(step) }}</p>
                           <template v-if="shouldShowObserveStepBody(step)">
                             <article v-if="isObserveMarkdown(step)" class="markdown-body observe-markdown" v-html="renderMarkdownContent(stepBody(step))"></article>
-                            <pre v-else>{{ stepBody(step) }}</pre>
+                            <pre v-else>{{ stepBodyPreview(step) }}</pre>
                           </template>
                         </div>
                       </li>
                     </ol>
                   </article>
+                  <button v-if="observeHasMoreTextTurns()" type="button" class="observe-load-more" @click="observeLoadMoreTurns">
+                    加载更多回合（剩余 {{ observeTextTurns().length - observeVisibleTurnCount }}）
+                  </button>
                 </template>
                 <template v-else>
                   <div class="tree-toolbar">
@@ -2079,7 +2155,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                   <section class="chain-tree-layout">
                     <div class="chain-tree-list" role="tree" aria-label="Turn 调用树">
                       <article
-                        v-for="tree in chainTurnTrees()"
+                        v-for="tree in observeVisibleTreeTurns()"
                         :key="tree.turnIndex"
                         class="chain-turn-block"
                       >
@@ -2143,7 +2219,10 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                           <p v-else class="empty">该 Turn 没有可展示的步骤。</p>
                         </div>
                       </article>
-                      <p v-if="!chainTurnTrees().length" class="empty">本会话没有可展示的 Turn。</p>
+                      <p v-if="!chainTurnTrees.length" class="empty">本会话没有可展示的 Turn。</p>
+                      <button v-if="observeHasMoreTreeTurns()" type="button" class="observe-load-more" @click="observeLoadMoreTurns">
+                        加载更多 Turn（剩余 {{ chainTurnTrees.length - observeVisibleTurnCount }}）
+                      </button>
                     </div>
                     <aside class="chain-tree-side" aria-label="节点摘要">
                       <div class="version-column-title">节点摘要</div>
