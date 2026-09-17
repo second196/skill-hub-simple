@@ -114,7 +114,7 @@ skillhub list --service-url http://127.0.0.1:8080
 如果还没有全局安装 CLI，也可以使用源码构建后的入口：
 
 ```bash
-cd cli
+cd cli/skillhub
 npm install
 npm run build
 node dist/index.js list --service-url http://127.0.0.1:8080
@@ -140,7 +140,7 @@ skillhub --help
 #### 从源码构建
 
 ```bash
-cd cli
+cd cli/skillhub
 npm install
 npm run build
 ```
@@ -151,7 +151,7 @@ npm run build
 node dist/index.js --help
 ```
 
-也可以在 `cli` 目录中全局安装当前源码版本：
+也可以在 `cli/skillhub` 目录中全局安装当前源码版本：
 
 ```bash
 npm install -g .
@@ -308,7 +308,10 @@ skillhub install <slug>
 
 ## 三、Observer CLI
 
-观测能力和技能上传/安装是两套命令。`@second196/skillhub-cli` 只负责技能包；`@second196/skillhub-observer` 负责采集、本地报告和上传观测数据。
+观测能力和技能上传/安装是两套命令。`@second196/skillhub-cli` 只负责技能包；`@second196/skillhub-observer` 负责采集、本地报告和上传观测数据。两个 CLI 源码均在 `cli/` 下的 monorepo 子包中：
+
+- `cli/skillhub/` → `@second196/skillhub-cli`
+- `cli/observer/` → `@second196/skillhub-observer`
 
 ### 1. 安装
 
@@ -320,7 +323,7 @@ skillhub-observer --help
 也可以从源码构建：
 
 ```bash
-cd observer
+cd cli/observer
 npm install
 npm run build
 node dist/index.js --help
@@ -329,21 +332,38 @@ node dist/index.js --help
 ### 2. 命令
 
 ```bash
-skillhub-observer install
+skillhub-observer install --service-url http://127.0.0.1:8080
+# 或
+skillhub-observer install --host 127.0.0.1 --port 8080
+
+skillhub-observer config
+skillhub-observer config-set --host 192.168.1.50 --port 8080
+skillhub-observer config-set --service-url http://10.0.0.8:9090
+skillhub-observer config-path
+
+skillhub-observer drain --reconcile
 skillhub-observer report --open
 skillhub-observer report -o ./observation-report.html --service-url http://127.0.0.1:8080
 skillhub-observer upload --service-url http://127.0.0.1:8080
 ```
 
-- `install`：写入 Claude Code / Codex hooks。对话结束时扫描 `~/.claude/projects/**/*.jsonl` 和 `~/.codex/sessions/**/*.jsonl`，合并进本机 `events.jsonl`。Hook 失败不会阻塞 Agent。
+- `install`：写入 Claude Code / Codex hooks（含 Stop / SessionEnd / SessionStart）、`config.json`，并注册当前用户开机/每 5 分钟 `drain --reconcile`。结束 hook 只入队，不发 HTTP。
+- `config` / `config-set` / `config-path`：查看或动态修改后端 IP、端口、协议，**无需重新 install**。
 - `report`：生成本地完整 HTML 报告，包含全部会话、回合和助手回复。提供 `--service-url` 时会标记技能是否出现在平台目录中。
-- `upload`：上传本机全部会话和回合，包含用户原文、助手回复、工具参数/结果和文档正文，不生成摘要。平台技能只用于标注，不再作为过滤条件。
+- `upload`：全量扫描源 jsonl，入队后 drain，作为对账兜底，不再是唯一上传入口。
+- `drain`：消费 `spool/` 队列；加 `--reconcile` 时补扫未 ACK 或内容有更新的源 jsonl。
+
+可靠上传已按 [docs/observer-reliable-upload.md](docs/observer-reliable-upload.md) 落地：磁盘 Outbox、detached drain、开机/定时补传。
+
+后端地址存放在本机 `config.json`（含 `host` / `port` / `serviceUrl`）。后端服务变更时执行 `config-set` 即可，`drain` / `upload` / 开机任务每次运行都会重读配置。临时覆盖可用环境变量 `SKILLHUB_SERVICE_URL`。
 
 默认本地目录：
 
 - macOS：`~/Library/Application Support/SkillHub/observability`
 - Windows：`%LOCALAPPDATA%\SkillHub\observability`
 - Linux：`$XDG_DATA_HOME/skillhub/observability`
+
+Windows 配置文件：`%LOCALAPPDATA%\SkillHub\observability\config.json`
 
 ### 3. 上传到平台的约定
 
@@ -377,18 +397,20 @@ skill-hub_simple/
 │   ├── src/router/                   路由
 │   ├── src/*.css                     页面、Markdown、文件树样式
 │   └── vite.config.ts                开发服务器和 API 代理
-├── cli/                              TypeScript CLI
-│   ├── src/index.ts                  命令入口
-│   ├── src/commands/                 upload/list/install
-│   ├── src/clients/                  HTTP 客户端
-│   ├── src/services/                 Skill 包读取和校验
-│   └── src/platform/                 ZIP 和路径安全处理
-├── observer/                         TypeScript 观测 CLI
-│   ├── src/index.ts                  install/report/upload/hook
-│   ├── src/scan.ts                   扫描 Claude Code / Codex jsonl
-│   ├── src/upload.ts                 标注平台技能并上传完整观测内容
-│   └── src/report.ts                 生成本地 HTML 报告
-├── docs/                             CLI 安装指南
+├── cli/                              两个 TypeScript CLI（monorepo 子包）
+│   ├── skillhub/                     @second196/skillhub-cli（技能包）
+│   │   ├── src/index.ts              命令入口
+│   │   ├── src/commands/             upload/list/install
+│   │   ├── src/clients/              HTTP 客户端
+│   │   ├── src/services/             Skill 包读取和校验
+│   │   └── src/platform/             ZIP 和路径安全处理
+│   └── observer/                     @second196/skillhub-observer（观测）
+│       ├── src/index.ts              install/report/upload/hook/drain
+│       ├── src/scan.ts               扫描 Claude Code / Codex jsonl
+│       ├── src/store.ts              per-session snapshot + spool
+│       ├── src/drain.ts              可靠上传 drain
+│       └── src/report.ts             生成本地 HTML 报告
+├── docs/                             CLI 安装指南、Observer 可靠上传方案
 ├── skill/                            Agent 操作 Skill
 └── .skills/                          CLI 本地安装目录（运行时生成）
 ```
@@ -399,7 +421,7 @@ skill-hub_simple/
 flowchart LR
   A[Web 前端] -->|HTTP /api/skills /api/discovery /api/observations| B[Spring Boot 后端]
   C[SkillHub CLI] -->|HTTP 上传 查询 下载| B
-  F[SkillHub Observer] -->|hooks 和 jsonl 扫描| G[本地 events.jsonl]
+  F[SkillHub Observer] -->|hooks 入队 / drain| G[本地 sessions/ 与 spool/]
   F -->|完整观测内容 ingest| B
   B --> D[(PostgreSQL)]
   C -->|用户级存储与 Agent 入口| E[本地 Skill 目录]
