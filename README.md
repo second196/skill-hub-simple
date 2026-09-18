@@ -229,6 +229,7 @@ skillhub upload ./my-skill.zip --category 研发 --json
 - frontmatter 必须包含 `name` 和 `description`。
 - `version` 可选；省略时使用 `0.0.0`。
 - 如果填写 `version`，必须是语义化版本号，例如 `1.0.0` 或 `1.2.3-beta.1`。
+- 同一 `version` 重复上传且内容相同时为幂等；内容不同时会**追加为同版本号的新修订**（不报错），`install` 默认仍取最新一条。
 - 不要上传符号链接、`.env`、凭据、私钥或不安全路径。
 - CLI 与后端对单个压缩包、解压后总大小和单个文件的容量上限均为 1GiB。
 

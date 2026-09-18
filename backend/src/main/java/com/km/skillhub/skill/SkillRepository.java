@@ -91,8 +91,12 @@ public class SkillRepository {
         }
         List<Map<String, Object>> sameVersion = jdbc.queryForList("SELECT version_digest FROM skill_version WHERE skill_id=? AND version_label=?", skillId, value.getVersion());
         if (!sameVersion.isEmpty()) {
-            if (!value.getDigest().equals(sameVersion.get(0).get("version_digest"))) throw new IllegalArgumentException("同一版本号已存在不同内容");
-            return detail(slug);
+            // Same label + same content: idempotent no-op
+            if (value.getDigest().equals(sameVersion.get(0).get("version_digest"))) {
+                return detail(slug);
+            }
+            // Same label + different content: keep history and append as a newer revision
+            // (latest install still resolves via created_at DESC)
         }
         Long versionId = jdbc.queryForObject(
                 "INSERT INTO skill_version(skill_id,version_label,version_digest) VALUES (?,?,?) RETURNING id",
