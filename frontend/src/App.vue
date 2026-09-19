@@ -23,6 +23,7 @@ import {
   Activity,
   Upload
 } from '@lucide/vue'
+import ObserveMetricsPanel from './components/ObserveMetricsPanel.vue'
 
 type Skill = { id:number; slug:string; name:string; description:string; category:string; status:string; version_label:string; version_digest:string; download_count:number }
 type SkillVersion = { version_label:string; version_digest:string; created_at:string }
@@ -190,6 +191,8 @@ type ObserveSession = {
   started_at?: string
   ended_at?: string
   turn_count?: number
+  title?: string
+  session_title?: string
 }
 type ObserveStep = { step_id: string; seq: number; type: string; ts?: string; skill_slug?: string; payload?: Record<string, unknown> }
 type ObserveTurn = { id?: number; turn_index: number; started_at?: string; user_text?: string; steps: ObserveStep[] }
@@ -225,7 +228,8 @@ const observeSessionId = ref('')
 const observeShowToolSteps = ref(true)
 const observeShowStepContent = ref(true)
 const observeShowAssistantSteps = ref(true)
-const observeDetailTab = ref<'quality' | 'chain'>('quality')
+type ObserveDetailTab = 'quality' | 'chain' | 'metrics'
+const observeDetailTab = ref<ObserveDetailTab>('quality')
 type ObserveQualitySortKey = 'calls' | 'health' | 'error' | 'reload' | 'complete'
 const observeSortKey = ref<ObserveQualitySortKey>('calls')
 type ObserveChainView = 'text' | 'tree'
@@ -270,6 +274,19 @@ function qualityTone(score: number): string {
   if (score >= 75) return 'tone-good'
   if (score >= 60) return 'tone-mid'
   return 'tone-bad'
+}
+
+function sessionTitleOf(session: { title?: string; session_title?: string; session_key?: string; client_name?: string; started_at?: string; turns?: Array<{ user_text?: string }> }): string {
+  const direct = session.title || session.session_title
+  if (direct && String(direct).trim()) return String(direct).trim()
+  const fromTurn = session.turns?.find((turn) => turn.user_text && String(turn.user_text).trim())?.user_text
+  if (fromTurn) {
+    const text = String(fromTurn).replace(/\s+/g, ' ').trim()
+    return text.length > 60 ? `${text.slice(0, 60)}…` : text
+  }
+  const client = clientLabel(session.client_name)
+  const day = session.started_at ? String(session.started_at).slice(0, 10) : ''
+  return day ? `${client} · ${day}` : client
 }
 
 function qualitySortValue(item: ObserveSkillItem, key: ObserveQualitySortKey): number {
@@ -909,7 +926,8 @@ async function loadObserveSkill() {
   observeDetailError.value = ''
   observeClientId.value = typeof route.query.client === 'string' ? route.query.client : ''
   observeSessionId.value = typeof route.query.session === 'string' ? route.query.session : ''
-  observeDetailTab.value = route.query.tab === 'chain' ? 'chain' : 'quality'
+  const rawTab = typeof route.query.tab === 'string' ? route.query.tab : ''
+  observeDetailTab.value = rawTab === 'chain' || rawTab === 'metrics' ? rawTab : 'quality'
   observeChainView.value = route.query.view === 'tree' ? 'tree' : 'text'
   observeExpandedTurns.value = new Set()
   observeTreeSelection.value = null
@@ -939,16 +957,24 @@ function selectObserveClient(clientId: string) {
   void router.push({ path, query })
 }
 
+function onMetricsChangeSession(sessionId: string) {
+  const id = String(sessionId || '')
+  observeSessionId.value = id
+  const query: Record<string, string> = { tab: observeDetailTab.value }
+  if (observeClientId.value) query.client = observeClientId.value
+  if (id) query.session = id
+  void router.push({ path: `/observe/${observeSlug.value}`, query })
+}
+
 function selectObserveSession(session: ObserveSession) {
   const query: Record<string, string> = { session: String(session.id) }
   if (observeClientId.value || session.client_id) query.client = observeClientId.value || session.client_id
-  if (isObserveSkill.value && observeDetailTab.value === 'quality') query.tab = 'quality'
-  if (isObserveSkill.value && observeDetailTab.value === 'chain') query.tab = 'chain'
+  if (isObserveSkill.value) query.tab = observeDetailTab.value
   const path = isObserveSkill.value ? `/observe/${observeSlug.value}` : '/observe/sessions'
   void router.push({ path, query })
 }
 
-function setObserveDetailTab(tab: 'quality' | 'chain') {
+function setObserveDetailTab(tab: ObserveDetailTab) {
   observeDetailTab.value = tab
   const query: Record<string, string> = { tab }
   if (observeClientId.value) query.client = observeClientId.value
@@ -1651,7 +1677,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             <article class="observe-kpi observe-kpi-primary">
               <span>会话量</span>
               <strong>{{ observeOverview?.sessionCount || 0 }}</strong>
-              <small>可下钻样本</small>
+              <small>可查看样本</small>
             </article>
             <article class="observe-kpi">
               <span>观测Skill</span>
@@ -1807,9 +1833,9 @@ function handleGlobalKeydown(event: KeyboardEvent) {
               type="button"
               @click="selectObserveSession(session)"
             >
-              <strong>{{ clientLabel(session.client_name) }}</strong>
+              <strong>{{ sessionTitleOf(session) }}</strong>
               <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合</span>
-              <code>{{ session.session_key }}</code>
+              <span class="session-client-line">{{ clientLabel(session.client_name) }}</span>
             </button>
             <p v-if="!(observeSessions?.sessions || []).length" class="empty">还没有上传会话。先在本机采集，再执行 <code>skillhub-observer upload --service-url http://127.0.0.1:8080</code> 上传全部会话原文。</p>
           </aside>
@@ -1907,6 +1933,13 @@ function handleGlobalKeydown(event: KeyboardEvent) {
               :aria-selected="observeDetailTab === 'chain'"
               @click="setObserveDetailTab('chain')"
             >会话链路</button>
+            <button
+              type="button"
+              :class="{ selected: observeDetailTab === 'metrics' }"
+              role="tab"
+              :aria-selected="observeDetailTab === 'metrics'"
+              @click="setObserveDetailTab('metrics')"
+            >指标</button>
           </div>
 
           <section v-if="observeDetailTab === 'quality'" class="observe-quality-panel">
@@ -1946,7 +1979,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             <div class="quality-two-col">
               <article class="panel quality-panel-block evidence-panel">
                 <h2>证据层级（按 Turn）</h2>
-                <p class="panel-hint">分母 = 已归因到该技能的 Turn（L1）。L4 为「正常使用」主指标。</p>
+                <p class="panel-hint">分母 = 计入该技能的 Turn（L1）。L4 为「正常使用」主指标。</p>
                 <ul v-if="observeDetail.quality?.evidence?.levels?.length" class="evidence-funnel">
                   <li v-for="level in observeDetail.quality.evidence.levels" :key="level.code">
                     <span class="evidence-code">{{ level.code }}</span>
@@ -2037,6 +2070,15 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             </article>
           </section>
 
+          <ObserveMetricsPanel
+            v-else-if="observeDetailTab === 'metrics'"
+            :detail="observeDetail"
+            :client-id="observeClientId"
+            :session-id="observeSessionId"
+            @change-client="selectObserveClient"
+            @change-session="onMetricsChangeSession"
+          />
+
           <template v-else>
             <div class="observe-filters" role="tablist" aria-label="客户端">
               <button :class="['observe-chip', { selected: !observeClientId }]" type="button" @click="selectObserveClient('')">全部客户端</button>
@@ -2062,9 +2104,8 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                   type="button"
                   @click="selectObserveSession(session)"
                 >
-                  <strong>{{ clientLabel(session.client_name) }}</strong>
-                  <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合</span>
-                  <code>{{ session.session_key }}</code>
+                  <strong>{{ sessionTitleOf(session) }}</strong>
+                  <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合 · {{ clientLabel(session.client_name) }}</span>
                 </button>
                 <p v-if="!observeDetail.sessions.length" class="empty">这个筛选条件下没有会话。</p>
               </aside>

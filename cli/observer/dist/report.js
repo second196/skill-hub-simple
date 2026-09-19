@@ -6,6 +6,7 @@ import { collectEvents } from './collect.js';
 import { observabilityDir } from './paths.js';
 import { fetchPlatformSkills, platformIndex } from './platform.js';
 import { buildTimeline, skillStats, trendCounts } from './timeline.js';
+import { formatTokenCount } from './usage.js';
 export async function writeReport(options) {
     const events = await collectEvents();
     let platform = [];
@@ -33,6 +34,7 @@ export function renderReport(events, platform, compared) {
     const index = platformIndex(platform);
     const skillCount = skills.length;
     const callCount = skills.reduce((sum, item) => sum + item.callCount, 0);
+    const tokenTotal = skills.reduce((sum, item) => sum + (item.tokenTotal || 0), 0);
     const sessionCount = sessions.length;
     const clientCount = new Set(sessions.map((item) => item.clientId)).size;
     return `<!DOCTYPE html>
@@ -53,6 +55,7 @@ export function renderReport(events, platform, compared) {
   <section class="kpis" aria-label="汇总指标">
     ${kpi('已观测Skill', skillCount)}
     ${kpi('Skill调用', callCount)}
+    ${kpi('Token消耗', formatTokenCount(tokenTotal))}
     ${kpi('会话', sessionCount)}
     ${kpi('客户端', clientCount)}
   </section>
@@ -82,7 +85,7 @@ export function renderReport(events, platform, compared) {
             <h3>${escapeHtml(skill.name)}</h3>
             <code>${escapeHtml(skill.slug)}</code>
           </div>
-          <p>${skill.callCount} 次调用 · ${skill.sessionCount} 个会话</p>
+          <p>${skill.callCount} 次调用 · ${skill.sessionCount} 个会话${skill.tokenTotal > 0 ? ` · ${formatTokenCount(skill.tokenTotal)} tokens` : ''}</p>
           <span class="badge ${uploadable ? 'ok' : 'muted'}">${badge}</span>
         </article>`;
     }).join('') : '<p class="empty">还没有采集到Skill调用。</p>'}
@@ -152,7 +155,7 @@ function labelClient(name) {
     return name;
 }
 function kpi(label, value) {
-    return `<article class="kpi"><span>${escapeHtml(label)}</span><strong>${value}</strong></article>`;
+    return `<article class="kpi"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></article>`;
 }
 function lineChart(points) {
     const width = 720;

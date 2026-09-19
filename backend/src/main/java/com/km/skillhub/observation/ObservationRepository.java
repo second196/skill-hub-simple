@@ -97,6 +97,61 @@ public class ObservationRepository {
                 batchId, clientId, sessions, turns, steps, skipped);
     }
 
+    private static String usageSum(String field, String filter) {
+        // payload.usage.<field> numeric sum; filter e.g. non-rollup skill steps
+        String base = "COALESCE(NULLIF(st.payload#>>'{usage," + field + "}','')::numeric, 0)";
+        if (filter == null || filter.isEmpty()) {
+            return "COALESCE(SUM(" + base + "), 0)";
+        }
+        return "COALESCE(SUM(CASE WHEN " + filter + " THEN " + base + " ELSE 0 END), 0)";
+    }
+
+    private static final String NON_ROLLUP_SKILL = "st.type='skill' AND COALESCE(st.payload->>'rollup','false') <> 'true'";
+
+    /**
+     * Skill-level token usage aggregated from observation_step.payload.usage
+     * written by observer scan. Leaf skill steps only (rollup excluded).
+     */
+    public Map<String, Object> skillTokenSummary(String slug) {
+        Map<String, Object> row = firstOrNull(jdbc.queryForList(
+                "SELECT " +
+                        usageSum("input_tokens", NON_ROLLUP_SKILL) + " AS token_input, " +
+                        usageSum("cache_read_input_tokens", NON_ROLLUP_SKILL) + " AS token_cache_read, " +
+                        usageSum("cache_creation_input_tokens", NON_ROLLUP_SKILL) + " AS token_cache_write, " +
+                        usageSum("output_tokens", NON_ROLLUP_SKILL) + " AS token_output, " +
+                        usageSum("total_tokens", NON_ROLLUP_SKILL) + " AS token_total, " +
+                        usageSum("request_count", NON_ROLLUP_SKILL) + " AS token_requests, " +
+                        "COUNT(*) FILTER (WHERE " + NON_ROLLUP_SKILL + " AND jsonb_exists(st.payload, 'usage')) AS turns_with_tokens " +
+                        "FROM observation_step st " +
+                        "WHERE st.skill_slug=? AND st.type='skill'",
+                slug));
+        long input = longOf(row == null ? null : row.get("token_input"));
+        long cacheRead = longOf(row == null ? null : row.get("token_cache_read"));
+        long cacheWrite = longOf(row == null ? null : row.get("token_cache_write"));
+        long output = longOf(row == null ? null : row.get("token_output"));
+        long total = longOf(row == null ? null : row.get("token_total"));
+        if (total <= 0 && (input > 0 || cacheRead > 0 || cacheWrite > 0 || output > 0)) {
+            total = input + cacheRead + cacheWrite + output;
+        }
+        long requests = longOf(row == null ? null : row.get("token_requests"));
+        int turnsWithTokens = intOf(row == null ? null : row.get("turns_with_tokens"));
+        Map<String, Object> usage = new LinkedHashMap<String, Object>();
+        usage.put("inputTokens", Long.valueOf(input));
+        usage.put("cacheReadTokens", Long.valueOf(cacheRead));
+        usage.put("cacheWriteTokens", Long.valueOf(cacheWrite));
+        usage.put("outputTokens", Long.valueOf(output));
+        usage.put("totalTokens", Long.valueOf(total));
+        usage.put("requestCount", Long.valueOf(requests));
+        usage.put("turnsWithTokens", Integer.valueOf(turnsWithTokens));
+        usage.put("input_tokens", Long.valueOf(input));
+        usage.put("cache_read_input_tokens", Long.valueOf(cacheRead));
+        usage.put("cache_creation_input_tokens", Long.valueOf(cacheWrite));
+        usage.put("output_tokens", Long.valueOf(output));
+        usage.put("total_tokens", Long.valueOf(total));
+        usage.put("request_count", Long.valueOf(requests));
+        return usage;
+    }
+
     public List<Map<String, Object>> listObservedSkills() {
         // Platform observation cards only: skill must exist in the platform skill table.
         List<Map<String, Object>> rows = jdbc.queryForList(
@@ -105,7 +160,8 @@ public class ObservationRepository {
                         "COUNT(*) FILTER (WHERE st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL) AS file_loads, " +
                         "COUNT(DISTINCT sess.id) AS session_count, " +
                         "COUNT(DISTINCT c.client_id) AS client_count, " +
-                        "MAX(st.ts) AS last_used_at " +
+                        "MAX(st.ts) AS last_used_at, " +
+                        usageSum("total_tokens", NON_ROLLUP_SKILL) + " AS token_total " +
                         "FROM skill s " +
                         "JOIN observation_step st ON st.skill_slug=s.slug " +
                         "JOIN observation_turn t ON t.id=st.turn_id " +
@@ -122,8 +178,10 @@ public class ObservationRepository {
             int callCount = (skillCalls instanceof Number ? ((Number) skillCalls).intValue() : 0)
                     + (fileLoads instanceof Number ? ((Number) fileLoads).intValue() : 0);
             item.put("call_count", Integer.valueOf(callCount));
+            item.put("token_total", Long.valueOf(longOf(row.get("token_total"))));
             String slug = String.valueOf(row.get("slug"));
             Map<String, Object> quality = skillQualitySummary(slug);
+            quality.put("tokenUsage", skillTokenSummary(slug));
             item.put("quality", quality);
             item.put("health_score", quality.get("healthScore"));
             item.put("error_rate", quality.get("errorRate"));
@@ -418,6 +476,20 @@ public class ObservationRepository {
         }
     }
 
+    private static long longOf(Object value) {
+        if (value instanceof Number) return ((Number) value).longValue();
+        if (value == null) return 0L;
+        try {
+            return Long.parseLong(String.valueOf(value).trim());
+        } catch (Exception ignored) {
+            try {
+                return (long) Double.parseDouble(String.valueOf(value).trim());
+            } catch (Exception ignoredAgain) {
+                return 0L;
+            }
+        }
+    }
+
     private static double doubleOf(Object value) {
         if (value instanceof Number) return ((Number) value).doubleValue();
         if (value == null) return 0d;
@@ -448,6 +520,49 @@ public class ObservationRepository {
         return result;
     }
 
+    /**
+     * First non-empty user text as session display title.
+     * Must be used with alias {@code sess} and aggregate via MIN/MAX in GROUP BY queries.
+     */
+    private static final String SESSION_TITLE_JOIN =
+            " LEFT JOIN LATERAL (" +
+                    " SELECT LEFT(COALESCE(TRIM(t2.user_text), ''), 80) AS title" +
+                    " FROM observation_turn t2" +
+                    " WHERE t2.session_id = sess.id" +
+                    "   AND COALESCE(TRIM(t2.user_text), '') <> ''" +
+                    " ORDER BY t2.turn_index ASC" +
+                    " LIMIT 1" +
+                    " ) stitle ON TRUE ";
+
+    private static String sessionTitleFallback(Map<String, Object> session) {
+        String client = session.get("client_name") != null ? String.valueOf(session.get("client_name"))
+                : (session.get("hostname") != null ? String.valueOf(session.get("hostname")) : "会话");
+        if ("claude-code".equalsIgnoreCase(client)) client = "Claude Code";
+        if ("codex".equalsIgnoreCase(client)) client = "Codex";
+        Object started = session.get("started_at");
+        String day = started == null ? "" : String.valueOf(started);
+        if (day.length() >= 10) day = day.substring(0, 10);
+        return day.isEmpty() ? client : (client + " · " + day);
+    }
+
+    private static String normalizeSessionTitle(Object title) {
+        if (title == null) return "";
+        String text = String.valueOf(title).replaceAll("\\s+", " ").trim();
+        if (text.isEmpty()) return "";
+        return text.length() > 60 ? text.substring(0, 60) + "…" : text;
+    }
+
+    private void enrichSessionTitles(List<Map<String, Object>> sessions) {
+        if (sessions == null) return;
+        for (Map<String, Object> session : sessions) {
+            String title = normalizeSessionTitle(session.get("title"));
+            if (title.isEmpty()) title = normalizeSessionTitle(session.get("session_title"));
+            if (title.isEmpty()) title = sessionTitleFallback(session);
+            session.put("title", title);
+            session.put("session_title", title);
+        }
+    }
+
     public Map<String, Object> sessionList(String clientId, Long sessionId) {
         Map<String, Object> result = new LinkedHashMap<String, Object>();
         result.put("clients", jdbc.queryForList(
@@ -456,10 +571,12 @@ public class ObservationRepository {
                         "LEFT JOIN observation_session sess ON sess.client_row_id=c.id " +
                         "GROUP BY c.client_id, c.hostname, c.os ORDER BY last_seen_at DESC"));
         String sessionSql = "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, " +
-                "sess.started_at, sess.ended_at, COUNT(DISTINCT t.id) AS turn_count " +
+                "sess.started_at, sess.ended_at, COUNT(DISTINCT t.id) AS turn_count, " +
+                "MIN(stitle.title) AS title " +
                 "FROM observation_session sess " +
                 "JOIN observation_client c ON c.id=sess.client_row_id " +
-                "LEFT JOIN observation_turn t ON t.session_id=sess.id";
+                "LEFT JOIN observation_turn t ON t.session_id=sess.id " +
+                SESSION_TITLE_JOIN;
         List<Object> args = new ArrayList<Object>();
         if (clientId != null && !clientId.trim().isEmpty()) {
             sessionSql += " WHERE c.client_id=?";
@@ -470,6 +587,7 @@ public class ObservationRepository {
         List<Map<String, Object>> sessions = args.isEmpty()
                 ? jdbc.queryForList(sessionSql)
                 : jdbc.queryForList(sessionSql, args.toArray());
+        enrichSessionTitles(sessions);
         result.put("sessions", sessions);
         Long selectedId = sessionId;
         if (selectedId != null) {
@@ -517,8 +635,19 @@ public class ObservationRepository {
                 "SELECT COUNT(DISTINCT t.id) FROM observation_turn t " +
                         "JOIN observation_step st ON st.turn_id=t.id WHERE st.skill_slug=?", Integer.class, slug));
         result.put("kpis", kpis);
+        Map<String, Object> tokenUsage = skillTokenSummary(slug);
+        kpis.put("tokenTotal", tokenUsage.get("totalTokens"));
+        kpis.put("tokenInput", tokenUsage.get("inputTokens"));
+        kpis.put("tokenCacheRead", tokenUsage.get("cacheReadTokens"));
+        kpis.put("tokenCacheWrite", tokenUsage.get("cacheWriteTokens"));
+        kpis.put("tokenOutput", tokenUsage.get("outputTokens"));
+        kpis.put("tokenRequests", tokenUsage.get("requestCount"));
+        kpis.put("tokenUsage", tokenUsage);
+        result.put("tokenUsage", tokenUsage);
         result.put("trend", fillTrend(trendBySkill(slug).get(slug)));
-        result.put("quality", skillQuality(slug));
+        Map<String, Object> quality = skillQuality(slug);
+        quality.put("tokenUsage", tokenUsage);
+        result.put("quality", quality);
         result.put("problemSessions", skillProblemSessions(slug, 20));
 
         result.put("clients", jdbc.queryForList(
@@ -530,11 +659,19 @@ public class ObservationRepository {
                         "WHERE st.skill_slug=? GROUP BY c.client_id, c.hostname, c.os ORDER BY last_seen_at DESC", slug));
 
         String sessionSql = "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, " +
-                "sess.started_at, sess.ended_at, COUNT(DISTINCT t.id) AS turn_count " +
+                "sess.started_at, sess.ended_at, COUNT(DISTINCT t.id) AS turn_count, " +
+                "MIN(stitle.title) AS title, " +
+                usageSum("input_tokens", NON_ROLLUP_SKILL) + " AS token_input, " +
+                usageSum("cache_read_input_tokens", NON_ROLLUP_SKILL) + " AS token_cache_read, " +
+                usageSum("cache_creation_input_tokens", NON_ROLLUP_SKILL) + " AS token_cache_write, " +
+                usageSum("output_tokens", NON_ROLLUP_SKILL) + " AS token_output, " +
+                usageSum("total_tokens", NON_ROLLUP_SKILL) + " AS token_total, " +
+                usageSum("request_count", NON_ROLLUP_SKILL) + " AS token_requests " +
                 "FROM observation_session sess " +
                 "JOIN observation_client c ON c.id=sess.client_row_id " +
                 "JOIN observation_turn t ON t.session_id=sess.id " +
                 "JOIN observation_step st ON st.turn_id=t.id " +
+                SESSION_TITLE_JOIN +
                 "WHERE st.skill_slug=?";
         List<Object> args = new ArrayList<Object>();
         args.add(slug);
@@ -545,6 +682,18 @@ public class ObservationRepository {
         sessionSql += " GROUP BY sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, sess.started_at, sess.ended_at " +
                 "ORDER BY sess.started_at DESC NULLS LAST, sess.id DESC LIMIT 100";
         List<Map<String, Object>> sessions = jdbc.queryForList(sessionSql, args.toArray());
+        for (Map<String, Object> session : sessions) {
+            long total = longOf(session.get("token_total"));
+            long input = longOf(session.get("token_input"));
+            long cacheRead = longOf(session.get("token_cache_read"));
+            long cacheWrite = longOf(session.get("token_cache_write"));
+            long output = longOf(session.get("token_output"));
+            if (total <= 0 && (input > 0 || cacheRead > 0 || cacheWrite > 0 || output > 0)) {
+                total = input + cacheRead + cacheWrite + output;
+                session.put("token_total", Long.valueOf(total));
+            }
+        }
+        enrichSessionTitles(sessions);
         result.put("sessions", sessions);
 
         Long selectedId = sessionId;
@@ -561,7 +710,13 @@ public class ObservationRepository {
             if (!found) selectedId = null;
         }
         if (selectedId == null && !sessions.isEmpty()) {
-            Object id = sessions.get(0).get("id");
+            Map<String, Object> best = sessions.get(0);
+            for (Map<String, Object> session : sessions) {
+                if (longOf(session.get("token_total")) > longOf(best.get("token_total"))) {
+                    best = session;
+                }
+            }
+            Object id = best.get("id");
             selectedId = id instanceof Number ? ((Number) id).longValue() : Long.valueOf(String.valueOf(id));
         }
         result.put("selectedSessionId", selectedId);
@@ -583,10 +738,14 @@ public class ObservationRepository {
 
     public Map<String, Object> sessionChain(long sessionId, String skillSlug) {
         List<Map<String, Object>> sessions = jdbc.queryForList(
-                "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, c.os, sess.started_at, sess.ended_at " +
-                        "FROM observation_session sess JOIN observation_client c ON c.id=sess.client_row_id WHERE sess.id=?",
+                "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, c.os, sess.started_at, sess.ended_at, " +
+                        "MIN(stitle.title) AS title " +
+                        "FROM observation_session sess JOIN observation_client c ON c.id=sess.client_row_id " +
+                        SESSION_TITLE_JOIN +
+                        "WHERE sess.id=? GROUP BY sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, c.os, sess.started_at, sess.ended_at",
                 sessionId);
         if (sessions.isEmpty()) throw new IllegalArgumentException("观测会话不存在");
+        enrichSessionTitles(sessions);
         Map<String, Object> result = new LinkedHashMap<String, Object>(sessions.get(0));
 
         boolean filterSkill = skillSlug != null && !skillSlug.trim().isEmpty();
@@ -635,18 +794,114 @@ public class ObservationRepository {
         List<Map<String, Object>> orderedTurns = new ArrayList<Map<String, Object>>(turns);
         java.util.Collections.reverse(orderedTurns);
         List<Map<String, Object>> turnViews = new ArrayList<Map<String, Object>>();
+        long[] sessionUsage = new long[] {0L, 0L, 0L, 0L, 0L, 0L}; // in, cr, cw, out, total, req
         for (Map<String, Object> turn : orderedTurns) {
             Long turnId = ((Number) turn.get("id")).longValue();
+            List<Map<String, Object>> stepList = stepsByTurn.get(turnId) == null
+                    ? new ArrayList<Map<String, Object>>()
+                    : stepsByTurn.get(turnId);
             Map<String, Object> view = new LinkedHashMap<String, Object>(turn);
-            view.put("steps", stepsByTurn.get(turnId) == null ? new ArrayList<Map<String, Object>>() : stepsByTurn.get(turnId));
+            view.put("steps", stepList);
+            Map<String, Object> turnUsage = emptyUsageMap();
+            for (Map<String, Object> step : stepList) {
+                Object payloadObj = step.get("payload");
+                Map<String, Object> usage = extractUsageFromPayload(payloadObj);
+                if (usage == null) continue;
+                addUsageInto(turnUsage, usage);
+            }
+            view.put("usage", turnUsage);
+            view.put("token_total", turnUsage.get("total_tokens"));
+            sessionUsage[0] += longOf(turnUsage.get("input_tokens"));
+            sessionUsage[1] += longOf(turnUsage.get("cache_read_input_tokens"));
+            sessionUsage[2] += longOf(turnUsage.get("cache_creation_input_tokens"));
+            sessionUsage[3] += longOf(turnUsage.get("output_tokens"));
+            sessionUsage[4] += longOf(turnUsage.get("total_tokens"));
+            sessionUsage[5] += longOf(turnUsage.get("request_count"));
             turnViews.add(view);
         }
+        Map<String, Object> sessionUsageMap = emptyUsageMap();
+        sessionUsageMap.put("input_tokens", Long.valueOf(sessionUsage[0]));
+        sessionUsageMap.put("cache_read_input_tokens", Long.valueOf(sessionUsage[1]));
+        sessionUsageMap.put("cache_creation_input_tokens", Long.valueOf(sessionUsage[2]));
+        sessionUsageMap.put("output_tokens", Long.valueOf(sessionUsage[3]));
+        sessionUsageMap.put("total_tokens", Long.valueOf(sessionUsage[4]));
+        sessionUsageMap.put("request_count", Long.valueOf(sessionUsage[5]));
+        sessionUsageMap.put("inputTokens", Long.valueOf(sessionUsage[0]));
+        sessionUsageMap.put("cacheReadTokens", Long.valueOf(sessionUsage[1]));
+        sessionUsageMap.put("cacheWriteTokens", Long.valueOf(sessionUsage[2]));
+        sessionUsageMap.put("outputTokens", Long.valueOf(sessionUsage[3]));
+        sessionUsageMap.put("totalTokens", Long.valueOf(sessionUsage[4]));
+        sessionUsageMap.put("requestCount", Long.valueOf(sessionUsage[5]));
+        result.put("usage", sessionUsageMap);
+        result.put("token_total", Long.valueOf(sessionUsage[4]));
         result.put("turns", turnViews);
         result.put("truncated", Boolean.valueOf(turns.size() >= SESSION_CHAIN_MAX_TURNS));
         if (turns.size() >= SESSION_CHAIN_MAX_TURNS) {
             result.put("message", "为保证性能，链路仅展示最近 " + SESSION_CHAIN_MAX_TURNS + " 个回合，超长字段已截断");
         }
         return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> extractUsageFromPayload(Object payloadObj) {
+        if (!(payloadObj instanceof Map)) return null;
+        Map<String, Object> payload = (Map<String, Object>) payloadObj;
+        Object usageObj = payload.get("usage");
+        if (usageObj == null) usageObj = payload.get("token_usage");
+        if (!(usageObj instanceof Map)) return null;
+        Map<String, Object> raw = (Map<String, Object>) usageObj;
+        long input = longOf(raw.get("input_tokens") != null ? raw.get("input_tokens") : raw.get("inputTokens"));
+        long cacheRead = longOf(firstNonNull(raw, "cache_read_input_tokens", "cacheReadTokens", "cached_input_tokens"));
+        long cacheWrite = longOf(firstNonNull(raw, "cache_creation_input_tokens", "cacheWriteTokens", "cache_write_input_tokens"));
+        long output = longOf(raw.get("output_tokens") != null ? raw.get("output_tokens") : raw.get("outputTokens"));
+        long total = longOf(raw.get("total_tokens") != null ? raw.get("total_tokens") : raw.get("totalTokens"));
+        if (total <= 0 && (input > 0 || cacheRead > 0 || cacheWrite > 0 || output > 0)) {
+            total = input + cacheRead + cacheWrite + output;
+        }
+        long requests = longOf(raw.get("request_count") != null ? raw.get("request_count") : raw.get("requestCount"));
+        if (total <= 0 && requests <= 0 && input <= 0 && output <= 0) return null;
+        Map<String, Object> usage = emptyUsageMap();
+        usage.put("input_tokens", Long.valueOf(input));
+        usage.put("cache_read_input_tokens", Long.valueOf(cacheRead));
+        usage.put("cache_creation_input_tokens", Long.valueOf(cacheWrite));
+        usage.put("output_tokens", Long.valueOf(output));
+        usage.put("total_tokens", Long.valueOf(total));
+        usage.put("request_count", Long.valueOf(requests > 0 ? requests : 1));
+        return usage;
+    }
+
+    private static Object firstNonNull(Map<String, Object> map, String... keys) {
+        for (String key : keys) {
+            if (map.get(key) != null) return map.get(key);
+        }
+        return null;
+    }
+
+    private static Map<String, Object> emptyUsageMap() {
+        Map<String, Object> usage = new LinkedHashMap<String, Object>();
+        usage.put("input_tokens", Long.valueOf(0L));
+        usage.put("cache_read_input_tokens", Long.valueOf(0L));
+        usage.put("cache_creation_input_tokens", Long.valueOf(0L));
+        usage.put("output_tokens", Long.valueOf(0L));
+        usage.put("total_tokens", Long.valueOf(0L));
+        usage.put("request_count", Long.valueOf(0L));
+        return usage;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void addUsageInto(Map<String, Object> target, Map<String, Object> delta) {
+        for (String key : new String[] {
+                "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+                "output_tokens", "total_tokens", "request_count"
+        }) {
+            target.put(key, Long.valueOf(longOf(target.get(key)) + longOf(delta.get(key))));
+        }
+        target.put("inputTokens", target.get("input_tokens"));
+        target.put("cacheReadTokens", target.get("cache_read_input_tokens"));
+        target.put("cacheWriteTokens", target.get("cache_creation_input_tokens"));
+        target.put("outputTokens", target.get("output_tokens"));
+        target.put("totalTokens", target.get("total_tokens"));
+        target.put("requestCount", target.get("request_count"));
     }
 
     @SuppressWarnings("unchecked")
@@ -673,7 +928,12 @@ public class ObservationRepository {
     }
 
     private Map<String, List<Map<String, Object>>> trendBySkill(String slug) {
-        String sql = "SELECT st.skill_slug, (st.ts AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS count " +
+        String sql = "SELECT st.skill_slug, (st.ts AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS count, " +
+                usageSum("total_tokens", NON_ROLLUP_SKILL) + " AS tokens, " +
+                usageSum("input_tokens", NON_ROLLUP_SKILL) + " AS input_tokens, " +
+                usageSum("cache_read_input_tokens", NON_ROLLUP_SKILL) + " AS cache_read_tokens, " +
+                usageSum("cache_creation_input_tokens", NON_ROLLUP_SKILL) + " AS cache_write_tokens, " +
+                usageSum("output_tokens", NON_ROLLUP_SKILL) + " AS output_tokens " +
                 "FROM observation_step st JOIN skill s ON s.slug=st.skill_slug " +
                 "WHERE st.ts >= CURRENT_TIMESTAMP - INTERVAL '7 days' " +
                 "AND (st.type='skill' OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL))";
@@ -695,25 +955,40 @@ public class ObservationRepository {
             Map<String, Object> point = new LinkedHashMap<String, Object>();
             point.put("day", String.valueOf(row.get("day")));
             point.put("count", row.get("count"));
+            point.put("tokens", Long.valueOf(longOf(row.get("tokens"))));
+            Map<String, Object> usage = new LinkedHashMap<String, Object>();
+            usage.put("input_tokens", Long.valueOf(longOf(row.get("input_tokens"))));
+            usage.put("cache_read_input_tokens", Long.valueOf(longOf(row.get("cache_read_tokens"))));
+            usage.put("cache_creation_input_tokens", Long.valueOf(longOf(row.get("cache_write_tokens"))));
+            usage.put("output_tokens", Long.valueOf(longOf(row.get("output_tokens"))));
+            usage.put("total_tokens", Long.valueOf(longOf(row.get("tokens"))));
+            point.put("usage", usage);
             list.add(point);
         }
         if (slug == null) {
             List<Map<String, Object>> all = jdbc.queryForList(
-                    "SELECT (st.ts AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS count " +
+                    "SELECT (st.ts AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS count, " +
+                            usageSum("total_tokens", NON_ROLLUP_SKILL) + " AS tokens " +
                             "FROM observation_step st JOIN skill s ON s.slug=st.skill_slug " +
                             "WHERE st.ts >= CURRENT_TIMESTAMP - INTERVAL '7 days' " +
                             "AND (st.type='skill' OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL)) " +
                             "GROUP BY 1");
-            grouped.put("__all__", all);
+            List<Map<String, Object>> allPoints = new ArrayList<Map<String, Object>>();
+            for (Map<String, Object> row : all) {
+                Map<String, Object> point = new LinkedHashMap<String, Object>(row);
+                point.put("tokens", Long.valueOf(longOf(row.get("tokens"))));
+                allPoints.add(point);
+            }
+            grouped.put("__all__", allPoints);
         }
         return grouped;
     }
 
     private List<Map<String, Object>> fillTrend(List<Map<String, Object>> points) {
-        Map<String, Number> byDay = new HashMap<String, Number>();
+        Map<String, Map<String, Object>> byDay = new HashMap<String, Map<String, Object>>();
         if (points != null) {
             for (Map<String, Object> point : points) {
-                byDay.put(String.valueOf(point.get("day")), (Number) point.get("count"));
+                byDay.put(String.valueOf(point.get("day")), point);
             }
         }
         List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
@@ -722,8 +997,19 @@ public class ObservationRepository {
             LocalDate day = today.minusDays(i);
             Map<String, Object> item = new LinkedHashMap<String, Object>();
             item.put("day", day.toString());
-            Number count = byDay.get(day.toString());
+            Map<String, Object> source = byDay.get(day.toString());
+            Number count = source == null ? null : (Number) source.get("count");
             item.put("count", count == null ? Integer.valueOf(0) : count);
+            long tokens = source == null ? 0L : longOf(source.get("tokens"));
+            item.put("tokens", Long.valueOf(tokens));
+            Object usage = source == null ? null : source.get("usage");
+            if (usage instanceof Map) {
+                item.put("usage", usage);
+            } else {
+                Map<String, Object> emptyUsage = new LinkedHashMap<String, Object>();
+                emptyUsage.put("total_tokens", Long.valueOf(tokens));
+                item.put("usage", emptyUsage);
+            }
             result.add(item);
         }
         return result;

@@ -20,6 +20,13 @@ export interface SkillStat {
     sessionCount: number;
     clientCount: number;
     lastUsedAt: string;
+    tokenTotal: number;
+    tokenInput: number;
+    tokenCacheRead: number;
+    tokenCacheWrite: number;
+    tokenOutput: number;
+    tokenRequests: number;
+    turnsWithTokens: number;
 }
 export declare function canonicalEvents(events: ObservationEvent[]): ObservationEvent[];
 export declare function buildTimeline(events: ObservationEvent[]): TimelineSession[];

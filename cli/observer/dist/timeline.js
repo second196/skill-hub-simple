@@ -1,3 +1,4 @@
+import { isRollupSkillPayload, usageFromEventPayload } from './usage.js';
 export function canonicalEvents(events) {
     const scanned = new Set(events.filter((event) => event.source === 'scan').map((event) => event.session_id));
     return events.filter((event) => event.source === 'scan' || !scanned.has(event.session_id));
@@ -49,8 +50,16 @@ export function skillStats(events) {
             sessionCount: 0,
             clientCount: 0,
             lastUsedAt: event.ts,
+            tokenTotal: 0,
+            tokenInput: 0,
+            tokenCacheRead: 0,
+            tokenCacheWrite: 0,
+            tokenOutput: 0,
+            tokenRequests: 0,
+            turnsWithTokens: 0,
             sessions: new Set(),
-            clients: new Set()
+            clients: new Set(),
+            tokenTurns: new Set()
         };
         current.callCount += 1;
         current.sessions.add(event.session_id);
@@ -58,6 +67,18 @@ export function skillStats(events) {
         current.name = event.skill_name || current.name;
         if (event.ts > current.lastUsedAt)
             current.lastUsedAt = event.ts;
+        if (!isRollupSkillPayload(event.payload)) {
+            const usage = usageFromEventPayload(event.payload);
+            if (usage) {
+                current.tokenTotal += usage.totalTokens;
+                current.tokenInput += usage.inputTokens;
+                current.tokenCacheRead += usage.cacheReadTokens;
+                current.tokenCacheWrite += usage.cacheWriteTokens;
+                current.tokenOutput += usage.outputTokens;
+                current.tokenRequests += usage.requestCount;
+                current.tokenTurns.add(`${event.session_id}:${event.turn_index}`);
+            }
+        }
         map.set(event.skill_slug, current);
     }
     return [...map.values()]
@@ -67,7 +88,14 @@ export function skillStats(events) {
         callCount: item.callCount,
         sessionCount: item.sessions.size,
         clientCount: item.clients.size,
-        lastUsedAt: item.lastUsedAt
+        lastUsedAt: item.lastUsedAt,
+        tokenTotal: item.tokenTotal,
+        tokenInput: item.tokenInput,
+        tokenCacheRead: item.tokenCacheRead,
+        tokenCacheWrite: item.tokenCacheWrite,
+        tokenOutput: item.tokenOutput,
+        tokenRequests: item.tokenRequests,
+        turnsWithTokens: item.tokenTurns.size
     }))
         .sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt) || b.callCount - a.callCount);
 }

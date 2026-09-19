@@ -2,6 +2,22 @@ export type ClientName = 'claude-code' | 'codex'
 export type StepType = 'user' | 'assistant' | 'skill' | 'tool' | 'document'
 export type EventSource = 'hook' | 'scan'
 
+/**
+ * skill 事件 payload.usage（scan 回填）
+ * 字段与客户端 API usage 对齐；Hook 不采集 token。
+ */
+export interface SkillEventTokenUsage {
+  input_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+  output_tokens?: number
+  reasoning_output_tokens?: number
+  total_tokens?: number
+  request_count?: number
+  window_from_ts?: string
+  window_to_ts?: string
+}
+
 export interface ObservationEvent {
   v: 1
   event_id: string

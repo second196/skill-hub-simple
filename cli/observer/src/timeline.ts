@@ -1,4 +1,5 @@
 import type { ClientName, ObservationEvent } from './types.js'
+import { isRollupSkillPayload, usageFromEventPayload } from './usage.js'
 
 export interface TimelineTurn {
   turnIndex: number
@@ -23,6 +24,13 @@ export interface SkillStat {
   sessionCount: number
   clientCount: number
   lastUsedAt: string
+  tokenTotal: number
+  tokenInput: number
+  tokenCacheRead: number
+  tokenCacheWrite: number
+  tokenOutput: number
+  tokenRequests: number
+  turnsWithTokens: number
 }
 
 export function canonicalEvents(events: ObservationEvent[]): ObservationEvent[] {
@@ -67,7 +75,7 @@ export function buildTimeline(events: ObservationEvent[]): TimelineSession[] {
 }
 
 export function skillStats(events: ObservationEvent[]): SkillStat[] {
-  const map = new Map<string, SkillStat & { sessions: Set<string>; clients: Set<string> }>()
+  const map = new Map<string, SkillStat & { sessions: Set<string>; clients: Set<string>; tokenTurns: Set<string> }>()
   for (const event of canonicalEvents(events)) {
     if (event.type !== 'skill' || !event.skill_slug) continue
     const current = map.get(event.skill_slug) || {
@@ -77,14 +85,34 @@ export function skillStats(events: ObservationEvent[]): SkillStat[] {
       sessionCount: 0,
       clientCount: 0,
       lastUsedAt: event.ts,
+      tokenTotal: 0,
+      tokenInput: 0,
+      tokenCacheRead: 0,
+      tokenCacheWrite: 0,
+      tokenOutput: 0,
+      tokenRequests: 0,
+      turnsWithTokens: 0,
       sessions: new Set<string>(),
-      clients: new Set<string>()
+      clients: new Set<string>(),
+      tokenTurns: new Set<string>()
     }
     current.callCount += 1
     current.sessions.add(event.session_id)
     current.clients.add(event.client_id)
     current.name = event.skill_name || current.name
     if (event.ts > current.lastUsedAt) current.lastUsedAt = event.ts
+    if (!isRollupSkillPayload(event.payload)) {
+      const usage = usageFromEventPayload(event.payload)
+      if (usage) {
+        current.tokenTotal += usage.totalTokens
+        current.tokenInput += usage.inputTokens
+        current.tokenCacheRead += usage.cacheReadTokens
+        current.tokenCacheWrite += usage.cacheWriteTokens
+        current.tokenOutput += usage.outputTokens
+        current.tokenRequests += usage.requestCount
+        current.tokenTurns.add(`${event.session_id}:${event.turn_index}`)
+      }
+    }
     map.set(event.skill_slug, current)
   }
   return [...map.values()]
@@ -94,7 +122,14 @@ export function skillStats(events: ObservationEvent[]): SkillStat[] {
       callCount: item.callCount,
       sessionCount: item.sessions.size,
       clientCount: item.clients.size,
-      lastUsedAt: item.lastUsedAt
+      lastUsedAt: item.lastUsedAt,
+      tokenTotal: item.tokenTotal,
+      tokenInput: item.tokenInput,
+      tokenCacheRead: item.tokenCacheRead,
+      tokenCacheWrite: item.tokenCacheWrite,
+      tokenOutput: item.tokenOutput,
+      tokenRequests: item.tokenRequests,
+      turnsWithTokens: item.tokenTurns.size
     }))
     .sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt) || b.callCount - a.callCount)
 }

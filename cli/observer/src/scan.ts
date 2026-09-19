@@ -9,10 +9,65 @@ import { discoverProjectSkillRoots, listInstalledSkills, matchSlashSkillCommands
 import { extractPaths, isDocumentPath, readDocument } from './documents.js'
 import { sanitizePayload, sanitizeText } from './payload.js'
 import { loadClientId } from './store.js'
+import {
+  addSkillTokenUsage,
+  emptySkillTokenUsage,
+  parseClaudeMessageUsage,
+  parseCodexTokenCountPayload,
+  skillTokenUsageToPayload,
+  type SkillTokenUsage
+} from './usage.js'
 
 interface ScanOptions {
   sessionId?: string
   sinceMs?: number
+}
+
+interface SkillEventHandle {
+  event: ObservationEvent
+  slug: string
+  turnIndex: number
+}
+
+interface SkillActivation {
+  slug: string
+  name: string
+  parents: string[]
+}
+
+function createUsageTracker() {
+  const skillEvents: SkillEventHandle[] = []
+  const usageByTurnSkill = new Map<string, SkillTokenUsage>()
+
+  function rememberSkillEvents(events: ObservationEvent[], turnIndex: number): void {
+    for (const event of events) {
+      if (event.type !== 'skill' || !event.skill_slug) continue
+      skillEvents.push({ event, slug: event.skill_slug, turnIndex })
+    }
+  }
+
+  function attribute(turnIndex: number, activation: SkillActivation, delta: SkillTokenUsage, ts: string): void {
+    const targets = [activation.slug, ...activation.parents]
+    for (const target of targets) {
+      const key = `${turnIndex}:${target}`
+      const acc = usageByTurnSkill.get(key) || emptySkillTokenUsage()
+      addSkillTokenUsage(acc, delta, ts)
+      usageByTurnSkill.set(key, acc)
+    }
+  }
+
+  function applyUsage(): void {
+    for (const handle of skillEvents) {
+      const acc = usageByTurnSkill.get(`${handle.turnIndex}:${handle.slug}`)
+      if (!acc || acc.requestCount <= 0) continue
+      handle.event.payload = {
+        ...handle.event.payload,
+        usage: skillTokenUsageToPayload(acc)
+      }
+    }
+  }
+
+  return { rememberSkillEvents, attribute, applyUsage }
 }
 
 export async function scanAll(options: ScanOptions = {}): Promise<ObservationEvent[]> {
@@ -117,7 +172,9 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
     let seq = 0
     let currentSlug: string | undefined
     let currentName: string | undefined
+    let currentActivation: SkillActivation | undefined
     const pending = new Map<string, ObservationEvent>()
+    const tracker = createUsageTracker()
     for (const entry of entries) {
       const ts = String(entry.timestamp || entry.ts || new Date().toISOString())
       const message = asRecord(entry.message)
@@ -128,6 +185,7 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
         seq = 0
         currentSlug = undefined
         currentName = undefined
+        currentActivation = undefined
         seq += 1
         const userText = extractText(content)
         events.push(makeEvent({
@@ -154,12 +212,22 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
           if (event.type === 'skill') {
             currentSlug = event.skill_slug
             currentName = event.skill_name
+            currentActivation = {
+              slug: event.skill_slug || '',
+              name: event.skill_name || event.skill_slug || '',
+              parents: event.payload?.rollup ? [] : parentSlugsFor(event.skill_slug || '')
+            }
           }
           events.push(event)
         }
+        tracker.rememberSkillEvents(textEvents, Math.max(turnIndex, 1))
         continue
       }
       if (role === 'assistant') {
+        const usageDelta = parseClaudeMessageUsage(message)
+        if (usageDelta && currentActivation && currentSlug) {
+          tracker.attribute(Math.max(turnIndex, 1), currentActivation, usageDelta, ts)
+        }
         const text = assistantText(content)
         if (text) {
           seq += 1
@@ -192,6 +260,7 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
         if (usage) {
           currentName = usage.name
           currentSlug = usage.slug
+          currentActivation = { slug: usage.slug, name: usage.name, parents: usage.parents }
           const matchedEvents = skillUsageEvents({
             clientId,
             clientName: 'claude-code',
@@ -204,6 +273,7 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
             outcome: 'ok'
           })
           seq += matchedEvents.length - 1
+          tracker.rememberSkillEvents(matchedEvents, Math.max(turnIndex, 1))
           for (const event of matchedEvents) {
             pending.set(callId, event)
             events.push(event)
@@ -263,6 +333,7 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
         }
       }
     }
+    tracker.applyUsage()
   }
   return events
 }
@@ -283,10 +354,19 @@ async function scanCodex(clientId: string, skills: InstalledSkill[], files: stri
     let seq = 0
     let currentSlug: string | undefined
     let currentName: string | undefined
+    let currentActivation: SkillActivation | undefined
     const pending = new Map<string, ObservationEvent>()
+    const tracker = createUsageTracker()
     for (const entry of entries) {
       const payload = asRecord(entry.payload)
       const ts = String(entry.timestamp || new Date().toISOString())
+      if (entry.type === 'event_msg' && payload.type === 'token_count') {
+        const usageDelta = parseCodexTokenCountPayload(payload)
+        if (usageDelta && currentActivation && currentSlug) {
+          tracker.attribute(Math.max(turnIndex, 1), currentActivation, usageDelta, ts)
+        }
+        continue
+      }
       if (entry.type === 'response_item' && payload.type === 'message' && payload.role === 'user') {
         const text = extractText(payload.content)
         if (!text.trim()) continue
@@ -294,6 +374,7 @@ async function scanCodex(clientId: string, skills: InstalledSkill[], files: stri
         seq = 1
         currentSlug = undefined
         currentName = undefined
+        currentActivation = undefined
         events.push(makeEvent({
           clientId,
           clientName: 'codex',
@@ -318,9 +399,15 @@ async function scanCodex(clientId: string, skills: InstalledSkill[], files: stri
           if (event.type === 'skill') {
             currentSlug = event.skill_slug
             currentName = event.skill_name
+            currentActivation = {
+              slug: event.skill_slug || '',
+              name: event.skill_name || event.skill_slug || '',
+              parents: event.payload?.rollup ? [] : parentSlugsFor(event.skill_slug || '')
+            }
           }
           events.push(event)
         }
+        tracker.rememberSkillEvents(textEvents, Math.max(turnIndex, 1))
         continue
       }
       if (entry.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
@@ -353,6 +440,7 @@ async function scanCodex(clientId: string, skills: InstalledSkill[], files: stri
         if (usage) {
           currentSlug = usage.slug
           currentName = usage.name
+          currentActivation = { slug: usage.slug, name: usage.name, parents: usage.parents }
           const matchedEvents = skillUsageEvents({
             clientId,
             clientName: 'codex',
@@ -366,6 +454,7 @@ async function scanCodex(clientId: string, skills: InstalledSkill[], files: stri
             toolName: name
           })
           seq += matchedEvents.length - 1
+          tracker.rememberSkillEvents(matchedEvents, Math.max(turnIndex, 1))
           for (const event of matchedEvents) {
             pending.set(callId, event)
             events.push(event)
@@ -422,6 +511,7 @@ async function scanCodex(clientId: string, skills: InstalledSkill[], files: stri
         }
       }
     }
+    tracker.applyUsage()
   }
   return events
 }
@@ -510,8 +600,11 @@ function skillEventsFromUserText(input: {
   if (!usages.length) return []
   const events: ObservationEvent[] = []
   let seq = input.startSeq
+  const slugSet = new Set(usages.map((item) => item.slug))
   for (const usage of usages) {
     seq += 1
+    const child = usages.find((item) => item.slug !== usage.slug && item.parents.includes(usage.slug))
+    const rollup = Boolean(child) && slugSet.has(usage.slug)
     events.push(makeEvent({
       clientId: input.clientId,
       clientName: input.clientName,
@@ -527,7 +620,8 @@ function skillEventsFromUserText(input: {
         args: { source: 'user_text', text: input.text.slice(0, 400) },
         outcome: 'ok',
         match: usage.match,
-        from_user_text: true
+        from_user_text: true,
+        ...(rollup ? { rollup: true, child_slug: child?.slug, child_name: child?.name } : {})
       }
     }))
   }
