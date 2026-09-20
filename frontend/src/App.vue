@@ -24,7 +24,7 @@ import {
   Upload
 } from '@lucide/vue'
 import ObserveMetricsPanel from './components/ObserveMetricsPanel.vue'
-import { dedupeSessionRows, sessionDisplayTitle, shortSessionKey } from './utils/session-title'
+import { agentPrefixedTitle, dedupeSessionRows, sessionDisplayTitle, shortSessionKey } from './utils/session-title'
 
 type Skill = { id:number; slug:string; name:string; description:string; category:string; status:string; version_label:string; version_digest:string; download_count:number }
 type SkillVersion = { version_label:string; version_digest:string; created_at:string }
@@ -278,7 +278,7 @@ function qualityTone(score: number): string {
 }
 
 function sessionTitleOf(session: { title?: string; session_title?: string; session_key?: string; client_name?: string; started_at?: string; turns?: Array<{ user_text?: string }> }): string {
-  return sessionDisplayTitle(session, { max: 48 })
+  return agentPrefixedTitle(session, { max: 48 })
 }
 
 function sessionListRows(list: ObserveSession[] | undefined): ObserveSession[] {

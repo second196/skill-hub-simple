@@ -140,41 +140,45 @@ export function shortSessionKey(sessionKey?: string): string {
   return cleaned.length > 8 ? cleaned.slice(0, 8) : cleaned
 }
 
-/** Collapse exact duplicate session rows (same client/time/turns/title). */
+/** Collapse only exact clone rows. Same title + different cwd/session_key stay separate. */
 export function dedupeSessionRows<T extends {
   id?: number | string
   title?: string
   session_title?: string
   client_name?: string
+  client_id?: string
   started_at?: string
   turn_count?: number
+  session_key?: string
 }>(rows: T[]): T[] {
+  const titleOf = (row: T) =>
+    cleanTitleText(row.title || row.session_title) || String(row.title || row.session_title || '')
+  const exactKey = (row: T) =>
+    [
+      row.client_id || '',
+      row.client_name || '',
+      row.session_key || '',
+      row.started_at || '',
+      String(row.turn_count ?? ''),
+      titleOf(row)
+    ].join('|')
   const seen = new Set<string>()
   return rows.filter((row) => {
-    const title = cleanTitleText(row.title || row.session_title) || String(row.title || row.session_title || '')
-    const key = [
-      row.client_name || '',
-      row.started_at || '',
-      String(row.turn_count ?? ''),
-      title,
-      shortSessionKey((row as { session_key?: string }).session_key)
-    ].join('|')
-    // Keep first of true clones (same identity except numeric id)
-    const cloneKey = [
-      row.client_name || '',
-      row.started_at || '',
-      String(row.turn_count ?? ''),
-      title
-    ].join('|')
-    if (seen.has(cloneKey)) return false
-    seen.add(cloneKey)
-    void key
+    const key = exactKey(row)
+    if (seen.has(key)) return false
+    seen.add(key)
     return true
   })
 }
 
+export function agentPrefixedTitle(session: SessionTitleInput, options?: { max?: number }): string {
+  const agent = clientDisplayName(session.client_name)
+  const title = sessionDisplayTitle(session, { max: options?.max ?? 36 })
+  return `${agent}·${title}`
+}
+
 export function sessionOptionLabel(session: SessionTitleInput & { turn_count?: number }): string {
-  const title = sessionDisplayTitle(session, { max: 28 })
+  const title = agentPrefixedTitle(session, { max: 28 })
   const turns = Number(session.turn_count ?? 0)
   return turns > 0 ? `${title} · ${turns} 回合` : title
 }

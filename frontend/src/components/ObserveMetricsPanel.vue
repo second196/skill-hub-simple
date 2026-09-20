@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import type { EChartsOption } from 'echarts'
 import type { ObserveMetricId, SkillTokenUsage } from '../types/observe-metrics'
-import { clientDisplayName, dedupeSessionRows, sessionDisplayTitle, sessionOptionLabel } from '../utils/session-title'
+import { agentPrefixedTitle, clientDisplayName, dedupeSessionRows, sessionDisplayTitle, sessionOptionLabel } from '../utils/session-title'
+import SelectField from './SelectField.vue'
+import EchartHost from './EchartHost.vue'
 
 type ObserveQualityLike = {
   healthScore?: number
@@ -251,7 +254,7 @@ const currentSessionMeta = computed(() => {
   const sessions = props.detail?.sessions || []
   const wantedId = localSessionId.value
   const row = sessions.find((s) => String(s.id) === String(wantedId) || s.session_key === wantedId)
-  const title = sessionDisplayTitle(
+  const title = agentPrefixedTitle(
     {
       title: chain?.title || row?.title,
       session_title: chain?.session_title || row?.session_title,
@@ -289,7 +292,7 @@ const sessionOptions = computed(() => {
     })
     .map((session) => ({
       id: String(session.id),
-      title: sessionDisplayTitle(session, { max: 36 }),
+      title: agentPrefixedTitle(session, { max: 36 }),
       optionLabel: sessionOptionLabel({
         ...session,
         turn_count: num(session.turn_count)
@@ -328,7 +331,7 @@ function sessionTitleLabel(session: {
   client_name?: string
   started_at?: string
 }): string {
-  return sessionDisplayTitle(session, { max: 48 })
+  return agentPrefixedTitle(session, { max: 48 })
 }
 
 function onChangeClient(value: string) {
@@ -794,6 +797,426 @@ const overviewCards = computed(() => {
 })
 
 const activeTitle = computed(() => overviewCards.value.find((c) => c.id === selectedId.value)?.title || '')
+
+const axisNameY = computed(() => (selectedId.value === 'tokens' ? 'Tokens' : '数值'))
+const axisNameX = computed(() => {
+  if (sessionScope.value) return selectedId.value === 'tokens' ? '回合' : '回合'
+  return selectedId.value === 'tokens' ? '日期' : '日期'
+})
+
+const seriesVisibility = ref<Record<string, boolean>>({
+  Input: true,
+  'Cache Read': true,
+  'Cache Write': true,
+  Output: true
+})
+
+function toggleSeriesLegend(name: string) {
+  seriesVisibility.value = {
+    ...seriesVisibility.value,
+    [name]: !seriesVisibility.value[name]
+  }
+}
+
+const trendLegendItems = computed(() => {
+  if (selectedId.value === 'tokens' && hasTokenData.value) {
+    return [
+      { key: 'Input', label: 'Input', color: COLORS.input, fixed: false },
+      { key: 'Cache Read', label: 'Cache Read', color: COLORS.cacheRead, fixed: false },
+      { key: 'Cache Write', label: 'Cache Write', color: COLORS.cacheWrite, fixed: false },
+      { key: 'Output', label: 'Output', color: COLORS.output, fixed: false }
+    ]
+  }
+  return [
+    {
+      key: '__single',
+      label: sessionScope.value ? '本会话回合' : selectedId.value === 'tokens' ? '调用节奏（尚无 Token 序列）' : '调用次数',
+      color: COLORS.input,
+      fixed: true
+    }
+  ]
+})
+
+function legendSelected(): Record<string, boolean> {
+  return { ...seriesVisibility.value }
+}
+
+const pieVisibility = ref<Record<string, boolean>>({
+  Input: true,
+  'Cache Read': true,
+  'Cache Write': true,
+  Output: true
+})
+
+function togglePieLegend(name: string) {
+  pieVisibility.value = {
+    ...pieVisibility.value,
+    [name]: !pieVisibility.value[name]
+  }
+}
+
+const pieLegendItems = computed(() => {
+  if (selectedId.value === 'tokens') {
+    return compositionParts.value.map((part) => ({
+      key: part.label,
+      label: part.label,
+      color: part.color,
+      fixed: false
+    }))
+  }
+  return [{ key: '调用次数', label: '调用次数', color: COLORS.input, fixed: true }]
+})
+
+function pieLegendSelected(): Record<string, boolean> {
+  return { ...pieVisibility.value }
+}
+
+const pieOption = computed<EChartsOption>(() => {
+  const isTokens = selectedId.value === 'tokens'
+  const data = isTokens
+    ? compositionParts.value.map((p) => ({
+        name: p.label,
+        value: Math.round(p.value),
+        itemStyle: { color: p.color }
+      }))
+    : [{ name: '调用次数', value: Math.round(num(props.detail?.kpis?.callCount)), itemStyle: { color: COLORS.input } }]
+  const visibleTotal = isTokens
+    ? compositionParts.value
+        .filter((p) => pieVisibility.value[p.label] !== false)
+        .reduce((n, p) => n + p.value, 0)
+    : num(props.detail?.kpis?.callCount)
+  return {
+    color: [COLORS.input, COLORS.cacheRead, COLORS.cacheWrite, COLORS.output],
+    tooltip: { trigger: 'item' },
+    legend: { show: false, selected: pieLegendSelected() },
+    series: [
+      {
+        type: 'pie',
+        radius: ['40%', '62%'],
+        center: ['50%', '50%'],
+        avoidLabelOverlap: true,
+        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+        label: {
+          show: true,
+          color: '#475467',
+          fontSize: 11,
+          formatter: '{b}\n{d}%'
+        },
+        labelLine: {
+          show: true,
+          length: 12,
+          length2: 8,
+          lineStyle: { color: '#d0d5dd' }
+        },
+        labelLayout: {
+          hideOverlap: true
+        },
+        data
+      }
+    ],
+    title: {
+      text: isTokens ? fmtCompact(visibleTotal) : fmtInt(visibleTotal),
+      subtext: isTokens ? 'Total Tokens' : '合计',
+      left: '50%',
+      top: '50%',
+      itemGap: 2,
+      textAlign: 'center',
+      textVerticalAlign: 'middle',
+      textStyle: { color: '#14213d', fontSize: 18, fontWeight: 700 },
+      subtextStyle: { color: '#98a2b3', fontSize: 11 }
+    }
+  } as EChartsOption
+})
+
+const trendBarOption = computed<EChartsOption>(() => {
+  const isTokens = selectedId.value === 'tokens' && hasTokenData.value
+  if (sessionScope.value) {
+    const rows = turnRows.value
+    const categories = rows.map((row) => `T${row.turnIndex}`)
+    if (isTokens) {
+      return {
+        color: [COLORS.input, COLORS.cacheRead, COLORS.cacheWrite, COLORS.output],
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        legend: { show: false, selected: legendSelected() },
+        grid: { left: 56, right: 20, top: 28, bottom: 48 },
+        xAxis: {
+          type: 'category',
+          data: categories,
+          name: '回合',
+          nameLocation: 'middle',
+          nameGap: 30,
+          axisLabel: { color: '#98a2b3', fontSize: 11, interval: 'auto' },
+          axisLine: { lineStyle: { color: '#e4e8f0' } },
+          axisTick: { show: false }
+        },
+        yAxis: {
+          type: 'value',
+          name: 'Tokens',
+          nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+          axisLabel: {
+            color: '#98a2b3',
+            fontSize: 11,
+            formatter: (value: number) => fmtCompact(value)
+          },
+          splitLine: { lineStyle: { color: '#eef2f7' } }
+        },
+        series: [
+          { name: 'Input', type: 'bar', stack: 'total', barMaxWidth: 22, data: rows.map((r) => r.usage?.inputTokens || 0), itemStyle: { borderRadius: [0, 0, 0, 0] } },
+          { name: 'Cache Read', type: 'bar', stack: 'total', barMaxWidth: 22, data: rows.map((r) => r.usage?.cacheReadTokens || 0) },
+          { name: 'Cache Write', type: 'bar', stack: 'total', barMaxWidth: 22, data: rows.map((r) => r.usage?.cacheWriteTokens || 0) },
+          { name: 'Output', type: 'bar', stack: 'total', barMaxWidth: 22, data: rows.map((r) => r.usage?.outputTokens || 0), itemStyle: { borderRadius: [4, 4, 0, 0] } }
+        ]
+      }
+    }
+    return {
+      color: [COLORS.input],
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { left: 56, right: 20, top: 28, bottom: 48 },
+      xAxis: {
+        type: 'category',
+        data: categories,
+        name: '回合',
+        nameLocation: 'middle',
+        nameGap: 30,
+        axisLabel: { color: '#98a2b3', fontSize: 11, interval: 'auto' },
+        axisLine: { lineStyle: { color: '#e4e8f0' } },
+        axisTick: { show: false }
+      },
+      yAxis: {
+        type: 'value',
+        name: axisNameY.value,
+        nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+        axisLabel: { color: '#98a2b3', fontSize: 11 },
+        splitLine: { lineStyle: { color: '#eef2f7' } }
+      },
+      series: [
+        {
+          name: axisNameY.value,
+          type: 'bar',
+          barMaxWidth: 22,
+          data: rows.map((r) => (selectedId.value === 'tokens' ? r.total : r.steps)),
+          itemStyle: { color: COLORS.input, borderRadius: [6, 6, 0, 0] }
+        }
+      ]
+    }
+  }
+
+  const points = trendPoints.value
+  const categories = points.map((p) => p.day.slice(5))
+  if (isTokens) {
+    return {
+      color: [COLORS.input, COLORS.cacheRead, COLORS.cacheWrite, COLORS.output],
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      legend: { show: false, selected: legendSelected() },
+      grid: { left: 64, right: 24, top: 28, bottom: 48 },
+      xAxis: {
+        type: 'category',
+        data: categories,
+        name: '日期',
+        nameLocation: 'middle',
+        nameGap: 30,
+        axisLabel: { color: '#98a2b3', fontSize: 11, interval: 'auto' },
+        axisLine: { lineStyle: { color: '#e4e8f0' } },
+        axisTick: { show: false }
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Tokens',
+        nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+        axisLabel: {
+          color: '#98a2b3',
+          fontSize: 11,
+          formatter: (value: number) => fmtCompact(value)
+        },
+        splitLine: { lineStyle: { color: '#eef2f7' } }
+      },
+      series: [
+        { name: 'Input', type: 'bar', stack: 'total', barMaxWidth: 28, data: points.map((p) => p.input || p.tokens * 0.25) },
+        { name: 'Cache Read', type: 'bar', stack: 'total', barMaxWidth: 28, data: points.map((p) => p.cacheRead || p.tokens * 0.55) },
+        { name: 'Cache Write', type: 'bar', stack: 'total', barMaxWidth: 28, data: points.map((p) => p.cacheWrite || p.tokens * 0.1) },
+        { name: 'Output', type: 'bar', stack: 'total', barMaxWidth: 28, data: points.map((p) => p.output || p.tokens * 0.1), itemStyle: { borderRadius: [4, 4, 0, 0] } }
+      ]
+    }
+  }
+  return {
+    color: [COLORS.input],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 56, right: 20, top: 28, bottom: 48 },
+    xAxis: {
+      type: 'category',
+      data: categories,
+      name: axisNameX.value,
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: { color: '#98a2b3', fontSize: 11, interval: 'auto' },
+      axisLine: { lineStyle: { color: '#e4e8f0' } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: axisNameY.value,
+      nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+      axisLabel: {
+        color: '#98a2b3',
+        fontSize: 11,
+        formatter: (value: number) => (selectedId.value === 'tokens' ? fmtCompact(value) : String(value))
+      },
+      splitLine: { lineStyle: { color: '#eef2f7' } }
+    },
+    series: [
+      {
+        name: axisNameY.value,
+        type: 'bar',
+        barMaxWidth: 28,
+        data: points.map((p) => (selectedId.value === 'tokens' ? p.tokens : p.calls)),
+        itemStyle: { color: COLORS.input, borderRadius: [6, 6, 0, 0] }
+      }
+    ]
+  }
+})
+
+const rankBarOption = computed<EChartsOption>(() => {
+  const isTokens = selectedId.value === 'tokens'
+  if (sessionScope.value) {
+    const rows = topTurnRows.value
+    return {
+      color: ['#7c3aed'],
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { left: 56, right: 16, top: 28, bottom: 48 },
+      xAxis: {
+        type: 'category',
+        data: rows.map((r) => `T${r.turnIndex}`),
+        name: '回合',
+        nameLocation: 'middle',
+        nameGap: 30,
+        axisLabel: { color: '#98a2b3', fontSize: 11 },
+        axisLine: { lineStyle: { color: '#e4e8f0' } },
+        axisTick: { show: false }
+      },
+      yAxis: {
+        type: 'value',
+        name: isTokens ? 'Tokens' : '步骤',
+        nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+        axisLabel: {
+          color: '#98a2b3',
+          fontSize: 11,
+          formatter: (value: number) => (isTokens ? fmtCompact(value) : String(value))
+        },
+        splitLine: { lineStyle: { color: '#eef2f7' } }
+      },
+      series: [
+        {
+          type: 'bar',
+          barMaxWidth: 26,
+          data: rows.map((r) => (isTokens ? r.total : r.steps)),
+          itemStyle: { color: '#7c3aed', borderRadius: [6, 6, 0, 0] }
+        }
+      ]
+    } as EChartsOption
+  }
+  const rows = topSessionBars.value
+  return {
+    color: [COLORS.cacheWrite, COLORS.input],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 56, right: 16, top: 28, bottom: 56 },
+    xAxis: {
+      type: 'category',
+      data: rows.map((r) => (r.clientName === 'codex' ? 'Codex' : 'Claude')),
+      name: 'Agent',
+      nameLocation: 'middle',
+      nameGap: 32,
+      axisLabel: { color: '#98a2b3', fontSize: 11, interval: 0, rotate: rows.length > 6 ? 30 : 0 },
+      axisLine: { lineStyle: { color: '#e4e8f0' } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: isTokens ? 'Tokens' : '回合',
+      nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+      axisLabel: {
+        color: '#98a2b3',
+        fontSize: 11,
+        formatter: (value: number) => (isTokens ? fmtCompact(value) : String(value))
+      },
+      splitLine: { lineStyle: { color: '#eef2f7' } }
+    },
+    series: [
+      {
+        type: 'bar',
+        barMaxWidth: 28,
+        data: rows.map((r) => ({
+          value: r.value,
+          itemStyle: { color: r.fill, borderRadius: [6, 6, 0, 0] }
+        })),
+        label: {
+          show: true,
+          position: 'top',
+          color: '#667085',
+          fontSize: 10
+        }
+      }
+    ]
+  } as EChartsOption
+})
+
+const histogramOption = computed<EChartsOption>(() => {
+  const isTokens = selectedId.value === 'tokens'
+  return {
+    color: [COLORS.accent],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 56, right: 20, top: 28, bottom: 56 },
+    xAxis: {
+      type: 'category',
+      data: histogram.value.bins.map((b) => b.label),
+      name: isTokens ? 'Token 区间' : '步骤区间',
+      nameLocation: 'middle',
+      nameGap: 36,
+      axisLabel: { color: '#98a2b3', fontSize: 10, interval: 0, rotate: 28 },
+      axisLine: { lineStyle: { color: '#e4e8f0' } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: '会话/回合数',
+      nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#eef2f7' } }
+    },
+    series: [
+      {
+        name: '数量',
+        type: 'bar',
+        barMaxWidth: 36,
+        data: histogram.value.bins.map((b) => b.count),
+        itemStyle: { color: COLORS.accent, borderRadius: [6, 6, 0, 0], opacity: 0.9 }
+      }
+    ]
+  }
+})
+
+const metricSelectOptions = computed(() =>
+  overviewCards.value.map((card) => ({ value: card.id, label: card.title }))
+)
+const sessionSortOptions = [
+  { value: 'tokens_desc', label: '消耗降序' },
+  { value: 'tokens_asc', label: '消耗升序' },
+  { value: 'turns_desc', label: '回合降序' },
+  { value: 'time_desc', label: '最近优先' }
+]
+const clientSelectOptions = computed(() => [
+  { value: '', label: '全部客户端' },
+  ...clientOptions.value.map((client) => ({ value: client.id, label: client.label }))
+])
+const sessionSelectOptions = computed(() => [
+  { value: '', label: '全部会话', meta: `${sessionOptions.value.length}` },
+  ...sessionOptions.value.map((session) => ({
+    value: session.id,
+    label: session.title,
+    meta: session.turns ? `${session.turns} 回合` : undefined,
+    agent: session.clientName === 'codex' ? 'Codex' : 'Claude Code'
+  }))
+])
+
 const activeDesc = computed(() => {
   switch (selectedId.value) {
     case 'tokens':
@@ -1032,41 +1455,32 @@ function exportCsv() {
   <section class="observe-metrics observe-metrics-rich" aria-label="指标观测">
     <div class="metrics-toolbar panel">
       <div class="toolbar-group">
-        <label class="field">
-          <span>指标</span>
-          <select :value="selectedId" @change="selectMetric(($event.target as HTMLSelectElement).value as ObserveMetricId)">
-            <option v-for="card in overviewCards" :key="card.id" :value="card.id">{{ card.title }}</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>会话排序</span>
-          <select v-model="sessionSort">
-            <option value="tokens_desc">消耗降序</option>
-            <option value="tokens_asc">消耗升序</option>
-            <option value="turns_desc">回合降序</option>
-            <option value="time_desc">最近优先</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>客户端</span>
-          <select :value="localClientId" @change="onChangeClient(($event.target as HTMLSelectElement).value)">
-            <option value="">全部客户端</option>
-            <option v-for="client in clientOptions" :key="client.id" :value="client.id">{{ client.label }}</option>
-          </select>
-        </label>
-        <label class="field grow">
-          <span>会话</span>
-          <select
-            class="session-select"
-            :value="localSessionId"
-            @change="onChangeSession(($event.target as HTMLSelectElement).value)"
-          >
-            <option value="">全部会话</option>
-            <option v-for="session in sessionOptions" :key="session.id" :value="session.id" :title="session.title">
-              {{ session.optionLabel }}
-            </option>
-          </select>
-        </label>
+        <SelectField
+          label="指标"
+          :model-value="selectedId"
+          :options="metricSelectOptions"
+          @update:model-value="selectMetric($event as ObserveMetricId)"
+        />
+        <SelectField
+          label="会话排序"
+          :model-value="sessionSort"
+          :options="sessionSortOptions"
+          @update:model-value="sessionSort = $event as typeof sessionSort"
+        />
+        <SelectField
+          label="客户端"
+          :model-value="localClientId"
+          :options="clientSelectOptions"
+          @update:model-value="onChangeClient($event)"
+        />
+        <SelectField
+          label="会话"
+          grow
+          :model-value="localSessionId"
+          :options="sessionSelectOptions"
+          placeholder="全部会话"
+          @update:model-value="onChangeSession($event)"
+        />
       </div>
       <div class="toolbar-actions">
         <button type="button" class="btn-ghost" @click="exportCsv">导出 CSV</button>
@@ -1130,15 +1544,21 @@ function exportCsv() {
           <header class="metric-block-head">
             <h3>{{ sessionScope ? (selectedId === 'tokens' ? 'Turn 消耗序列' : `${activeTitle} · 回合序列`) : (selectedId === 'tokens' ? 'Token 消耗趋势' : `${activeTitle}趋势`) }}</h3>
             <div class="legend-row">
-              <span v-if="selectedId === 'tokens' && hasTokenData" class="legend-item"><i :style="{ background: COLORS.input }"></i>Input</span>
-              <span v-if="selectedId === 'tokens' && hasTokenData" class="legend-item"><i :style="{ background: COLORS.cacheRead }"></i>Cache Read</span>
-              <span v-if="selectedId === 'tokens' && hasTokenData" class="legend-item"><i :style="{ background: COLORS.cacheWrite }"></i>Cache Write</span>
-              <span v-if="selectedId === 'tokens' && hasTokenData" class="legend-item"><i :style="{ background: COLORS.output }"></i>Output</span>
-              <span v-else class="legend-item"><i :style="{ background: COLORS.input }"></i>{{ sessionScope ? '本会话回合' : (selectedId === 'tokens' ? '调用节奏（尚无 Token 序列）' : '调用次数') }}</span>
+              <button
+                v-for="item in trendLegendItems"
+                :key="item.key"
+                type="button"
+                :class="['legend-item', 'legend-toggle', { off: !item.fixed && seriesVisibility[item.key] === false }]"
+                :disabled="Boolean(item.fixed)"
+                @click="!item.fixed && toggleSeriesLegend(item.key)"
+              >
+                <i :style="{ background: item.color }"></i>{{ item.label }}
+              </button>
             </div>
           </header>
           <div class="metric-chart chart-box-pro">
-            <svg class="metric-svg" viewBox="0 0 700 200" role="img" aria-label="趋势图">
+            <EchartHost v-if="selectedId === 'tokens' || !sessionScope" :option="trendBarOption" :height="280" />
+            <svg v-else class="metric-svg" viewBox="0 0 700 200" role="img" aria-label="趋势图">
               <line x1="40" y1="170" x2="680" y2="170" :stroke="COLORS.grid" />
               <text x="36" y="40" text-anchor="end" fill="#98a2b3" font-size="11">{{ fmtCompact(stackedTrendBars[0]?.max || 0) }}</text>
               <text x="36" y="170" text-anchor="end" fill="#98a2b3" font-size="11">0</text>
@@ -1177,39 +1597,24 @@ function exportCsv() {
 
         <section class="metric-block">
           <header class="metric-block-head">
-            <h3>{{ sessionScope ? 'Token 构成 · 当前会话' : (selectedId === 'tokens' ? 'Token 构成' : '构成拆分') }}</h3>
-          </header>
-          <div class="compose-layout-pro">
-            <div class="donut-wrap">
-              <svg class="metric-svg donut-svg" viewBox="0 0 220 220" role="img" aria-label="构成环图">
-                <circle
-                  v-for="part in donutParts"
-                  :key="part.key"
-                  cx="110"
-                  cy="110"
-                  r="78"
-                  fill="none"
-                  :stroke="part.color"
-                  stroke-width="28"
-                  :stroke-dasharray="`${part.dash} ${part.gap}`"
-                  :stroke-dashoffset="-part.offset"
-                  transform="rotate(-90 110 110)"
-                />
-                <circle cx="110" cy="110" r="54" fill="#fff" />
-                <text x="110" y="104" text-anchor="middle" fill="#667085" font-size="12">{{ selectedId === 'tokens' ? 'Total' : '合计' }}</text>
-                <text x="110" y="128" text-anchor="middle" fill="#14213d" font-size="20" font-weight="700">
-                  {{ selectedId === 'tokens' ? fmtCompact(usageTotal.totalTokens) : fmtInt(num(detail?.kpis?.callCount)) }}
-                </text>
-              </svg>
+            <h3>{{ sessionScope ? 'Token 构成' : (selectedId === 'tokens' ? 'Token 构成' : '构成拆分') }}</h3>
+            <div class="legend-row">
+              <button
+                v-for="item in pieLegendItems"
+                :key="item.key"
+                type="button"
+                :class="['legend-item', 'legend-toggle', { off: !item.fixed && pieVisibility[item.key] === false }]"
+                :disabled="Boolean(item.fixed)"
+                @click="!item.fixed && togglePieLegend(item.key)"
+              >
+                <i :style="{ background: item.color }"></i>{{ item.label }}
+              </button>
             </div>
-            <ul class="metric-compose-list">
-              <li v-for="part in compositionParts" :key="part.key">
-                <span class="compose-label">{{ part.label }}</span>
-                <span class="compose-track"><span class="compose-bar" :style="{ width: `${Math.round(part.pct * 100)}%`, background: part.color }"></span></span>
-                <span class="compose-value">{{ part.text }}</span>
-                <span class="compose-pct">{{ fmtPct(part.pct) }}</span>
-              </li>
-            </ul>
+          </header>
+          <div class="compose-layout-pro compose-layout-pie">
+            <div class="donut-wrap">
+              <EchartHost :option="pieOption" :height="280" />
+            </div>
           </div>
           <p class="metric-block-note">
             {{ sessionScope ? '仅统计当前会话内、该技能相关回合的 Token 构成。' : 'Cache Read 占比高通常表示上下文复用较好；Cache Write 持续偏高时，可关注技能正文体积与加载次数。' }}
@@ -1222,53 +1627,7 @@ function exportCsv() {
             <span class="chip-muted">Top {{ (sessionScope ? topTurnRows : topSessionBars).length || 0 }}</span>
           </header>
           <div class="metric-chart chart-box-pro">
-            <svg class="metric-svg" viewBox="0 0 700 200" role="img" aria-label="排行柱状图">
-              <line x1="40" y1="170" x2="680" y2="170" :stroke="COLORS.grid" />
-              <template v-if="sessionScope">
-                <g v-for="(turn, index) in topTurnRows" :key="`turn-${turn.turnIndex}`">
-                  <rect
-                    :x="topTurnRows.length <= 1 ? 330 : 50 + (index / Math.max(topTurnRows.length - 1, 1)) * 620 - 12"
-                    :y="170 - Math.max(4, ((selectedId === 'tokens' ? turn.total : turn.steps) / Math.max(1, ...topTurnRows.map((t) => (selectedId === 'tokens' ? t.total : t.steps)))) * 120)"
-                    width="24"
-                    :height="Math.max(4, ((selectedId === 'tokens' ? turn.total : turn.steps) / Math.max(1, ...topTurnRows.map((t) => (selectedId === 'tokens' ? t.total : t.steps)))) * 120)"
-                    rx="5"
-                    fill="#7c3aed"
-                    opacity="0.88"
-                  >
-                    <title>T{{ turn.turnIndex }} · {{ turnDisplayValue(turn) }}</title>
-                  </rect>
-                  <text
-                    :x="topTurnRows.length <= 1 ? 342 : 50 + (index / Math.max(topTurnRows.length - 1, 1)) * 620"
-                    y="188"
-                    text-anchor="middle"
-                    fill="#98a2b3"
-                    font-size="10"
-                  >T{{ turn.turnIndex }}</text>
-                </g>
-                <text v-if="!topTurnRows.length" x="350" y="100" text-anchor="middle" fill="#98a2b3" font-size="13">暂无回合数据</text>
-              </template>
-              <template v-else>
-                <g v-for="bar in topSessionBars" :key="bar.id">
-                  <rect
-                    :x="bar.x - 14"
-                    :y="bar.y"
-                    width="28"
-                    :height="bar.h"
-                    rx="6"
-                    :fill="bar.fill"
-                    opacity="0.9"
-                    style="cursor: pointer"
-                    @click="selectSessionRow(bar)"
-                  >
-                    <title>{{ bar.title }} · {{ sessionDisplayValue(bar) }}</title>
-                  </rect>
-                  <text :x="bar.x" y="188" text-anchor="middle" fill="#98a2b3" font-size="10">
-                    {{ bar.clientName === 'codex' ? 'CX' : 'CC' }}
-                  </text>
-                </g>
-                <text v-if="!topSessionBars.length" x="350" y="100" text-anchor="middle" fill="#98a2b3" font-size="13">暂无会话数据</text>
-              </template>
-            </svg>
+            <EchartHost :option="rankBarOption" :height="280" />
           </div>
         </section>
 
@@ -1278,31 +1637,7 @@ function exportCsv() {
             <span v-if="sessionScope" class="chip-muted">当前会话</span>
           </header>
           <div class="metric-chart chart-box-pro">
-            <svg class="metric-svg" viewBox="0 0 700 200" role="img" aria-label="分布直方图">
-              <line x1="40" y1="170" x2="680" y2="170" :stroke="COLORS.grid" />
-              <rect
-                v-for="bin in histogram.bins"
-                :key="bin.label"
-                :x="bin.x"
-                :y="bin.y"
-                :width="bin.w"
-                :height="bin.h"
-                rx="4"
-                :fill="COLORS.accent"
-                opacity="0.78"
-              >
-                <title>{{ bin.label }} · {{ bin.count }}</title>
-              </rect>
-              <g v-for="marker in histogram.markers" :key="marker.label">
-                <line :x1="marker.x" y1="20" :x2="marker.x" y2="170" :stroke="marker.label === 'P95' ? COLORS.danger : COLORS.input" stroke-dasharray="4 3" />
-                <text :x="marker.x" :y="marker.label === 'P95' ? 36 : marker.label === 'P90' ? 52 : 68" text-anchor="middle" :fill="marker.label === 'P95' ? COLORS.danger : COLORS.input" font-size="11">
-                  {{ marker.label }}
-                </text>
-              </g>
-              <text x="40" y="190" fill="#98a2b3" font-size="10">{{ fmtCompact(histogram.min) }}</text>
-              <text x="680" y="190" text-anchor="end" fill="#98a2b3" font-size="10">{{ fmtCompact(histogram.max) }}</text>
-              <text v-if="!histogram.bins.length" x="350" y="100" text-anchor="middle" fill="#98a2b3" font-size="13">暂无分布数据</text>
-            </svg>
+            <EchartHost :option="histogramOption" :height="280" />
           </div>
           <div class="stat-row">
             <span class="stat-pill">样本 <strong>{{ selectedId === 'tokens' ? tokenTurnValues.length : turnRows.length }}</strong></span>

@@ -702,6 +702,66 @@ public class ObservationRepository {
         }
     }
 
+    /**
+     * Collapse only exact clone rows (same client + started_at + turn_count + title).
+     * Sessions that share a display title but differ by session_key/cwd stay separate.
+     */
+    static List<Map<String, Object>> mergeSessionRowsForDisplay(List<Map<String, Object>> sessions) {
+        if (sessions == null || sessions.size() < 2) {
+            return sessions == null ? new ArrayList<Map<String, Object>>() : sessions;
+        }
+        List<Map<String, Object>> kept = new ArrayList<Map<String, Object>>();
+        Map<String, Map<String, Object>> exactIndex = new HashMap<String, Map<String, Object>>();
+        for (Map<String, Object> session : sessions) {
+            String exactKey = String.valueOf(session.get("client_id") == null ? "" : session.get("client_id"))
+                    + '|' + String.valueOf(session.get("client_name") == null ? "" : session.get("client_name"))
+                    + '|' + String.valueOf(session.get("started_at") == null ? "" : session.get("started_at"))
+                    + '|' + String.valueOf(session.get("turn_count") == null ? "" : session.get("turn_count"))
+                    + '|' + String.valueOf(session.get("title") == null ? "" : session.get("title"));
+            Map<String, Object> existing = exactIndex.get(exactKey);
+            if (existing == null) {
+                Map<String, Object> copy = new LinkedHashMap<String, Object>(session);
+                exactIndex.put(exactKey, copy);
+                kept.add(copy);
+            } else {
+                absorbSessionMetrics(existing, session);
+            }
+        }
+        return kept;
+    }
+
+    private static void absorbSessionMetrics(Map<String, Object> primary, Map<String, Object> other) {
+        if (primary == null || other == null || primary == other) return;
+        primary.put("turn_count", Long.valueOf(Math.max(longOf(primary.get("turn_count")), longOf(other.get("turn_count")))));
+        for (String field : new String[] { "token_total", "token_input", "token_cache_read", "token_cache_write", "token_output", "token_requests" }) {
+            long sum = longOf(primary.get(field)) + longOf(other.get(field));
+            primary.put(field, Long.valueOf(sum));
+        }
+        Object ended = other.get("ended_at");
+        if (ended != null) {
+            Object current = primary.get("ended_at");
+            if (current == null || String.valueOf(ended).compareTo(String.valueOf(current)) > 0) {
+                primary.put("ended_at", ended);
+            }
+        }
+        Object started = other.get("started_at");
+        if (started != null) {
+            Object current = primary.get("started_at");
+            if (current == null || String.valueOf(started).compareTo(String.valueOf(current)) < 0) {
+                primary.put("started_at", started);
+            }
+        }
+        @SuppressWarnings("unchecked")
+        List<Object> aliases = (List<Object>) primary.get("merged_session_ids");
+        List<Object> mergedIds = aliases == null ? new ArrayList<Object>() : new ArrayList<Object>(aliases);
+        Object otherId = other.get("id");
+        if (otherId != null && !mergedIds.contains(otherId) && !otherId.equals(primary.get("id"))) {
+            mergedIds.add(otherId);
+        }
+        if (!mergedIds.isEmpty()) primary.put("merged_session_ids", mergedIds);
+        primary.put("merged_count", Integer.valueOf(mergedIds.size() + 1));
+    }
+
     public Map<String, Object> sessionList(String clientId, Long sessionId) {
         Map<String, Object> result = new LinkedHashMap<String, Object>();
         result.put("clients", jdbc.queryForList(
@@ -727,6 +787,7 @@ public class ObservationRepository {
                 ? jdbc.queryForList(sessionSql)
                 : jdbc.queryForList(sessionSql, args.toArray());
         enrichSessionTitles(sessions);
+        sessions = mergeSessionRowsForDisplay(sessions);
         result.put("sessions", sessions);
         Long selectedId = sessionId;
         if (selectedId != null) {
@@ -833,6 +894,7 @@ public class ObservationRepository {
             }
         }
         enrichSessionTitles(sessions);
+        sessions = mergeSessionRowsForDisplay(sessions);
         result.put("sessions", sessions);
 
         Long selectedId = sessionId;
