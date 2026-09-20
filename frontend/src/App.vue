@@ -24,6 +24,7 @@ import {
   Upload
 } from '@lucide/vue'
 import ObserveMetricsPanel from './components/ObserveMetricsPanel.vue'
+import { dedupeSessionRows, sessionDisplayTitle, shortSessionKey } from './utils/session-title'
 
 type Skill = { id:number; slug:string; name:string; description:string; category:string; status:string; version_label:string; version_digest:string; download_count:number }
 type SkillVersion = { version_label:string; version_digest:string; created_at:string }
@@ -277,16 +278,11 @@ function qualityTone(score: number): string {
 }
 
 function sessionTitleOf(session: { title?: string; session_title?: string; session_key?: string; client_name?: string; started_at?: string; turns?: Array<{ user_text?: string }> }): string {
-  const direct = session.title || session.session_title
-  if (direct && String(direct).trim()) return String(direct).trim()
-  const fromTurn = session.turns?.find((turn) => turn.user_text && String(turn.user_text).trim())?.user_text
-  if (fromTurn) {
-    const text = String(fromTurn).replace(/\s+/g, ' ').trim()
-    return text.length > 60 ? `${text.slice(0, 60)}…` : text
-  }
-  const client = clientLabel(session.client_name)
-  const day = session.started_at ? String(session.started_at).slice(0, 10) : ''
-  return day ? `${client} · ${day}` : client
+  return sessionDisplayTitle(session, { max: 48 })
+}
+
+function sessionListRows(list: ObserveSession[] | undefined): ObserveSession[] {
+  return dedupeSessionRows(list || [])
 }
 
 function qualitySortValue(item: ObserveSkillItem, key: ObserveQualitySortKey): number {
@@ -1827,17 +1823,17 @@ function handleGlobalKeydown(event: KeyboardEvent) {
               </button>
             </div>
             <button
-              v-for="session in observeSessions?.sessions || []"
+              v-for="session in sessionListRows(observeSessions?.sessions)"
               :key="session.id"
               :class="['observe-session', { selected: String(observeSessions?.selectedSessionId) === String(session.id) }]"
               type="button"
               @click="selectObserveSession(session)"
             >
               <strong>{{ sessionTitleOf(session) }}</strong>
-              <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合</span>
+              <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合<template v-if="shortSessionKey(session.session_key)"> · #{{ shortSessionKey(session.session_key) }}</template></span>
               <span class="session-client-line">{{ clientLabel(session.client_name) }}</span>
             </button>
-            <p v-if="!(observeSessions?.sessions || []).length" class="empty">还没有上传会话。先在本机采集，再执行 <code>skillhub-observer upload --service-url http://127.0.0.1:8080</code> 上传全部会话原文。</p>
+            <p v-if="!sessionListRows(observeSessions?.sessions).length" class="empty">还没有上传会话。先在本机采集，再执行 <code>skillhub-observer upload --service-url http://127.0.0.1:8080</code> 上传全部会话原文。</p>
           </aside>
 
           <div class="observe-chain" aria-label="会话原文">
@@ -2098,16 +2094,16 @@ function handleGlobalKeydown(event: KeyboardEvent) {
               <aside class="observe-session-list" aria-label="会话列表">
                 <div class="version-column-title">会话</div>
                 <button
-                  v-for="session in observeDetail.sessions"
+                  v-for="session in sessionListRows(observeDetail.sessions)"
                   :key="session.id"
                   :class="['observe-session', { selected: String(observeDetail.selectedSessionId) === String(session.id) }]"
                   type="button"
                   @click="selectObserveSession(session)"
                 >
                   <strong>{{ sessionTitleOf(session) }}</strong>
-                  <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合 · {{ clientLabel(session.client_name) }}</span>
+                  <span>{{ formatObserveTime(session.started_at) }} · {{ asNumber(session.turn_count) }} 回合 · {{ clientLabel(session.client_name) }}<template v-if="shortSessionKey(session.session_key)"> · #{{ shortSessionKey(session.session_key) }}</template></span>
                 </button>
-                <p v-if="!observeDetail.sessions.length" class="empty">这个筛选条件下没有会话。</p>
+                <p v-if="!sessionListRows(observeDetail.sessions).length" class="empty">这个筛选条件下没有会话。</p>
               </aside>
 
               <div

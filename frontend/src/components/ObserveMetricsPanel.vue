@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { ObserveMetricId, SkillTokenUsage } from '../types/observe-metrics'
+import { clientDisplayName, dedupeSessionRows, sessionDisplayTitle, sessionOptionLabel } from '../utils/session-title'
 
 type ObserveQualityLike = {
   healthScore?: number
@@ -171,9 +172,7 @@ function fmtTime(value?: string): string {
 }
 
 function clientLabel(name?: string): string {
-  if (name === 'codex') return 'Codex'
-  if (name === 'claude-code') return 'Claude Code'
-  return name || '未知客户端'
+  return clientDisplayName(name)
 }
 
 function quantile(sorted: number[], q: number): number {
@@ -252,12 +251,17 @@ const currentSessionMeta = computed(() => {
   const sessions = props.detail?.sessions || []
   const wantedId = localSessionId.value
   const row = sessions.find((s) => String(s.id) === String(wantedId) || s.session_key === wantedId)
-  const title =
-    chain?.title ||
-    chain?.session_title ||
-    row?.title ||
-    row?.session_title ||
-    sessionTitleLabel(row || chain || {})
+  const title = sessionDisplayTitle(
+    {
+      title: chain?.title || row?.title,
+      session_title: chain?.session_title || row?.session_title,
+      session_key: chain?.session_key || row?.session_key,
+      client_name: chain?.client_name || row?.client_name,
+      started_at: chain?.started_at || row?.started_at,
+      turns: chain?.turns
+    },
+    { max: 48 }
+  )
   const chainUsage = parseUsage(chain?.usage) || emptyUsage()
   return {
     id: wantedId || String(chain?.id || row?.id || ''),
@@ -276,7 +280,7 @@ const currentSessionMeta = computed(() => {
 })
 
 const sessionOptions = computed(() => {
-  const list = props.detail?.sessions || []
+  const list = dedupeSessionRows(props.detail?.sessions || [])
   return list
     .filter((session) => {
       if (!localClientId.value) return true
@@ -285,7 +289,11 @@ const sessionOptions = computed(() => {
     })
     .map((session) => ({
       id: String(session.id),
-      title: `${clientLabel(session.client_name)}-${sessionTitleLabel(session)}`,
+      title: sessionDisplayTitle(session, { max: 36 }),
+      optionLabel: sessionOptionLabel({
+        ...session,
+        turn_count: num(session.turn_count)
+      }),
       clientName: session.client_name,
       clientId: session.client_id || '',
       startedAt: session.started_at,
@@ -320,11 +328,7 @@ function sessionTitleLabel(session: {
   client_name?: string
   started_at?: string
 }): string {
-  const direct = session.title || session.session_title
-  if (direct && String(direct).trim()) return String(direct).trim()
-  const client = clientLabel(session.client_name)
-  const day = session.started_at ? String(session.started_at).slice(0, 10) : ''
-  return day ? `${client} · ${day}` : client
+  return sessionDisplayTitle(session, { max: 48 })
 }
 
 function onChangeClient(value: string) {
@@ -454,7 +458,7 @@ const tokenStats = computed(() => {
 })
 
 const sessionRows = computed(() => {
-  const list = props.detail?.sessions || []
+  const list = dedupeSessionRows(props.detail?.sessions || [])
   return list.map((session) => {
     const apiTokens = num(session.token_total)
     const isCurrent =
@@ -1052,10 +1056,14 @@ function exportCsv() {
         </label>
         <label class="field grow">
           <span>会话</span>
-          <select :value="localSessionId" @change="onChangeSession(($event.target as HTMLSelectElement).value)">
+          <select
+            class="session-select"
+            :value="localSessionId"
+            @change="onChangeSession(($event.target as HTMLSelectElement).value)"
+          >
             <option value="">全部会话</option>
-            <option v-for="session in sessionOptions" :key="session.id" :value="session.id">
-              {{ session.title }}<template v-if="session.turns"> · {{ session.turns }} 回合</template>
+            <option v-for="session in sessionOptions" :key="session.id" :value="session.id" :title="session.title">
+              {{ session.optionLabel }}
             </option>
           </select>
         </label>

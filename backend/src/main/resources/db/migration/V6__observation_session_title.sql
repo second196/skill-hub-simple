@@ -1,0 +1,1 @@
+ALTER TABLE observation_session ADD COLUMN IF NOT EXISTS title VARCHAR(255);

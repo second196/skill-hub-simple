@@ -22,6 +22,8 @@ export interface ObservationEvent {
     client_id: string;
     client_name: ClientName;
     session_id: string;
+    /** Real client session title (Claude ai-title / Codex thread_name) when known. */
+    session_title?: string;
     turn_index: number;
     step_id: string;
     seq: number;

@@ -15,6 +15,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Repository
@@ -50,14 +51,19 @@ public class ObservationRepository {
     }
 
     public long upsertSession(long clientRowId, String sessionKey, String clientName, Instant startedAt, Instant endedAt) {
+        return upsertSession(clientRowId, sessionKey, clientName, startedAt, endedAt, null);
+    }
+
+    public long upsertSession(long clientRowId, String sessionKey, String clientName, Instant startedAt, Instant endedAt, String title) {
         Long id = jdbc.queryForObject(
-                "INSERT INTO observation_session (client_row_id, session_key, client_name, started_at, ended_at) " +
-                        "VALUES (?,?,?,?,?) ON CONFLICT (client_row_id, session_key) DO UPDATE SET " +
+                "INSERT INTO observation_session (client_row_id, session_key, client_name, started_at, ended_at, title) " +
+                        "VALUES (?,?,?,?,?,?) ON CONFLICT (client_row_id, session_key) DO UPDATE SET " +
                         "client_name=EXCLUDED.client_name, " +
                         "started_at=COALESCE(EXCLUDED.started_at, observation_session.started_at), " +
                         "ended_at=COALESCE(EXCLUDED.ended_at, observation_session.ended_at), " +
+                        "title=COALESCE(EXCLUDED.title, observation_session.title), " +
                         "updated_at=CURRENT_TIMESTAMP RETURNING id",
-                Long.class, clientRowId, sessionKey, clientName, timestamp(startedAt), timestamp(endedAt));
+                Long.class, clientRowId, sessionKey, clientName, timestamp(startedAt), timestamp(endedAt), title);
         if (id == null) throw new IllegalStateException("无法写入观测会话");
         return id;
     }
@@ -521,7 +527,8 @@ public class ObservationRepository {
     }
 
     /**
-     * First non-empty user text as session display title.
+     * First meaningful user text as session display title.
+     * Skips system-injected context (AGENTS.md / environment_context / ide_opened_file etc.).
      * Must be used with alias {@code sess} and aggregate via MIN/MAX in GROUP BY queries.
      */
     private static final String SESSION_TITLE_JOIN =
@@ -530,11 +537,130 @@ public class ObservationRepository {
                     " FROM observation_turn t2" +
                     " WHERE t2.session_id = sess.id" +
                     "   AND COALESCE(TRIM(t2.user_text), '') <> ''" +
+                    "   AND NOT (" +
+                    "     LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '# agents.md%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE 'agents.md%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<environment_context%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<ide_opened_file%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<system-reminder%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<system_reminder%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<instructions%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<skills_instructions%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<collaboration_mode%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<permissions instructions%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<base_instructions%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<runtime context%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE 'caveat:%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '[system%'" +
+                    "     OR LOWER(COALESCE(TRIM(t2.user_text), '')) LIKE '<cwd>%'" +
+                    "   )" +
                     " ORDER BY t2.turn_index ASC" +
                     " LIMIT 1" +
-                    " ) stitle ON TRUE ";
+                    " ) stitle ON TRUE " +
+                    " LEFT JOIN LATERAL (" +
+                    " SELECT LEFT(COALESCE(TRIM(t3.user_text), ''), 240) AS raw_title" +
+                    " FROM observation_turn t3" +
+                    " WHERE t3.session_id = sess.id" +
+                    "   AND COALESCE(TRIM(t3.user_text), '') <> ''" +
+                    " ORDER BY t3.turn_index ASC" +
+                    " LIMIT 1" +
+                    " ) sraw ON TRUE ";
+
+    static boolean looksLikeSystemSessionText(String text) {
+        if (text == null) return true;
+        String value = text.replaceAll("\\s+", " ").trim();
+        if (value.isEmpty()) return true;
+        String lower = value.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("# agents.md")
+                || lower.startsWith("agents.md")
+                || lower.startsWith("<environment_context")
+                || lower.startsWith("<ide_opened_file")
+                || lower.startsWith("<system-reminder")
+                || lower.startsWith("<system_reminder")
+                || lower.startsWith("<instructions")
+                || lower.startsWith("<skills_instructions")
+                || lower.startsWith("<collaboration_mode")
+                || lower.startsWith("<permissions instructions")
+                || lower.startsWith("<base_instructions")
+                || lower.startsWith("<runtime context")
+                || lower.startsWith("caveat:")
+                || lower.startsWith("[system")
+                || lower.startsWith("<cwd>")
+                || lower.startsWith("you are mimo")
+                || lower.startsWith("you are claude")
+                || lower.startsWith("you are codex")) {
+            return true;
+        }
+        return lower.contains("<cwd>") && lower.contains("</cwd>") && lower.contains("environment");
+    }
+
+    static String cleanSessionTitleText(Object raw) {
+        if (raw == null) return "";
+        String text = String.valueOf(raw).replaceAll("\\s+", " ").trim();
+        if (text.isEmpty() || looksLikeSystemSessionText(text)) return "";
+        text = text.replaceFirst("^<[^>]+>\\s*", "").trim();
+        if (text.isEmpty() || looksLikeSystemSessionText(text)) return "";
+        return text;
+    }
+
+    static String lastPathSegment(String path) {
+        if (path == null) return "";
+        String normalized = path.trim().replace('\\', '/');
+        while (normalized.endsWith("/")) normalized = normalized.substring(0, normalized.length() - 1);
+        int idx = normalized.lastIndexOf('/');
+        String seg = idx >= 0 ? normalized.substring(idx + 1) : normalized;
+        seg = seg.trim().replaceAll("[^A-Za-z0-9._\\-]+$", "").trim();
+        if (seg.isEmpty() || seg.length() > 48) return "";
+        return seg;
+    }
+
+    static String projectHintFromText(Object raw) {
+        if (raw == null) return "";
+        String text = String.valueOf(raw);
+        java.util.regex.Matcher cwd = java.util.regex.Pattern
+                .compile("(?i)<cwd>\\s*([^<\\s]+)\\s*</cwd>")
+                .matcher(text);
+        if (cwd.find()) return lastPathSegment(cwd.group(1));
+        java.util.regex.Matcher agents = java.util.regex.Pattern
+                .compile("(?i)AGENTS\\.md\\s+instructions\\s+for\\s+([^\\s<]+)")
+                .matcher(text);
+        if (agents.find()) return lastPathSegment(agents.group(1));
+        return projectHintFromSessionKey(text);
+    }
+
+    static String projectHintFromSessionKey(Object sessionKey) {
+        if (sessionKey == null) return "";
+        String key = String.valueOf(sessionKey).trim();
+        if (key.isEmpty()) return "";
+        int colon = key.lastIndexOf(':');
+        if (colon >= 0 && colon < key.length() - 1) key = key.substring(colon + 1);
+        int sub = key.toLowerCase(Locale.ROOT).indexOf("/subagents/");
+        if (sub > 0) key = key.substring(0, sub);
+        int slash = key.indexOf('/');
+        if (slash >= 0) key = key.substring(0, slash);
+        key = key.trim();
+        if (key.isEmpty() || key.matches("(?i)[0-9a-f-]{16,}")) return "";
+        int marker = key.lastIndexOf("--");
+        if (marker >= 0) {
+            String tail = key.substring(marker + 2).trim();
+            if (!tail.isEmpty() && tail.length() <= 48 && !tail.matches("(?i)[0-9a-f-]{16,}")) return tail;
+        }
+        if (key.length() <= 48 && !key.matches("(?i)[0-9a-f-]{16,}")) return key;
+        return "";
+    }
+
+    private static String normalizeSessionTitle(Object title) {
+        String text = cleanSessionTitleText(title);
+        if (text.isEmpty()) return "";
+        return text.length() > 60 ? text.substring(0, 60) + "…" : text;
+    }
 
     private static String sessionTitleFallback(Map<String, Object> session) {
+        String project = projectHintFromText(session.get("raw_title"));
+        if (project.isEmpty()) project = projectHintFromSessionKey(session.get("session_key"));
+        if (!project.isEmpty()) {
+            return project.length() > 60 ? project.substring(0, 60) + "…" : project;
+        }
         String client = session.get("client_name") != null ? String.valueOf(session.get("client_name"))
                 : (session.get("hostname") != null ? String.valueOf(session.get("hostname")) : "会话");
         if ("claude-code".equalsIgnoreCase(client)) client = "Claude Code";
@@ -545,11 +671,8 @@ public class ObservationRepository {
         return day.isEmpty() ? client : (client + " · " + day);
     }
 
-    private static String normalizeSessionTitle(Object title) {
-        if (title == null) return "";
-        String text = String.valueOf(title).replaceAll("\\s+", " ").trim();
-        if (text.isEmpty()) return "";
-        return text.length() > 60 ? text.substring(0, 60) + "…" : text;
+    static String sessionTitleFallbackForTest(Map<String, Object> session) {
+        return sessionTitleFallback(session);
     }
 
     private void enrichSessionTitles(List<Map<String, Object>> sessions) {
@@ -557,9 +680,25 @@ public class ObservationRepository {
         for (Map<String, Object> session : sessions) {
             String title = normalizeSessionTitle(session.get("title"));
             if (title.isEmpty()) title = normalizeSessionTitle(session.get("session_title"));
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> turns = (List<Map<String, Object>>) session.get("turns");
+            if (title.isEmpty() && turns != null) {
+                for (Map<String, Object> turn : turns) {
+                    String cleaned = normalizeSessionTitle(turn.get("user_text"));
+                    if (!cleaned.isEmpty()) {
+                        title = cleaned;
+                        break;
+                    }
+                }
+            }
+            if (title.isEmpty()) {
+                String project = projectHintFromText(session.get("raw_title"));
+                if (!project.isEmpty()) title = project;
+            }
             if (title.isEmpty()) title = sessionTitleFallback(session);
             session.put("title", title);
             session.put("session_title", title);
+            session.remove("raw_title");
         }
     }
 
@@ -572,7 +711,7 @@ public class ObservationRepository {
                         "GROUP BY c.client_id, c.hostname, c.os ORDER BY last_seen_at DESC"));
         String sessionSql = "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, " +
                 "sess.started_at, sess.ended_at, COUNT(DISTINCT t.id) AS turn_count, " +
-                "MIN(stitle.title) AS title " +
+                "COALESCE(NULLIF(MAX(sess.title), ''), MIN(stitle.title)) AS title, MIN(sraw.raw_title) AS raw_title " +
                 "FROM observation_session sess " +
                 "JOIN observation_client c ON c.id=sess.client_row_id " +
                 "LEFT JOIN observation_turn t ON t.session_id=sess.id " +
@@ -660,7 +799,7 @@ public class ObservationRepository {
 
         String sessionSql = "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, " +
                 "sess.started_at, sess.ended_at, COUNT(DISTINCT t.id) AS turn_count, " +
-                "MIN(stitle.title) AS title, " +
+                "COALESCE(NULLIF(MAX(sess.title), ''), MIN(stitle.title)) AS title, MIN(sraw.raw_title) AS raw_title, " +
                 usageSum("input_tokens", NON_ROLLUP_SKILL) + " AS token_input, " +
                 usageSum("cache_read_input_tokens", NON_ROLLUP_SKILL) + " AS token_cache_read, " +
                 usageSum("cache_creation_input_tokens", NON_ROLLUP_SKILL) + " AS token_cache_write, " +
@@ -739,7 +878,7 @@ public class ObservationRepository {
     public Map<String, Object> sessionChain(long sessionId, String skillSlug) {
         List<Map<String, Object>> sessions = jdbc.queryForList(
                 "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, c.os, sess.started_at, sess.ended_at, " +
-                        "MIN(stitle.title) AS title " +
+                        "COALESCE(NULLIF(MAX(sess.title), ''), MIN(stitle.title)) AS title, MIN(sraw.raw_title) AS raw_title " +
                         "FROM observation_session sess JOIN observation_client c ON c.id=sess.client_row_id " +
                         SESSION_TITLE_JOIN +
                         "WHERE sess.id=? GROUP BY sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, c.os, sess.started_at, sess.ended_at",

@@ -100,6 +100,11 @@ class ObservationIngestServiceTest {
             }
 
             @Override
+            public long upsertSession(long clientRowId, String sessionKey, String clientName, java.time.Instant startedAt, java.time.Instant endedAt, String title) {
+                return 2L;
+            }
+
+            @Override
             public long upsertTurn(long sessionId, int turnIndex, java.time.Instant startedAt, String userText) {
                 return 3L;
             }

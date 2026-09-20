@@ -104,6 +104,8 @@ function toIngestSession(session) {
     return {
         sessionId: ingestSessionKey(session.clientName, session.sessionId),
         clientName: session.clientName,
+        title: session.title || undefined,
+        sessionTitle: session.title || undefined,
         startedAt: session.startedAt || undefined,
         endedAt: session.endedAt || undefined,
         turns: session.turns.map((turn) => ({

@@ -12,6 +12,7 @@ export interface TimelineSession {
   sessionId: string
   clientId: string
   clientName: ClientName | string
+  title?: string
   startedAt: string
   endedAt: string
   turns: TimelineTurn[]
@@ -66,6 +67,7 @@ export function buildTimeline(events: ObservationEvent[]): TimelineSession[] {
       sessionId,
       clientId: list[0]?.client_id || '',
       clientName: list[0]?.client_name || 'unknown',
+      title: list.find((event) => event.session_title)?.session_title || '',
       startedAt: turnViews[0]?.startedAt || list[0]?.ts || '',
       endedAt: list[list.length - 1]?.ts || '',
       turns: turnViews

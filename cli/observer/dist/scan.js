@@ -131,6 +131,7 @@ async function scanClaude(clientId, skills, files, _options) {
     for (const file of files) {
         const entries = await readJsonl(file);
         const sessionId = claudeSessionId(file, entries);
+        const sessionTitle = claudeSessionTitle(entries);
         let turnIndex = 0;
         let seq = 0;
         let currentSlug;
@@ -138,6 +139,7 @@ async function scanClaude(clientId, skills, files, _options) {
         let currentActivation;
         const pending = new Map();
         const tracker = createUsageTracker();
+        const fileEvents = [];
         for (const entry of entries) {
             const ts = String(entry.timestamp || entry.ts || new Date().toISOString());
             const message = asRecord(entry.message);
@@ -151,10 +153,11 @@ async function scanClaude(clientId, skills, files, _options) {
                 currentActivation = undefined;
                 seq += 1;
                 const userText = extractText(content);
-                events.push(makeEvent({
+                fileEvents.push(makeEvent({
                     clientId,
                     clientName: 'claude-code',
                     sessionId,
+                    sessionTitle,
                     turnIndex,
                     seq,
                     type: 'user',
@@ -165,6 +168,7 @@ async function scanClaude(clientId, skills, files, _options) {
                     clientId,
                     clientName: 'claude-code',
                     sessionId,
+                    sessionTitle,
                     turnIndex,
                     startSeq: seq,
                     ts,
@@ -181,7 +185,7 @@ async function scanClaude(clientId, skills, files, _options) {
                             parents: event.payload?.rollup ? [] : parentSlugsFor(event.skill_slug || '')
                         };
                     }
-                    events.push(event);
+                    fileEvents.push(event);
                 }
                 tracker.rememberSkillEvents(textEvents, Math.max(turnIndex, 1));
                 continue;
@@ -194,10 +198,11 @@ async function scanClaude(clientId, skills, files, _options) {
                 const text = assistantText(content);
                 if (text) {
                     seq += 1;
-                    events.push(makeEvent({
+                    fileEvents.push(makeEvent({
                         clientId,
                         clientName: 'claude-code',
                         sessionId,
+                        sessionTitle,
                         turnIndex: Math.max(turnIndex, 1),
                         seq,
                         type: 'assistant',
@@ -229,6 +234,7 @@ async function scanClaude(clientId, skills, files, _options) {
                         clientId,
                         clientName: 'claude-code',
                         sessionId,
+                        sessionTitle,
                         turnIndex: Math.max(turnIndex, 1),
                         startSeq: seq,
                         ts,
@@ -240,7 +246,7 @@ async function scanClaude(clientId, skills, files, _options) {
                     tracker.rememberSkillEvents(matchedEvents, Math.max(turnIndex, 1));
                     for (const event of matchedEvents) {
                         pending.set(callId, event);
-                        events.push(event);
+                        fileEvents.push(event);
                     }
                     continue;
                 }
@@ -252,6 +258,7 @@ async function scanClaude(clientId, skills, files, _options) {
                         clientId,
                         clientName: 'claude-code',
                         sessionId,
+                        sessionTitle,
                         turnIndex: Math.max(turnIndex, 1),
                         seq,
                         type: 'document',
@@ -261,13 +268,14 @@ async function scanClaude(clientId, skills, files, _options) {
                         payload: { path: documentPath, content: contentText || '' }
                     });
                     pending.set(callId, event);
-                    events.push(event);
+                    fileEvents.push(event);
                     continue;
                 }
                 const event = makeEvent({
                     clientId,
                     clientName: 'claude-code',
                     sessionId,
+                    sessionTitle,
                     turnIndex: Math.max(turnIndex, 1),
                     seq,
                     type: 'tool',
@@ -277,7 +285,7 @@ async function scanClaude(clientId, skills, files, _options) {
                     payload: { name: toolName, args: input, result: '' }
                 });
                 pending.set(callId, event);
-                events.push(event);
+                fileEvents.push(event);
             }
             if (role === 'user' && Array.isArray(content)) {
                 for (const block of content) {
@@ -301,11 +309,48 @@ async function scanClaude(clientId, skills, files, _options) {
             }
         }
         tracker.applyUsage();
+        events.push(...fileEvents);
     }
     return events;
 }
+function claudeSessionTitle(entries) {
+    let title = '';
+    for (const entry of entries) {
+        if (entry.type !== 'ai-title')
+            continue;
+        const value = entry.aiTitle ?? asRecord(entry).aiTitle ?? asRecord(entry).title;
+        const text = value == null ? '' : String(value).trim();
+        if (text)
+            title = text;
+    }
+    return title;
+}
+async function loadCodexThreadTitles() {
+    const map = new Map();
+    const candidates = [
+        join(homedir(), '.codex', 'session_index.jsonl'),
+        join(codexSessionsRoot(), '..', 'session_index.jsonl')
+    ];
+    const seen = new Set();
+    for (const path of candidates) {
+        if (seen.has(path))
+            continue;
+        seen.add(path);
+        const lines = await peekJsonlLines(path, 5000);
+        for (const line of lines) {
+            const id = String(line.id || line.session_id || line.sessionId || '').trim();
+            const name = String(line.thread_name || line.title || line.name || '').trim();
+            if (!id || !name)
+                continue;
+            if (!map.has(id))
+                map.set(id, name);
+        }
+    }
+    return map;
+}
 async function scanCodex(clientId, skills, files, _options) {
     const events = [];
+    const threadTitles = await loadCodexThreadTitles();
     for (const file of files) {
         const entries = await readJsonl(file);
         let sessionId = '';
@@ -317,6 +362,7 @@ async function scanCodex(clientId, skills, files, _options) {
         }
         if (!sessionId)
             sessionId = basename(file, '.jsonl');
+        const sessionTitle = threadTitles.get(sessionId) || '';
         let turnIndex = 0;
         let seq = 0;
         let currentSlug;
@@ -324,6 +370,7 @@ async function scanCodex(clientId, skills, files, _options) {
         let currentActivation;
         const pending = new Map();
         const tracker = createUsageTracker();
+        const fileEvents = [];
         for (const entry of entries) {
             const payload = asRecord(entry.payload);
             const ts = String(entry.timestamp || new Date().toISOString());
@@ -343,10 +390,11 @@ async function scanCodex(clientId, skills, files, _options) {
                 currentSlug = undefined;
                 currentName = undefined;
                 currentActivation = undefined;
-                events.push(makeEvent({
+                fileEvents.push(makeEvent({
                     clientId,
                     clientName: 'codex',
                     sessionId,
+                    sessionTitle,
                     turnIndex,
                     seq,
                     type: 'user',
@@ -357,6 +405,7 @@ async function scanCodex(clientId, skills, files, _options) {
                     clientId,
                     clientName: 'codex',
                     sessionId,
+                    sessionTitle,
                     turnIndex,
                     startSeq: seq,
                     ts,
@@ -373,7 +422,7 @@ async function scanCodex(clientId, skills, files, _options) {
                             parents: event.payload?.rollup ? [] : parentSlugsFor(event.skill_slug || '')
                         };
                     }
-                    events.push(event);
+                    fileEvents.push(event);
                 }
                 tracker.rememberSkillEvents(textEvents, Math.max(turnIndex, 1));
                 continue;
@@ -382,10 +431,11 @@ async function scanCodex(clientId, skills, files, _options) {
                 const text = assistantText(payload.content);
                 if (text) {
                     seq += 1;
-                    events.push(makeEvent({
+                    fileEvents.push(makeEvent({
                         clientId,
                         clientName: 'codex',
                         sessionId,
+                        sessionTitle,
                         turnIndex: Math.max(turnIndex, 1),
                         seq,
                         type: 'assistant',
@@ -414,6 +464,7 @@ async function scanCodex(clientId, skills, files, _options) {
                         clientId,
                         clientName: 'codex',
                         sessionId,
+                        sessionTitle,
                         turnIndex: Math.max(turnIndex, 1),
                         startSeq: seq,
                         ts,
@@ -426,7 +477,7 @@ async function scanCodex(clientId, skills, files, _options) {
                     tracker.rememberSkillEvents(matchedEvents, Math.max(turnIndex, 1));
                     for (const event of matchedEvents) {
                         pending.set(callId, event);
-                        events.push(event);
+                        fileEvents.push(event);
                     }
                     continue;
                 }
@@ -438,6 +489,7 @@ async function scanCodex(clientId, skills, files, _options) {
                         clientId,
                         clientName: 'codex',
                         sessionId,
+                        sessionTitle,
                         turnIndex: Math.max(turnIndex, 1),
                         seq,
                         type: 'document',
@@ -447,13 +499,14 @@ async function scanCodex(clientId, skills, files, _options) {
                         payload: { path: documentPath, content: contentText || '' }
                     });
                     pending.set(callId, event);
-                    events.push(event);
+                    fileEvents.push(event);
                     continue;
                 }
                 const event = makeEvent({
                     clientId,
                     clientName: 'codex',
                     sessionId,
+                    sessionTitle,
                     turnIndex: Math.max(turnIndex, 1),
                     seq,
                     type: 'tool',
@@ -463,7 +516,7 @@ async function scanCodex(clientId, skills, files, _options) {
                     payload: { name, args, result: '' }
                 });
                 pending.set(callId, event);
-                events.push(event);
+                fileEvents.push(event);
                 continue;
             }
             if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
@@ -483,6 +536,7 @@ async function scanCodex(clientId, skills, files, _options) {
             }
         }
         tracker.applyUsage();
+        events.push(...fileEvents);
     }
     return events;
 }
@@ -504,6 +558,7 @@ function skillUsageEvents(input) {
         clientId: input.clientId,
         clientName: input.clientName,
         sessionId: input.sessionId,
+        sessionTitle: input.sessionTitle,
         turnIndex: input.turnIndex,
         seq,
         type: 'skill',
@@ -525,6 +580,7 @@ function skillUsageEvents(input) {
             clientId: input.clientId,
             clientName: input.clientName,
             sessionId: input.sessionId,
+            sessionTitle: input.sessionTitle,
             turnIndex: input.turnIndex,
             seq,
             type: 'skill',
@@ -560,6 +616,7 @@ function skillEventsFromUserText(input) {
             clientId: input.clientId,
             clientName: input.clientName,
             sessionId: input.sessionId,
+            sessionTitle: input.sessionTitle,
             turnIndex: input.turnIndex,
             seq,
             type: 'skill',
@@ -597,6 +654,7 @@ function makeEvent(input) {
         client_id: input.clientId,
         client_name: input.clientName,
         session_id: input.sessionId,
+        session_title: input.sessionTitle || undefined,
         turn_index: input.turnIndex,
         step_id: stepId,
         seq: input.seq,

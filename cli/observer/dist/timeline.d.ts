@@ -9,6 +9,7 @@ export interface TimelineSession {
     sessionId: string;
     clientId: string;
     clientName: ClientName | string;
+    title?: string;
     startedAt: string;
     endedAt: string;
     turns: TimelineTurn[];

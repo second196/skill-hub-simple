@@ -63,7 +63,10 @@ public class ObservationIngestService {
             if (isBlank(clientName)) clientName = "unknown";
             Instant startedAt = instant(session, "startedAt", "started_at");
             Instant endedAt = instant(session, "endedAt", "ended_at");
-            long sessionId = repository.upsertSession(clientRowId, sessionKey.trim(), clientName.trim(), startedAt, endedAt);
+            String sessionTitle = text(session, "title", "sessionTitle", "session_title");
+            if (!isBlank(sessionTitle)) sessionTitle = sessionTitle.trim();
+            if (sessionTitle != null && sessionTitle.length() > 255) sessionTitle = sessionTitle.substring(0, 255);
+            long sessionId = repository.upsertSession(clientRowId, sessionKey.trim(), clientName.trim(), startedAt, endedAt, sessionTitle);
             boolean sessionUsed = false;
 
             for (Object turnObj : asList(session.get("turns"))) {
