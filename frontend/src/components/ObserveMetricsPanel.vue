@@ -12,12 +12,20 @@ type ObserveQualityLike = {
   errorRate?: number
   reloadRate?: number
   loadCompleteRate?: number
+  progress?: number
+  formula?: string
+  reloadNote?: string
   calls?: number
   sessions?: number
   skillTurns?: number
   errors?: number
   completeLoads?: number
   reloadTurns?: number
+  pathDistribution?: Array<{ key?: string; label?: string; count?: number; ratio?: number }>
+  evidence?: {
+    denominator?: number
+    levels?: Array<{ code?: string; title?: string; hint?: string; count?: number; rate?: number }>
+  }
   tokenUsage?: Partial<SkillTokenUsage> & { totalTokens?: number }
   tokens?: Partial<SkillTokenUsage> & { totalTokens?: number }
 }
@@ -353,16 +361,37 @@ const turnRows = computed(() => {
     let hasUsage = false
     let match = ''
     let skillSteps = 0
+    let skillCalls = 0
+    let completeLoads = 0
+    let errorLoads = 0
+    const scanSkill = (step: ObserveChainStepLike) => {
+      const isSkill = step.type === 'skill' || Boolean(step.skill_slug)
+      if (isSkill) skillSteps += 1
+      if (!isSkill || step.payload?.rollup) return
+      skillCalls += 1
+      const m = String(step.payload?.match || '')
+      const path = String(step.payload?.path || '')
+      const outcome = String(step.payload?.outcome || 'ok')
+      if (m === 'file' || m === 'path' || path.includes('SKILL.md')) completeLoads += 1
+      if (outcome === 'error') errorLoads += 1
+    }
     const apiUsage = parseUsage(turn.usage)
     if (apiUsage && (apiUsage.totalTokens > 0 || apiUsage.requestCount > 0)) {
       hasUsage = true
       usage = apiUsage
-    } else {
       for (const step of steps) {
-        if (step.type === 'skill' || step.skill_slug) skillSteps += 1
+        scanSkill(step)
         if (!match) {
           const m = step.payload?.match
-          if (typeof m === 'string') match = m
+          if (typeof m === 'string' && m) match = m
+        }
+      }
+    } else {
+      for (const step of steps) {
+        scanSkill(step)
+        if (!match) {
+          const m = step.payload?.match
+          if (typeof m === 'string' && m) match = m
         }
         const u = usageFromPayload(step.payload)
         if (u) {
@@ -371,25 +400,113 @@ const turnRows = computed(() => {
         }
       }
     }
-    if (!skillSteps) {
-      for (const step of steps) {
-        if (step.type === 'skill' || step.skill_slug) skillSteps += 1
-        if (!match) {
-          const m = step.payload?.match
-          if (typeof m === 'string') match = m
-        }
-      }
-    }
+    const callsInTurn = skillCalls || skillSteps
     return {
       turnIndex: turn.turn_index,
       startedAt: turn.started_at,
       match: match || '—',
       steps: steps.length,
       skillSteps,
+      skillCalls: callsInTurn,
+      completeLoads,
+      incompleteLoads: Math.max(0, callsInTurn - completeLoads),
+      errorLoads,
+      okLoads: Math.max(0, callsInTurn - errorLoads),
+      reloadLoads: callsInTurn >= 2 ? callsInTurn - 1 : 0,
+      isReloadTurn: callsInTurn >= 2,
       usage: hasUsage ? usage : null,
       total: hasUsage ? usage.totalTokens : 0
     }
   })
+})
+
+const sessionMetricAgg = computed(() => {
+  const rows = turnRows.value
+  return {
+    skillCalls: rows.reduce((n, r) => n + r.skillCalls, 0),
+    completeLoads: rows.reduce((n, r) => n + r.completeLoads, 0),
+    incompleteLoads: rows.reduce((n, r) => n + r.incompleteLoads, 0),
+    errorLoads: rows.reduce((n, r) => n + r.errorLoads, 0),
+    okLoads: rows.reduce((n, r) => n + r.okLoads, 0),
+    reloadTurns: rows.filter((r) => r.isReloadTurn).length,
+    skillTurns: rows.filter((r) => r.skillCalls > 0).length,
+    turns: rows.length,
+    peakCalls: Math.max(0, ...rows.map((r) => r.skillCalls))
+  }
+})
+
+const funnelLevels = computed(() => {
+  const levels = props.detail?.quality?.evidence?.levels || []
+  if (levels.length) {
+    return levels.map((level) => ({
+      code: String(level.code || ''),
+      title: String(level.title || level.code || ''),
+      count: num(level.count),
+      rate: num(level.rate)
+    }))
+  }
+  const q = props.detail?.quality || {}
+  return [
+    { code: 'L1', title: '触发成功', count: num(q.skillTurns), rate: 1 },
+    { code: 'L2', title: '加载成功', count: num(q.completeLoads), rate: 0 },
+    { code: 'L3', title: '执行推进', count: 0, rate: 0 },
+    { code: 'L4', title: '行为闭环', count: 0, rate: 0 }
+  ]
+})
+
+const pathParts = computed(() => {
+  const raw = (props.detail?.quality as { pathDistribution?: unknown } | undefined)?.pathDistribution
+  const list = Array.isArray(raw)
+    ? (raw as Array<{ key?: string; label?: string; count?: number }>)
+    : []
+  const colors = [COLORS.input, COLORS.cacheRead, COLORS.cacheWrite, COLORS.output, COLORS.muted]
+  const mapped = list
+    .map((item, index) => ({
+      key: String(item?.key ?? index),
+      label: String(item?.label || item?.key || `来源${index + 1}`),
+      value: num(item?.count),
+      color: colors[index % colors.length]
+    }))
+    .filter((p) => p.value > 0)
+  if (mapped.length) return mapped
+  const map = new Map<string, number>()
+  for (const turn of turnRows.value) {
+    if (!turn.skillCalls) continue
+    const key = turn.match === '—' ? 'other' : turn.match
+    map.set(key, (map.get(key) || 0) + turn.skillCalls)
+  }
+  return [...map.entries()].map(([label, value], index) => ({
+    key: label,
+    label,
+    value,
+    color: colors[index % colors.length]
+  }))
+})
+
+const sessionMatchParts = computed(() => {
+  const map = new Map<string, number>()
+  const colors = [COLORS.input, COLORS.cacheRead, COLORS.cacheWrite, COLORS.output, COLORS.muted]
+  const labelMap: Record<string, string> = {
+    call: 'Skill 工具调用',
+    file: '读 SKILL.md / 文件',
+    path: '读Skill目录路径',
+    text: '用户 /$slash 文本',
+    other: '其他'
+  }
+  for (const turn of props.detail?.selectedSession?.turns || []) {
+    for (const step of turn.steps || []) {
+      if (step.type !== 'skill' && !step.skill_slug) continue
+      if (step.payload?.rollup) continue
+      const key = String(step.payload?.match || 'other')
+      map.set(key, (map.get(key) || 0) + 1)
+    }
+  }
+  return [...map.entries()].map(([key, value], index) => ({
+    key,
+    label: labelMap[key] || key,
+    value,
+    color: colors[index % colors.length]
+  })).filter((p) => p.value > 0)
 })
 
 const skillLevelUsage = computed<SkillTokenUsage>(() => {
@@ -759,44 +876,388 @@ const overviewCards = computed(() => {
       tone: hasTokenData.value ? 'default' : ('warn' as const)
     },
     {
-      id: 'calls' as ObserveMetricId,
-      title: '调用次数',
+      id: 'usage' as ObserveMetricId,
+      title: '使用与过程',
       value: fmtInt(num(k.callCount)),
-      caption: '技能触发总次数',
+      caption: `会话 ${fmtInt(num(k.sessionCount))} · 完整 ${fmtPct(q.loadCompleteRate)}`,
       tone: 'default' as const
-    },
-    {
-      id: 'sessions' as ObserveMetricId,
-      title: '会话覆盖',
-      value: fmtInt(num(k.sessionCount)),
-      caption: `${fmtInt(num(k.clientCount))} 个客户端`,
-      tone: 'default' as const
-    },
-    {
-      id: 'completeness' as ObserveMetricId,
-      title: '载入完整',
-      value: fmtPct(q.loadCompleteRate),
-      caption: `${fmtInt(num(q.completeLoads))} 次完整载入`,
-      tone: (num(q.loadCompleteRate) >= 0.9 ? 'good' : 'warn') as 'good' | 'warn'
-    },
-    {
-      id: 'errors' as ObserveMetricId,
-      title: '错误',
-      value: fmtPct(q.errorRate),
-      caption: `${fmtInt(num(q.errors))} 次`,
-      tone: (num(q.errorRate) > 0 ? 'bad' : 'good') as 'bad' | 'good'
-    },
-    {
-      id: 'reload' as ObserveMetricId,
-      title: '重复载入',
-      value: fmtPct(q.reloadRate),
-      caption: `${fmtInt(num(q.reloadTurns))} 个回合`,
-      tone: (num(q.reloadRate) >= 0.1 ? 'warn' : 'good') as 'warn' | 'good'
     }
   ]
 })
 
 const activeTitle = computed(() => overviewCards.value.find((c) => c.id === selectedId.value)?.title || '')
+
+function pieFromParts(
+  parts: Array<{ label: string; value: number; color: string }>,
+  centerText: string
+): EChartsOption {
+  const data = parts.filter((p) => p.value > 0)
+  const display = data.length ? data : parts
+  return {
+    color: display.map((p) => p.color),
+    tooltip: { trigger: 'item' },
+    series: [
+      {
+        type: 'pie',
+        radius: ['42%', '64%'],
+        center: ['50%', '50%'],
+        avoidLabelOverlap: true,
+        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+        label: { show: true, color: '#475467', fontSize: 11, formatter: '{b}\n{d}%' },
+        labelLine: { show: true, length: 10, length2: 8, lineStyle: { color: '#d0d5dd' } },
+        labelLayout: { hideOverlap: true },
+        data: display.map((p) => ({ name: p.label, value: Math.round(p.value), itemStyle: { color: p.color } }))
+      }
+    ],
+    title: {
+      text: centerText,
+      subtext: '',
+      left: '50%',
+      top: '50%',
+      textAlign: 'center',
+      textVerticalAlign: 'middle',
+      textStyle: { color: '#14213d', fontSize: 16, fontWeight: 700 }
+    }
+  } as EChartsOption
+}
+
+function barByTurn(
+  rows: Array<{ turnIndex: number }>,
+  series: Array<{ name: string; data: number[]; color: string; stack?: string }>,
+  yName: string
+): EChartsOption {
+  return {
+    color: series.map((s) => s.color),
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 56, right: 16, top: 24, bottom: 48 },
+    xAxis: {
+      type: 'category',
+      data: rows.map((r) => `T${r.turnIndex}`),
+      name: '回合',
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#e4e8f0' } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: yName,
+      nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#eef2f7' } }
+    },
+    series: series.map((s) => ({
+      name: s.name,
+      type: 'bar' as const,
+      stack: s.stack,
+      barMaxWidth: 22,
+      data: s.data,
+      itemStyle: { color: s.color, borderRadius: s.stack ? undefined : [6, 6, 0, 0] }
+    }))
+  } as EChartsOption
+}
+
+const usageCallBarOption = computed<EChartsOption>(() => {
+  if (sessionScope.value) {
+    const rows = turnRows.value
+    return barByTurn(rows, [{ name: '技能调用', data: rows.map((r) => r.skillCalls), color: COLORS.input }], '技能调用')
+  }
+  const points = trendPoints.value
+  return {
+    color: [COLORS.input],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 56, right: 16, top: 24, bottom: 48 },
+    xAxis: {
+      type: 'category',
+      data: points.map((p) => p.day.slice(5)),
+      name: '日期',
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#e4e8f0' } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: '调用次数',
+      nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#eef2f7' } }
+    },
+    series: [
+      {
+        type: 'bar',
+        barMaxWidth: 24,
+        data: points.map((p) => p.calls),
+        itemStyle: { color: COLORS.input, borderRadius: [6, 6, 0, 0] }
+      }
+    ]
+  } as EChartsOption
+})
+
+const usageCallPieOption = computed<EChartsOption>(() => {
+  if (sessionScope.value && sessionMatchParts.value.length) {
+    return pieFromParts(sessionMatchParts.value, fmtInt(sessionMetricAgg.value.skillCalls))
+  }
+  const parts = pathParts.value
+  const total = num(props.detail?.kpis?.callCount)
+  return pieFromParts(
+    parts.length ? parts : [{ label: '调用', value: total, color: COLORS.input }],
+    fmtInt(total)
+  )
+})
+
+const usageCompleteBarOption = computed<EChartsOption>(() => {
+  const rows = turnRows.value
+  const q = props.detail?.quality || {}
+  if (sessionScope.value) {
+    return barByTurn(
+      rows,
+      [
+        { name: '完整', data: rows.map((r) => r.completeLoads), color: COLORS.cacheRead, stack: 'l' },
+        { name: '不完整', data: rows.map((r) => r.incompleteLoads), color: COLORS.output, stack: 'l' }
+      ],
+      '载入次数'
+    )
+  }
+  return {
+    color: [COLORS.cacheRead],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 56, right: 16, top: 24, bottom: 48 },
+    xAxis: {
+      type: 'category',
+      data: ['完整载入', '不完整'],
+      name: '状态',
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#e4e8f0' } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: '次数',
+      nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#eef2f7' } }
+    },
+    series: [
+      {
+        type: 'bar',
+        barMaxWidth: 48,
+        data: [num(q.completeLoads), Math.max(0, num(q.calls) - num(q.completeLoads))],
+        itemStyle: { borderRadius: [6, 6, 0, 0] }
+      }
+    ]
+  } as EChartsOption
+})
+
+const usageCompletePieOption = computed<EChartsOption>(() => {
+  const agg = sessionMetricAgg.value
+  const q = props.detail?.quality || {}
+  const complete = sessionScope.value ? agg.completeLoads : num(q.completeLoads)
+  const incomplete = sessionScope.value
+    ? agg.incompleteLoads
+    : Math.max(0, num(q.calls) - num(q.completeLoads))
+  const total = complete + incomplete
+  return pieFromParts(
+    [
+      { label: '完整载入', value: complete, color: COLORS.cacheRead },
+      { label: '不完整', value: incomplete, color: COLORS.output }
+    ],
+    total ? fmtPct(complete / total) : '—'
+  )
+})
+
+const usageErrorBarOption = computed<EChartsOption>(() => {
+  const rows = turnRows.value
+  const q = props.detail?.quality || {}
+  if (sessionScope.value) {
+    return barByTurn(rows, [{ name: '错误', data: rows.map((r) => r.errorLoads), color: COLORS.danger }], '错误次数')
+  }
+  return {
+    color: [COLORS.danger],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 56, right: 16, top: 24, bottom: 48 },
+    xAxis: {
+      type: 'category',
+      data: ['错误', '正常调用'],
+      name: '状态',
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#e4e8f0' } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: '次数',
+      nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#eef2f7' } }
+    },
+    series: [
+      {
+        type: 'bar',
+        barMaxWidth: 48,
+        data: [num(q.errors), Math.max(0, num(q.calls) - num(q.errors))],
+        itemStyle: { borderRadius: [6, 6, 0, 0] }
+      }
+    ]
+  } as EChartsOption
+})
+
+const usageErrorPieOption = computed<EChartsOption>(() => {
+  const agg = sessionMetricAgg.value
+  const q = props.detail?.quality || {}
+  const errors = sessionScope.value ? agg.errorLoads : num(q.errors)
+  const ok = sessionScope.value ? agg.okLoads : Math.max(0, num(q.calls) - num(q.errors))
+  return pieFromParts(
+    [
+      { label: '错误', value: errors, color: COLORS.danger },
+      { label: '正常', value: ok, color: COLORS.cacheRead }
+    ],
+    errors + ok ? fmtPct(errors / (errors + ok)) : '—'
+  )
+})
+
+const usageReloadBarOption = computed<EChartsOption>(() => {
+  const rows = turnRows.value
+  const q = props.detail?.quality || {}
+  if (sessionScope.value) {
+    return barByTurn(rows, [{ name: '额外重载', data: rows.map((r) => r.reloadLoads), color: COLORS.cacheWrite }], '额外重载')
+  }
+  return {
+    color: [COLORS.cacheWrite],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 56, right: 16, top: 24, bottom: 48 },
+    xAxis: {
+      type: 'category',
+      data: ['重载回合', '正常回合'],
+      name: '状态',
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#e4e8f0' } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: '回合数',
+      nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#eef2f7' } }
+    },
+    series: [
+      {
+        type: 'bar',
+        barMaxWidth: 48,
+        data: [num(q.reloadTurns), Math.max(0, num(q.skillTurns) - num(q.reloadTurns))],
+        itemStyle: { borderRadius: [6, 6, 0, 0] }
+      }
+    ]
+  } as EChartsOption
+})
+
+const usageReloadPieOption = computed<EChartsOption>(() => {
+  const agg = sessionMetricAgg.value
+  const q = props.detail?.quality || {}
+  const reload = sessionScope.value ? agg.reloadTurns : num(q.reloadTurns)
+  const skillTurns = sessionScope.value ? agg.skillTurns : num(q.skillTurns) || reload
+  return pieFromParts(
+    [
+      { label: '重载回合', value: reload, color: COLORS.cacheWrite },
+      { label: '正常回合', value: Math.max(0, skillTurns - reload), color: COLORS.cacheRead }
+    ],
+    skillTurns ? fmtPct(reload / skillTurns) : '—'
+  )
+})
+
+const funnelBarOption = computed<EChartsOption>(() => {
+  const levels = funnelLevels.value
+  return {
+    color: [COLORS.input],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 56, right: 16, top: 24, bottom: 48 },
+    xAxis: {
+      type: 'category',
+      data: levels.map((l) => `${l.code} ${l.title}`),
+      name: '漏斗阶段',
+      nameLocation: 'middle',
+      nameGap: 36,
+      axisLabel: { color: '#98a2b3', fontSize: 11, interval: 0 },
+      axisLine: { lineStyle: { color: '#e4e8f0' } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      name: 'Turn 数',
+      nameTextStyle: { color: '#98a2b3', fontSize: 12 },
+      axisLabel: { color: '#98a2b3', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#eef2f7' } }
+    },
+    series: [
+      {
+        type: 'bar',
+        barMaxWidth: 44,
+        data: levels.map((l, i) => ({
+          value: l.count,
+          itemStyle: {
+            color: [COLORS.input, COLORS.cacheRead, COLORS.cacheWrite, COLORS.output][i] || COLORS.accent,
+            borderRadius: [6, 6, 0, 0]
+          }
+        }))
+      }
+    ]
+  } as EChartsOption
+})
+
+const funnelPieOption = computed<EChartsOption>(() => {
+  const levels = funnelLevels.value
+  const l1 = levels[0]?.count || 0
+  const l2 = levels[1]?.count || 0
+  const l3 = levels[2]?.count || 0
+  const l4 = levels[3]?.count || 0
+  return pieFromParts(
+    [
+      { label: 'L4 闭环', value: l4, color: COLORS.cacheRead },
+      { label: 'L3 未闭环', value: Math.max(0, l3 - l4), color: COLORS.input },
+      { label: 'L2 未继续', value: Math.max(0, l2 - l3), color: COLORS.cacheWrite },
+      { label: 'L1 未加载成功', value: Math.max(0, l1 - l2), color: COLORS.output }
+    ],
+    l1 ? fmtPct(l4 / l1) : '—'
+  )
+})
+
+const usageKpis = computed(() => {
+  const k = props.detail?.kpis || {}
+  const q = props.detail?.quality || {}
+  const agg = sessionMetricAgg.value
+  const levels = funnelLevels.value
+  const l1 = levels[0]?.count || 0
+  if (sessionScope.value) {
+    const completeTotal = agg.completeLoads + agg.incompleteLoads
+    return [
+      { label: '会话内技能调用', value: fmtInt(agg.skillCalls) },
+      { label: '覆盖会话', value: '1' },
+      { label: '本会话完整率', value: completeTotal ? fmtPct(agg.completeLoads / completeTotal) : '—' },
+      { label: '本会话错误率', value: agg.skillCalls ? fmtPct(agg.errorLoads / agg.skillCalls) : '—' },
+      { label: '本会话重载率', value: agg.skillTurns ? fmtPct(agg.reloadTurns / agg.skillTurns) : '—' },
+      { label: 'L4 闭环', value: fmtInt(levels[3]?.count || 0) }
+    ]
+  }
+  return [
+    { label: '调用次数', value: fmtInt(num(k.callCount)) },
+    { label: '会话覆盖', value: fmtInt(num(k.sessionCount)) },
+    { label: '载入完整率', value: fmtPct(q.loadCompleteRate) },
+    { label: '错误率', value: fmtPct(q.errorRate) },
+    { label: '同回合重载率', value: fmtPct(q.reloadRate) },
+    { label: 'L4/L1', value: l1 ? fmtPct((levels[3]?.count || 0) / l1) : '—' }
+  ]
+})
+
+const showUsageBoard = computed(() => selectedId.value === 'usage')
 
 const axisNameY = computed(() => (selectedId.value === 'tokens' ? 'Tokens' : '数值'))
 const axisNameX = computed(() => {
@@ -1218,27 +1679,15 @@ const sessionSelectOptions = computed(() => [
 ])
 
 const activeDesc = computed(() => {
-  switch (selectedId.value) {
-    case 'tokens':
-      return '按会话与回合展示 Token 用量，含构成、排行、分布与客户端对比。'
-    case 'calls':
-      return '展示技能触发次数的时间分布、会话规模与回合步骤。'
-    case 'sessions':
-      return '展示该技能覆盖的会话、客户端与回合规模。'
-    case 'completeness':
-      return '展示完整载入比例，以及相关会话与回合表现。'
-    case 'errors':
-      return '展示错误率、错误次数与问题样本。'
-    case 'reload':
-      return '展示同一回合内重复载入情况。'
-    default:
-      return ''
+  if (selectedId.value === 'tokens') {
+    return '按会话与回合展示 Token 用量，含构成、排行与分布。'
   }
+  return '一页合并：调用、会话覆盖、载入完整、错误、重复载入，以及过程漏斗 L1–L4。锁定会话时改为本会话口径。'
 })
 
 const activeKpis = computed(() => {
+  if (selectedId.value === 'usage') return usageKpis.value
   const k = props.detail?.kpis || {}
-  const q = props.detail?.quality || {}
   const u = usageTotal.value
   const calls = sessionScope.value
     ? turnRows.value.filter((t) => t.skillSteps > 0 || t.usage).length || num(k.callCount)
@@ -1246,61 +1695,21 @@ const activeKpis = computed(() => {
   const sessions = sessionScope.value ? 1 : num(k.sessionCount)
   const turns = sessionScope.value
     ? turnRows.value.length || currentSessionMeta.value.turns
-    : num(k.turnCount) || num(q.skillTurns) || turnRows.value.length
-  if (selectedId.value === 'tokens') {
-    const cacheBase = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens
-    return [
-      { label: 'Token 总量', value: fmtCompact(u.totalTokens) },
-      { label: 'Input', value: fmtCompact(u.inputTokens) },
-      { label: 'Cache Read', value: fmtCompact(u.cacheReadTokens) },
-      { label: 'Cache Write', value: fmtCompact(u.cacheWriteTokens) },
-      { label: 'Output', value: fmtCompact(u.outputTokens) },
-      { label: sessionScope.value ? '单请求均值' : '单次调用均值', value: (u.requestCount || calls) ? fmtCompact(u.totalTokens / (u.requestCount || calls)) : '—' },
-      { label: '单回合均值', value: turns && u.totalTokens ? fmtCompact(u.totalTokens / Math.max(turns, 1)) : '—' },
-      { label: 'P50 / P90', value: `${fmtCompact(tokenStats.value.p50)} / ${fmtCompact(tokenStats.value.p90)}` },
-      { label: 'Cache 命中率', value: cacheBase ? fmtPct(u.cacheReadTokens / cacheBase) : '—' },
-      { label: 'API 请求', value: fmtInt(u.requestCount) },
-      { label: '异常回合', value: fmtInt(tokenStats.value.anomalies) },
-      { label: sessionScope.value ? '本会话回合' : '覆盖会话', value: sessionScope.value ? fmtInt(turns) : fmtInt(sessions) }
-    ]
-  }
-  if (selectedId.value === 'calls') {
-    return [
-      { label: sessionScope.value ? '会话内触发' : '总调用', value: fmtInt(calls) },
-      { label: '覆盖会话', value: fmtInt(sessions) },
-      { label: '会话均次', value: sessions ? fmtCompact(calls / sessions) : '—' },
-      { label: '相关回合', value: fmtInt(turns) }
-    ]
-  }
-  if (selectedId.value === 'sessions') {
-    return [
-      { label: '会话数', value: fmtInt(sessions) },
-      { label: '客户端', value: fmtInt(sessionScope.value ? 1 : num(k.clientCount)) },
-      { label: '回合数', value: fmtInt(turns) },
-      { label: '会话均回合', value: sessions ? fmtCompact(turns / sessions) : '—' }
-    ]
-  }
-  if (selectedId.value === 'completeness') {
-    return [
-      { label: '完整率', value: fmtPct(q.loadCompleteRate) },
-      { label: '完整载入', value: fmtInt(num(q.completeLoads)) },
-      { label: '样本调用', value: fmtInt(num(q.calls) || calls) },
-      { label: '健康分', value: fmtInt(num(q.healthScore)) }
-    ]
-  }
-  if (selectedId.value === 'errors') {
-    return [
-      { label: '错误率', value: fmtPct(q.errorRate) },
-      { label: '错误次数', value: fmtInt(num(q.errors)) },
-      { label: '样本调用', value: fmtInt(num(q.calls) || calls) },
-      { label: '覆盖会话', value: fmtInt(sessions) }
-    ]
-  }
+    : num(k.turnCount) || num(props.detail?.quality?.skillTurns) || turnRows.value.length
+  const cacheBase = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens
   return [
-    { label: '重复率', value: fmtPct(q.reloadRate) },
-    { label: '重复回合', value: fmtInt(num(q.reloadTurns)) },
-    { label: '技能回合', value: fmtInt(num(q.skillTurns) || turns) },
-    { label: '样本调用', value: fmtInt(num(q.calls) || calls) }
+    { label: 'Token 总量', value: fmtCompact(u.totalTokens) },
+    { label: 'Input', value: fmtCompact(u.inputTokens) },
+    { label: 'Cache Read', value: fmtCompact(u.cacheReadTokens) },
+    { label: 'Cache Write', value: fmtCompact(u.cacheWriteTokens) },
+    { label: 'Output', value: fmtCompact(u.outputTokens) },
+    { label: sessionScope.value ? '单请求均值' : '单次调用均值', value: (u.requestCount || calls) ? fmtCompact(u.totalTokens / (u.requestCount || calls)) : '—' },
+    { label: '单回合均值', value: turns && u.totalTokens ? fmtCompact(u.totalTokens / Math.max(turns, 1)) : '—' },
+    { label: 'P50 / P90', value: `${fmtCompact(tokenStats.value.p50)} / ${fmtCompact(tokenStats.value.p90)}` },
+    { label: 'Cache 命中率', value: cacheBase ? fmtPct(u.cacheReadTokens / cacheBase) : '—' },
+    { label: 'API 请求', value: fmtInt(u.requestCount) },
+    { label: '异常回合', value: fmtInt(tokenStats.value.anomalies) },
+    { label: sessionScope.value ? '本会话回合' : '覆盖会话', value: sessionScope.value ? fmtInt(turns) : fmtInt(sessions) }
   ]
 })
 
@@ -1308,11 +1717,11 @@ const dimensionChips = computed(() => {
   if (selectedId.value === 'tokens') {
     return sessionScope.value
       ? ['回合序列', '构成拆分', 'Turn 分布', 'Top 回合', '回合明细']
-      : ['构成拆分', '趋势', '会话排行', '回合分布', '客户端对比', '效率对照', '会话明细']
+      : ['构成拆分', '趋势', '会话排行', '回合分布', '会话明细']
   }
   return sessionScope.value
-    ? ['回合序列', 'Turn 分布', 'Top 回合', '回合明细']
-    : ['时间趋势', '会话排行', '客户端对比', '会话明细']
+    ? ['调用', '载入完整', '错误', '重复载入', '过程漏斗', '会话明细']
+    : ['调用与来源', '载入完整', '错误', '重复载入', '过程漏斗', '会话明细']
 })
 
 const emptyTokenHint = computed(() => {
@@ -1487,21 +1896,6 @@ function exportCsv() {
       </div>
     </div>
 
-    <div class="metrics-overview" role="list">
-      <button
-        v-for="card in overviewCards"
-        :key="card.id"
-        type="button"
-        role="listitem"
-        :class="['metric-card', { selected: selectedId === card.id }, toneClass(card.tone)]"
-        @click="selectMetric(card.id)"
-      >
-        <span class="metric-card-title">{{ card.title }}</span>
-        <strong class="metric-card-value">{{ card.value }}</strong>
-        <span class="metric-card-caption">{{ card.caption }}</span>
-      </button>
-    </div>
-
     <article class="panel metric-detail-panel">
       <header class="panel-head metric-detail-head">
         <div>
@@ -1521,6 +1915,9 @@ function exportCsv() {
       </div>
 
       <p v-if="emptyTokenHint" class="metric-empty-hint" role="status">{{ emptyTokenHint }}</p>
+      <p v-if="selectedId === 'usage'" class="metric-block-note">
+        {{ props.detail?.quality?.reloadNote || '重读按 Turn 统计；过程漏斗 L1触发→L2加载成功→L3执行推进→L4行为闭环。' }}
+      </p>
 
       <!-- 当前会话摘要 -->
       <article v-if="sessionScope" class="session-scope-banner">
@@ -1538,8 +1935,102 @@ function exportCsv() {
         <button type="button" class="btn-ghost" @click="onChangeSession('')">查看全部会话</button>
       </article>
 
-      <!-- 图表区：与原型一致的多块布局 -->
-      <div class="metric-detail-grid">
+      <!-- 使用与过程：合并看板 -->
+      <div v-if="showUsageBoard" class="usage-board">
+        <div class="usage-board-grid">
+          <section class="metric-block">
+            <header class="metric-block-head">
+              <h3>{{ sessionScope ? '本会话技能调用' : '调用趋势' }}</h3>
+            </header>
+            <div class="metric-chart chart-box-pro">
+              <EchartHost :option="usageCallBarOption" :height="260" />
+            </div>
+          </section>
+          <section class="metric-block">
+            <header class="metric-block-head">
+              <h3>{{ sessionScope ? '触发方式 · 本会话' : '触发方式占比' }}</h3>
+            </header>
+            <div class="compose-layout-pro compose-layout-pie">
+              <div class="donut-wrap">
+                <EchartHost :option="usageCallPieOption" :height="260" />
+              </div>
+            </div>
+          </section>
+          <section class="metric-block">
+            <header class="metric-block-head">
+              <h3>载入完整</h3>
+            </header>
+            <div class="metric-chart chart-box-pro">
+              <EchartHost :option="usageCompleteBarOption" :height="260" />
+            </div>
+          </section>
+          <section class="metric-block">
+            <header class="metric-block-head">
+              <h3>载入状态占比</h3>
+            </header>
+            <div class="compose-layout-pro compose-layout-pie">
+              <div class="donut-wrap">
+                <EchartHost :option="usageCompletePieOption" :height="260" />
+              </div>
+            </div>
+          </section>
+          <section class="metric-block">
+            <header class="metric-block-head">
+              <h3>错误</h3>
+            </header>
+            <div class="metric-chart chart-box-pro">
+              <EchartHost :option="usageErrorBarOption" :height="260" />
+            </div>
+          </section>
+          <section class="metric-block">
+            <header class="metric-block-head">
+              <h3>错误占比</h3>
+            </header>
+            <div class="compose-layout-pro compose-layout-pie">
+              <div class="donut-wrap">
+                <EchartHost :option="usageErrorPieOption" :height="260" />
+              </div>
+            </div>
+          </section>
+          <section class="metric-block">
+            <header class="metric-block-head">
+              <h3>重复载入</h3>
+            </header>
+            <div class="metric-chart chart-box-pro">
+              <EchartHost :option="usageReloadBarOption" :height="260" />
+            </div>
+          </section>
+          <section class="metric-block">
+            <header class="metric-block-head">
+              <h3>重载占比</h3>
+            </header>
+            <div class="compose-layout-pro compose-layout-pie">
+              <div class="donut-wrap">
+                <EchartHost :option="usageReloadPieOption" :height="260" />
+              </div>
+            </div>
+          </section>
+          <section class="metric-block metric-block-full">
+            <header class="metric-block-head">
+              <h3>过程漏斗 L1–L4</h3>
+              <span class="chip-muted">L2/L1 · L4/L1 见上方 KPI</span>
+            </header>
+            <div class="usage-board-grid">
+              <div class="metric-chart chart-box-pro">
+                <EchartHost :option="funnelBarOption" :height="280" />
+              </div>
+              <div class="compose-layout-pro compose-layout-pie">
+                <div class="donut-wrap">
+                  <EchartHost :option="funnelPieOption" :height="280" />
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- 图表区：Token 消耗等 -->
+      <div v-else class="metric-detail-grid">
         <section class="metric-block">
           <header class="metric-block-head">
             <h3>{{ sessionScope ? (selectedId === 'tokens' ? 'Turn 消耗序列' : `${activeTitle} · 回合序列`) : (selectedId === 'tokens' ? 'Token 消耗趋势' : `${activeTitle}趋势`) }}</h3>

@@ -65,11 +65,7 @@ export interface MetricTurnRow {
 
 export type ObserveMetricId =
   | 'tokens'
-  | 'calls'
-  | 'sessions'
-  | 'completeness'
-  | 'errors'
-  | 'reload'
+  | 'usage'
 
 export interface MetricSummaryCard {
   id: ObserveMetricId

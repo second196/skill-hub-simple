@@ -1890,7 +1890,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
         </section>
       </section>
 
-      <section v-else-if="isObserveSkill" class="observe-page observe-skill-page">
+      <section v-else-if="isObserveSkill" class="observe-page observe-skill-page" :class="{ 'is-metrics-tab': observeDetailTab === 'metrics' }">
         <RouterLink class="back" to="/observe">← 返回观测</RouterLink>
         <p v-if="observeDetailError" class="error" role="alert">{{ observeDetailError }}</p>
         <p v-else-if="observeDetailLoading && !observeDetail" class="empty">正在加载Skill观测…</p>
@@ -2012,19 +2012,6 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                   </li>
                 </ul>
               </article>
-              <article class="panel quality-panel-block">
-                <h2>路径分布</h2>
-                <ul class="path-dist-list">
-                  <li v-for="item in observeDetail.quality?.pathDistribution || []" :key="item.key">
-                    <span class="path-label">{{ item.label }}</span>
-                    <span class="path-bar-track" aria-hidden="true">
-                      <span class="path-bar" :style="{ width: `${Math.round((item.ratio || 0) * 100)}%` }"></span>
-                    </span>
-                    <span class="num">{{ item.count }} · {{ formatPercent(item.ratio) }}</span>
-                  </li>
-                  <li v-if="!(observeDetail.quality?.pathDistribution || []).length" class="empty">暂无路径数据</li>
-                </ul>
-              </article>
             </div>
 
             <article class="panel quality-panel-block">
@@ -2034,7 +2021,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                 <thead>
                   <tr>
                     <th>会话</th>
-                    <th>客户端</th>
+                    <th>开发工具</th>
                     <th>时间</th>
                     <th>载入</th>
                     <th>错误</th>

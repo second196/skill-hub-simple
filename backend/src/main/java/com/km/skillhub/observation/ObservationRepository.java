@@ -311,7 +311,6 @@ public class ObservationRepository {
         quality.put("progressLabel", progressLabel(progress));
         quality.put("healthScore", Integer.valueOf((int) Math.round(health)));
         quality.put("healthLabel", healthLabel(health));
-        quality.put("pathDistribution", pathDistribution(slug));
         quality.put("evidence", skillEvidenceLevels(slug));
         quality.put("reloadNote", "重读按 Turn 统计：同一轮对话内重复载入该技能才算；跨 Turn 的 SOP 正常触发不计入");
         quality.put("formula", "健康分 = 载入完整 × 35% +（1 − 错误率）× 30% +（1 − 重读率）× 25% + 推进 × 10%");
@@ -418,36 +417,6 @@ public class ObservationRepository {
                         " ORDER BY error_rank ASC, reload_rank ASC, complete_rank ASC, sess.started_at DESC NULLS LAST" +
                         " LIMIT ?",
                 slug, Integer.valueOf(limit));
-    }
-
-    private List<Map<String, Object>> pathDistribution(String slug) {
-        List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT COALESCE(payload->>'match','other') AS match_key, COUNT(*) AS count" +
-                        " FROM observation_step" +
-                        " WHERE skill_slug=? AND type='skill'" +
-                        " GROUP BY 1 ORDER BY count DESC", slug);
-        List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
-        int total = 0;
-        for (Map<String, Object> row : rows) total += intOf(row.get("count"));
-        for (Map<String, Object> row : rows) {
-            Map<String, Object> item = new LinkedHashMap<String, Object>();
-            String key = String.valueOf(row.get("match_key"));
-            int count = intOf(row.get("count"));
-            item.put("key", key);
-            item.put("label", pathLabel(key));
-            item.put("count", Integer.valueOf(count));
-            item.put("ratio", Double.valueOf(total == 0 ? 0d : round2((double) count / total)));
-            result.add(item);
-        }
-        return result;
-    }
-
-    private static String pathLabel(String key) {
-        if ("call".equals(key)) return "Skill 工具调用";
-        if ("file".equals(key)) return "读 SKILL.md / 文件";
-        if ("path".equals(key)) return "读Skill目录路径";
-        if ("text".equals(key)) return "用户 /$slash 文本";
-        return "其他";
     }
 
     private static String progressLabel(double progress) {

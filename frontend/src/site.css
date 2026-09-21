@@ -122,6 +122,16 @@ input::placeholder {
   width: min(1200px, calc(100% - 48px));
   margin: 0 auto;
   padding: 42px 0 88px;
+  min-width: 0;
+  overflow-x: clip;
+}
+
+/* 观测技能/指标：内容更宽时容器居中加宽（左右对称），禁止只向右撑破 */
+.site-main:has(.observe-skill-page),
+.site-main:has(.observe-metrics),
+.site-main:has(.observe-metrics-rich),
+.site-main:has(.is-metrics-tab) {
+  width: min(1400px, calc(100% - 32px));
 }
 
 .home-page,
@@ -1867,6 +1877,42 @@ code {
 .observe-page {
   display: grid;
   gap: 28px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.observe-metrics,
+.observe-metrics-rich {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.metrics-toolbar,
+.metrics-toolbar .toolbar-group,
+.metrics-overview,
+.metric-overview,
+.metric-detail-panel,
+.metric-detail-grid,
+.metric-block,
+.metric-chart,
+.chart-box-pro,
+.compose-layout-pro,
+.compose-layout-pie {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.metric-detail-grid {
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+}
+
+.metric-overview {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .observe-hint {
@@ -3035,6 +3081,8 @@ code {
 
 .metric-table-wrap {
   overflow: auto;
+  max-width: 100%;
+  min-width: 0;
   border: 1px solid #eef2f8;
   border-radius: 12px;
   background: #fff;
@@ -3053,6 +3101,7 @@ code {
   border-bottom: 1px solid #eef2f8;
   text-align: left;
   white-space: nowrap;
+  text-align: center;
 }
 
 .metric-table th {
@@ -3060,10 +3109,11 @@ code {
   color: #475467;
   font-size: 12px;
   font-weight: 700;
+  text-align: center;
 }
 
 .metric-table .num {
-  text-align: right;
+  text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3330,43 +3380,102 @@ code {
 
 .echart-host {
   width: 100%;
+  max-width: 100%;
   min-height: 240px;
+  overflow: hidden;
 }
 
 .donut-wrap {
-  min-width: 240px;
-  flex: 0 0 280px;
+  min-width: 0;
+  width: 100%;
+  flex: 1 1 auto;
 }
 
 .donut-wrap .echart-host {
   min-height: 260px;
 }
 
+.usage-board {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.usage-board-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+}
+
+.usage-board-grid .metric-block-full {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 960px) {
+  .usage-board-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .metric-kpi-row-rich {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
+.metric-overview {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 1100px) {
+  .metric-overview {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .metric-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .metric-detail-grid {
-  grid-template-columns: 1.15fr 1fr;
-  align-items: start;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.metric-detail-grid > .metric-block {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.metric-detail-grid > .metric-block .compose-layout-pie {
+  flex: 1 1 auto;
 }
 
 .compose-layout-pie {
   display: flex;
   justify-content: center;
-  align-items: center;
-  min-height: 280px;
+  align-items: stretch;
+  width: 100%;
+  min-height: 300px;
+  height: 100%;
 }
 
 .donut-wrap {
   width: 100%;
   max-width: 100%;
+  height: 100%;
+  min-height: 300px;
   margin: 0 auto;
 }
 
 .donut-wrap .echart-host {
-  min-height: 280px;
-  height: 280px !important;
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
   margin: 0 auto;
 }
 
@@ -3450,19 +3559,24 @@ code {
 .compose-layout-pie {
   display: flex;
   justify-content: center;
-  align-items: center;
-  min-height: 280px;
+  align-items: stretch;
+  width: 100%;
+  min-height: 300px;
+  height: 100%;
 }
 
 .donut-wrap {
   width: 100%;
   max-width: 100%;
+  height: 100%;
+  min-height: 300px;
   margin: 0 auto;
 }
 
 .donut-wrap .echart-host {
-  min-height: 280px;
-  height: 280px !important;
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
   margin: 0 auto;
 }
 
@@ -3597,7 +3711,9 @@ code {
 }
 
 .metric-table-wide {
-  min-width: 920px;
+  min-width: min(920px, 100%);
+  width: 100%;
+  max-width: none;
 }
 
 .metric-table tr.selected {
