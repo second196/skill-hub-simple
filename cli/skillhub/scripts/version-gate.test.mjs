@@ -219,5 +219,95 @@ await test('gate module exports do not include digest codes', async () => {
   assert.equal(VERSION_GATE_ERROR_CODES.VERSION_EXISTS, 'VERSION_EXISTS')
 })
 
+// --- write-back / verify-source ---
+
+await test('verify-source fails when composite source lacks package.json on disk', async () => {
+  const { verifySourcePaths } = await import('../dist/commands/upload.js')
+  const root = await mkdtemp(join(tmpdir(), 'skillhub-src-'))
+  try {
+    await mkdir(join(root, 'child-a'), { recursive: true })
+    await mkdir(join(root, 'child-b'), { recursive: true })
+    await writeFile(join(root, 'child-a', 'SKILL.md'), skillMd({ name: 'child-a', version: '1.0.0' }), 'utf8')
+    await writeFile(join(root, 'child-b', 'SKILL.md'), skillMd({ name: 'child-b', version: '1.0.0' }), 'utf8')
+    await writeFile(join(root, 'notes.txt'), 'marker', 'utf8')
+    const result = await verifySourcePaths([root])
+    assert.equal(result.ok, false)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+await test('verify-source passes when composite source has package.json', async () => {
+  const { verifySourcePaths } = await import('../dist/commands/upload.js')
+  const root = await mkdtemp(join(tmpdir(), 'skillhub-src-'))
+  try {
+    await mkdir(join(root, 'child-a'), { recursive: true })
+    await mkdir(join(root, 'child-b'), { recursive: true })
+    await writeFile(join(root, 'child-a', 'SKILL.md'), skillMd({ name: 'child-a', version: '1.0.0' }), 'utf8')
+    await writeFile(join(root, 'child-b', 'SKILL.md'), skillMd({ name: 'child-b', version: '1.0.0' }), 'utf8')
+    await writeFile(join(root, 'package.json'), JSON.stringify({
+      name: 'demo-composite',
+      description: 'demo',
+      version: '1.0.0',
+      category: '研发'
+    }), 'utf8')
+    const result = await verifySourcePaths([root])
+    assert.equal(result.ok, true)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+await test('prepare --complete-from writes back temp package.json to source and deletes temp', async () => {
+  const { prepareCommand, verifySourcePaths } = await import('../dist/commands/upload.js')
+  const source = await mkdtemp(join(tmpdir(), 'skillhub-src-'))
+  const temp = await mkdtemp(join(tmpdir(), 'skillhub-temp-'))
+  try {
+    await mkdir(join(source, 'child-a'), { recursive: true })
+    await mkdir(join(source, 'child-b'), { recursive: true })
+    await writeFile(join(source, 'child-a', 'SKILL.md'), skillMd({ name: 'child-a', version: '1.0.0' }), 'utf8')
+    await writeFile(join(source, 'child-b', 'SKILL.md'), skillMd({ name: 'child-b', version: '1.0.0' }), 'utf8')
+    await writeFile(join(source, 'notes.txt'), 'marker', 'utf8')
+
+    await mkdir(join(temp, 'child-a'), { recursive: true })
+    await mkdir(join(temp, 'child-b'), { recursive: true })
+    await writeFile(join(temp, 'child-a', 'SKILL.md'), skillMd({ name: 'child-a', version: '1.0.0' }), 'utf8')
+    await writeFile(join(temp, 'child-b', 'SKILL.md'), skillMd({ name: 'child-b', version: '1.0.0' }), 'utf8')
+    await writeFile(join(temp, 'notes.txt'), 'marker', 'utf8')
+    await writeFile(join(temp, 'package.json'), JSON.stringify({
+      name: 'demo-composite',
+      description: 'demo',
+      version: '1.0.1',
+      category: '研发'
+    }), 'utf8')
+
+    const before = await verifySourcePaths([source])
+    assert.equal(before.ok, false)
+
+    const output = JSON.parse(await prepareCommand({
+      inputPath: source,
+      completeFrom: temp,
+      json: true
+    }))
+    assert.equal(output.ok, true)
+    assert.equal(output.completeFromDeleted, true)
+
+    const { access } = await import('node:fs/promises')
+    let tempStillExists = true
+    try { await access(temp) } catch { tempStillExists = false }
+    assert.equal(tempStillExists, false)
+
+    const after = await verifySourcePaths([source])
+    assert.equal(after.ok, true)
+    const { readFile } = await import('node:fs/promises')
+    const packageJson = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
+    assert.equal(packageJson.version, '1.0.1')
+    assert.equal(packageJson.category, '研发')
+  } finally {
+    await rm(source, { recursive: true, force: true })
+    await rm(temp, { recursive: true, force: true })
+  }
+})
+
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)

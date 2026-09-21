@@ -16,21 +16,23 @@ export function formatError(error, json) {
     }
     const example = details.example;
     if (example?.packageJson) {
-        lines.push('', '请在包根 package.json 补全 version（复合包不要创建根 SKILL.md）：');
+        lines.push('', '请在包根 package.json 补全 version/category（复合包不要创建根 SKILL.md）：');
         lines.push(JSON.stringify(example.packageJson, null, 2));
     }
     if (example?.skillMd) {
-        lines.push('', '或在已有根 SKILL.md 的 frontmatter 中声明 version（单包）：');
+        lines.push('', '或在已有根 SKILL.md 的 frontmatter 中声明 version/category（单包）：');
         lines.push(example.skillMd);
     }
     if (details.hint) {
         lines.push('', details.hint);
     }
-    lines.push('', '官方补全流程（源目录不完整时）：');
-    lines.push('  1. 创建临时目录，完整复制 Skill');
-    lines.push('  2. 在临时目录补全包内 version / category');
-    lines.push('  3. 将临时目录完整内容覆盖回技能源目录');
-    lines.push('  4. 删除临时目录');
-    lines.push('  5. skillhub upload <skill-dir> --json');
+    if (details.prepareFlow?.length) {
+        lines.push('');
+        for (const step of details.prepareFlow)
+            lines.push(step);
+    }
+    else {
+        lines.push('', '硬性要求：临时目录补全后必须 write-back 到技能源目录，再 verify-source + upload 源目录。');
+    }
     return lines.join('\n');
 }

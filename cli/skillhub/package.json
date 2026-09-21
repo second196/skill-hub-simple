@@ -1,6 +1,6 @@
 {
   "name": "@second196/skillhub-cli",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Skill Hub CLI for uploading, discovering, and installing skills",
   "type": "module",
   "bin": {

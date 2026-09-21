@@ -75,8 +75,16 @@ skillhub upload ./skill-a --category 研发 \
 
 - **`version` 必须写在 Skill 包内**：单包 = 根 `SKILL.md` frontmatter；复合包 = 包根 `package.json` / `.codex-plugin/plugin.json`。CLI **没有** `--skill-version` 上传参数，也**不会**注入版本。
 - 平台用 SemVer `version_label` 区分版本，**没有 digest**。同 skill 同 version 再上传返回 `VERSION_EXISTS`。
-- 分类优先级：包内 `category` > 平台已有 skill 分类 > CLI `--category` > `其他`。
-- 源目录不完整时：临时目录补全 → 完整覆盖回源目录 → 删除临时目录 → `skillhub upload`。也可用 `skillhub check` / `skillhub prepare`。
+- 分类优先级：包内 `category` > 平台已有 skill 分类 > CLI `--category` > `其他`。上传前应读 skill 内容判定分类，禁止未读默认「其他」。
+- **write-back 强制**：临时目录补全后必须 `skillhub prepare <源目录> --complete-from <temp>` 覆盖回技能源目录并删除 temp，再 `verify-source` + 对**源目录** `upload`。禁止仅临时目录成功。
+- 成功标准：`upload` 的 `platformVerify` 与 `sourceVerify` 均通过；`verify-source` 核验源目录磁盘元数据。
+
+```bash
+skillhub check ./my-composite --json
+skillhub verify-source ./my-composite --json
+skillhub prepare ./my-composite --complete-from /tmp/skill-copy --json
+skillhub upload ./my-composite --source-dir ./my-composite --json
+```
 
 #### 复合技能包
 
