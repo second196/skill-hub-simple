@@ -112,17 +112,45 @@ function toIngestSession(session) {
             turnIndex: turn.turnIndex,
             startedAt: turn.startedAt || undefined,
             userText: turn.userText,
-            steps: turn.steps.map((step) => ({
-                stepId: step.step_id,
-                seq: step.seq,
-                type: step.type,
-                ts: step.ts,
-                skillSlug: step.skill_slug,
-                skillName: step.skill_name,
-                payload: sanitizePayload(step.payload)
-            }))
+            steps: turn.steps.map((step) => toIngestStep(step))
         }))
     };
+}
+export function toIngestStep(step) {
+    const payload = sanitizePayload(step.payload || {});
+    const versionLabel = firstText(step.skill_version_label, payload.skill_version_label, payload.skillVersionLabel, payload.versionLabel);
+    const versionDigest = firstText(step.skill_version_digest, payload.skill_version_digest, payload.skillVersionDigest, payload.versionDigest);
+    const versionFields = {};
+    if (versionDigest) {
+        versionFields.skillVersionDigest = versionDigest;
+        if (versionLabel)
+            versionFields.skillVersionLabel = versionLabel;
+        versionFields.skillVersionSource = 'observed';
+    }
+    const nextPayload = { ...payload };
+    if (versionFields.skillVersionDigest) {
+        nextPayload.skillVersionDigest = versionFields.skillVersionDigest;
+        if (versionFields.skillVersionLabel)
+            nextPayload.skillVersionLabel = versionFields.skillVersionLabel;
+        nextPayload.skillVersionSource = 'observed';
+    }
+    return {
+        stepId: step.step_id,
+        seq: step.seq,
+        type: step.type,
+        ts: step.ts,
+        skillSlug: step.skill_slug,
+        skillName: step.skill_name,
+        ...versionFields,
+        payload: nextPayload
+    };
+}
+function firstText(...values) {
+    for (const value of values) {
+        if (typeof value === 'string' && value.trim())
+            return value.trim();
+    }
+    return undefined;
 }
 export async function postJson(url, body) {
     const response = await fetch(url, {

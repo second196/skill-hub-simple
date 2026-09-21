@@ -4,4 +4,16 @@ import type { ObservationEvent } from './types.js';
 export declare function ingestEvents(serviceUrl: string, events: ObservationEvent[]): Promise<string>;
 export declare function ingestSessions(serviceUrl: string, sessions: TimelineSession[]): Promise<string>;
 export declare function annotateSessions(sessions: TimelineSession[], platform: Awaited<ReturnType<typeof fetchPlatformSkills>>): TimelineSession[];
+export declare function toIngestStep(step: ObservationEvent): {
+    stepId: string;
+    seq: number;
+    type: string;
+    ts: string;
+    skillSlug: string | undefined;
+    skillName: string | undefined;
+    skillVersionDigest?: string;
+    skillVersionLabel?: string;
+    skillVersionSource?: string;
+    payload: Record<string, unknown>;
+};
 export declare function postJson(url: string, body: unknown): Promise<Record<string, unknown>>;

@@ -12,7 +12,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node ./scripts/mark-executable.cjs dist/index.js && node ./scripts/copy-readme.cjs",
-    "test": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node ./scripts/version-gate.test.mjs",
     "prepublishOnly": "npm run build"
   },
   "engines": {

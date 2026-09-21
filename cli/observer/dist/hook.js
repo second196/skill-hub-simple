@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { listInstalledSkills, matchSlashSkillCommands, matchSkillUsage, parentSlugsFor, slugify } from './catalog.js';
+import { listInstalledSkills, matchSlashSkillCommands, matchSkillUsage, parentSlugsFor, resolveSkillVersion, slugify } from './catalog.js';
 import { extractPaths, isDocumentPath, readDocument } from './documents.js';
 import { sanitizePayload, sanitizeText } from './payload.js';
 import { spawnDrain } from './drain.js';
@@ -101,18 +101,24 @@ async function eventsFromHook(phase, clientName, payload) {
     let type = 'tool';
     let skillSlug = usage?.slug;
     let skillName = usage?.name;
+    let skillVersionLabel;
+    let skillVersionDigest;
     let body = { name: toolName, args: input, result: response ?? '' };
     if (usage) {
         type = 'skill';
         skillName = usage.name;
         skillSlug = usage.slug;
+        const version = resolveSkillVersion(skills, usage);
+        skillVersionLabel = version.versionLabel;
+        skillVersionDigest = version.versionDigest;
         body = {
             name: skillName,
             args: input,
             result: stringify(response),
             outcome: isError(response) ? 'error' : 'ok',
             match: usage.match,
-            duration_ms: undefined
+            duration_ms: undefined,
+            ...versionPayloadFields(skillVersionLabel, skillVersionDigest)
         };
     }
     else if (documentPath) {
@@ -124,12 +130,16 @@ async function eventsFromHook(phase, clientName, payload) {
         type = 'skill';
         skillSlug = primary.slug;
         skillName = primary.name;
+        const version = resolveSkillVersion(skills, primary);
+        skillVersionLabel = version.versionLabel;
+        skillVersionDigest = version.versionDigest;
         body = {
             name: skillName,
             args: { source: 'user_text', text: userText.slice(0, 400) },
             result: stringify(response),
             outcome: 'ok',
-            match: primary.match
+            match: primary.match,
+            ...versionPayloadFields(skillVersionLabel, skillVersionDigest)
         };
     }
     if (phase === 'pre' && type === 'tool' && !usage && !documentPath && clientName === 'codex')
@@ -148,18 +158,23 @@ async function eventsFromHook(phase, clientName, payload) {
         ts,
         skill_slug: skillSlug,
         skill_name: skillName,
+        skill_version_label: skillVersionLabel,
+        skill_version_digest: skillVersionDigest,
         source: 'hook',
         payload: sanitizePayload(body)
     };
     events.push(event);
     if (usage && usage.parents.length) {
         for (const parent of usage.parents) {
+            const parentVersion = resolveSkillVersion(skills, { slug: parent });
             events.push({
                 ...event,
                 event_id: randomUUID(),
                 step_id: `hook:${clientName}:${sessionId}:skill:${parent}:${hashish(input)}`,
                 skill_slug: parent,
                 skill_name: parent,
+                skill_version_label: parentVersion.versionLabel,
+                skill_version_digest: parentVersion.versionDigest,
                 payload: sanitizePayload({
                     name: parent,
                     args: input,
@@ -167,12 +182,21 @@ async function eventsFromHook(phase, clientName, payload) {
                     outcome: isError(response) ? 'error' : 'ok',
                     rollup: true,
                     child_slug: usage.slug,
-                    child_name: usage.name
+                    child_name: usage.name,
+                    ...versionPayloadFields(parentVersion.versionLabel, parentVersion.versionDigest)
                 })
             });
         }
     }
     return events;
+}
+function versionPayloadFields(label, digest) {
+    const fields = {};
+    if (label)
+        fields.skill_version_label = label;
+    if (digest)
+        fields.skill_version_digest = digest;
+    return fields;
 }
 function usageFromExplicit(name) {
     if (!name)

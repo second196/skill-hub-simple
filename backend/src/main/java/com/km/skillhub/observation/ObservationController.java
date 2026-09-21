@@ -54,8 +54,18 @@ public class ObservationController {
     @GetMapping("/skills/{slug}")
     public Map<String, Object> skill(@PathVariable String slug,
                                      @RequestParam(required = false) String clientId,
-                                     @RequestParam(required = false) Long sessionId) {
-        return repository.skillDetail(slug, clientId, sessionId);
+                                     @RequestParam(required = false) Long sessionId,
+                                     @RequestParam(required = false) String version) {
+        return repository.skillDetail(slug, clientId, sessionId, version);
+    }
+
+    /**
+     * Observed + published version list for a skill dropdown.
+     * Combines skill_version (formal) with DISTINCT observation_step.skill_version_digest.
+     */
+    @GetMapping("/skills/{slug}/versions")
+    public List<Map<String, Object>> skillVersions(@PathVariable String slug) {
+        return repository.skillVersions(slug);
     }
 
     @GetMapping("/sessions/{id}")

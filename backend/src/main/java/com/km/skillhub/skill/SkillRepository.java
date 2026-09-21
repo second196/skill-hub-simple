@@ -42,7 +42,7 @@ public class SkillRepository {
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT s.id,s.slug,s.name,s.description,s.category,s.status,s.download_count,s.created_at,s.updated_at," +
                 "v.id AS version_id,v.version_label,v.version_digest,v.created_at AS version_created_at FROM skill s " +
                 "JOIN LATERAL (SELECT * FROM skill_version WHERE skill_id=s.id ORDER BY created_at DESC,id DESC LIMIT 1) v ON true WHERE s.slug=?", slug);
-        if (rows.isEmpty()) throw new IllegalArgumentException("Skill不存在");
+        if (rows.isEmpty()) throw new SkillApiException("Skill不存在", SkillApiException.CODE_SKILL_NOT_FOUND);
         Map<String, Object> result = rows.get(0);
         result.put("versions", jdbc.queryForList("SELECT version_label,version_digest,created_at FROM skill_version WHERE skill_id=? ORDER BY created_at DESC,id DESC", result.get("id")));
         return result;
@@ -56,7 +56,7 @@ public class SkillRepository {
     public Map<String, Object> file(String slug, String digest, String path) {
         Long versionId = versionId(slug, digest);
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT path,content,content_type,size_bytes FROM skill_file WHERE version_id=? AND path=?", versionId, path);
-        if (rows.isEmpty()) throw new IllegalArgumentException("文件不存在");
+        if (rows.isEmpty()) throw new SkillApiException("文件不存在", SkillApiException.CODE_VALIDATION_ERROR);
         return rows.get(0);
     }
 
@@ -71,7 +71,7 @@ public class SkillRepository {
             args = new Object[] { slug, digest };
         }
         List<Long> ids = jdbc.queryForList(sql, Long.class, args);
-        if (ids.isEmpty()) throw new IllegalArgumentException("Skill版本不存在");
+        if (ids.isEmpty()) throw new SkillApiException("Skill版本不存在", SkillApiException.CODE_VERSION_NOT_FOUND);
         return ids.get(0);
     }
 
@@ -87,20 +87,21 @@ public class SkillRepository {
         } else {
             skillId = ((Number) existing.get(0).get("id")).longValue();
             slug = String.valueOf(existing.get(0).get("slug"));
-            jdbc.update("UPDATE skill SET description=?,category=?,status='ACTIVE',updated_at=CURRENT_TIMESTAMP WHERE id=?", value.getDescription(), category, skillId);
-        }
-        List<Map<String, Object>> sameVersion = jdbc.queryForList("SELECT version_digest FROM skill_version WHERE skill_id=? AND version_label=?", skillId, value.getVersion());
-        if (!sameVersion.isEmpty()) {
-            // Same label + same content: idempotent no-op
-            if (value.getDigest().equals(sameVersion.get(0).get("version_digest"))) {
+            // Throws SkillApiException on digest conflict / SemVer regression.
+            // Returns false when the same version content is already stored (idempotent no-op).
+            boolean insertVersion = validateVersionAgainstHistory(skillId, value.getVersion(), value.getDigest());
+            jdbc.update("UPDATE skill SET description=?,category=?,status='ACTIVE',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    value.getDescription(), category, skillId);
+            if (!insertVersion) {
+                jdbc.update("UPDATE skill SET updated_at=CURRENT_TIMESTAMP WHERE id=?", skillId);
                 return detail(slug);
             }
-            // Same label + different content: keep history and append as a newer revision
-            // (latest install still resolves via created_at DESC)
         }
         Long versionId = jdbc.queryForObject(
                 "INSERT INTO skill_version(skill_id,version_label,version_digest) VALUES (?,?,?) RETURNING id",
-                Long.class, skillId, value.getVersion(), value.getDigest());
+                Long.class, skillId,
+                SkillVersions.normalizeVersionLabel(value.getVersion()),
+                value.getDigest());
         for (SkillPackage.FileEntry file : value.getFiles()) {
             jdbc.update("INSERT INTO skill_file(version_id,path,content,content_type,size_bytes,content_digest) VALUES (?,?,?,?,?,?)",
                     versionId, file.getPath(), file.getContent(), file.getContentType(), file.getContent().length, file.getDigest());
@@ -109,18 +110,66 @@ public class SkillRepository {
         return detail(slug);
     }
 
+    /**
+     * Enforce version identity rules when the skill already exists.
+     *
+     * @return false when the incoming package is an idempotent no-op; true when a new version row should be inserted
+     * @throws SkillApiException VERSION_DIGEST_CONFLICT / VERSION_BUMP_REQUIRED
+     */
+    private boolean validateVersionAgainstHistory(Long skillId, String versionLabel, String versionDigest) {
+        String incomingLabel = SkillVersions.normalizeVersionLabel(versionLabel);
+        List<Map<String, Object>> history = jdbc.queryForList(
+                "SELECT version_label,version_digest FROM skill_version WHERE skill_id=?", skillId);
+        String incomingDigest = SkillVersions.normalizeDigest(versionDigest);
+        String maxFormal = null;
+        for (Map<String, Object> row : history) {
+            String existingLabel = row.get("version_label") == null ? null : String.valueOf(row.get("version_label"));
+            String existingDigest = SkillVersions.normalizeDigest(
+                    row.get("version_digest") == null ? null : String.valueOf(row.get("version_digest")));
+            if (incomingLabel != null && incomingLabel.equals(existingLabel)) {
+                if (incomingDigest != null && incomingDigest.equals(existingDigest)) {
+                    return false;
+                }
+                throw new SkillApiException(
+                        "版本号 " + versionLabel + " 已存在但内容摘要不同（VERSION_DIGEST_CONFLICT）",
+                        SkillApiException.CODE_VERSION_DIGEST_CONFLICT);
+            }
+            if (SkillVersions.isSemVer(existingLabel)
+                    && (maxFormal == null || SkillVersions.compareSemVer(existingLabel, maxFormal) > 0)) {
+                maxFormal = existingLabel;
+            }
+        }
+        if (maxFormal != null && SkillVersions.isSemVer(incomingLabel)
+                && SkillVersions.compareSemVer(incomingLabel, maxFormal) < 0) {
+            throw new SkillApiException(
+                    "Skill 内容已修改但版本号未升，请先修改 SKILL.md 中的 version 再上传（" + maxFormal + "）",
+                    SkillApiException.CODE_VERSION_BUMP_REQUIRED);
+        }
+        if (incomingDigest != null) {
+            List<String> labels = jdbc.queryForList(
+                    "SELECT version_label FROM skill_version WHERE skill_id=? AND TRIM(version_digest)=?",
+                    String.class, skillId, incomingDigest);
+            if (!labels.isEmpty()) return false;
+        }
+        return true;
+    }
+
     public void offline(String slug) {
-        if (jdbc.update("UPDATE skill SET status='OFFLINE',updated_at=CURRENT_TIMESTAMP WHERE slug=?", slug) != 1) throw new IllegalArgumentException("Skill不存在");
+        if (jdbc.update("UPDATE skill SET status='OFFLINE',updated_at=CURRENT_TIMESTAMP WHERE slug=?", slug) != 1) {
+            throw new SkillApiException("Skill不存在", SkillApiException.CODE_SKILL_NOT_FOUND);
+        }
     }
 
     @Transactional
     public void delete(String slug) {
-        if (jdbc.update("DELETE FROM skill WHERE slug=?", slug) != 1) throw new IllegalArgumentException("Skill不存在");
+        if (jdbc.update("DELETE FROM skill WHERE slug=?", slug) != 1) {
+            throw new SkillApiException("Skill不存在", SkillApiException.CODE_SKILL_NOT_FOUND);
+        }
     }
 
     public void incrementDownloadCount(String slug) {
         if (jdbc.update("UPDATE skill SET download_count=download_count+1 WHERE slug=?", slug) != 1) {
-            throw new IllegalArgumentException("Skill不存在");
+            throw new SkillApiException("Skill不存在", SkillApiException.CODE_SKILL_NOT_FOUND);
         }
     }
 
@@ -128,7 +177,7 @@ public class SkillRepository {
         if (status == null || status.trim().isEmpty()) return null;
         String normalized = status.trim().toUpperCase(java.util.Locale.ROOT);
         if (!"ACTIVE".equals(normalized) && !"OFFLINE".equals(normalized)) {
-            throw new IllegalArgumentException("Skill状态只能是 ACTIVE 或 OFFLINE");
+            throw new SkillApiException("Skill状态只能是 ACTIVE 或 OFFLINE", SkillApiException.CODE_VALIDATION_ERROR);
         }
         return normalized;
     }

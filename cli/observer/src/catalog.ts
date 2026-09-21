@@ -1,7 +1,12 @@
+import { createHash } from 'node:crypto'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir, platform } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { InstalledSkill, SkillUsage } from './types.js'
+
+/** Full SemVer, optional prerelease/build. Leading `v` is stripped before matching. */
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+const DIGEST_HEX = /^[0-9a-f]{32,128}$/i
 
 export const UPD_SOP_CHILDREN = [
   'sop-requirement',
@@ -45,7 +50,59 @@ export function parseSkillFile(path: string, content: string): InstalledSkill | 
   const slug = slugify(name)
   const parentSlug = primaryParentSlug(slug, path)
   const source = isProjectSkillPath(path) ? 'project' : 'global'
-  return parentSlug ? { slug, name, path, parentSlug, source } : { slug, name, path, source }
+  const versionLabel = normalizeVersionLabel(frontmatterField(content, ['version']))
+  const frontmatterDigest = normalizeVersionDigest(
+    frontmatterField(content, ['version_digest', 'versionDigest', 'version-digest'])
+  )
+  const versionDigest = frontmatterDigest || computeSkillPackageDigest([{ path: 'SKILL.md', content }])
+  const base: InstalledSkill = { slug, name, path, source }
+  if (versionLabel) base.versionLabel = versionLabel
+  if (versionDigest) base.versionDigest = versionDigest
+  return parentSlug ? { ...base, parentSlug } : base
+}
+
+/**
+ * Normalize package digest algorithm used for observed skill versions.
+ * Files sorted by posix path; each line is `${path}\n${sha256Hex(bytes)}\n`;
+ * digest is sha256 of the concatenated string.
+ * Single-file skills use path `SKILL.md`.
+ */
+export function computeSkillPackageDigest(files: Array<{ path: string; content: string | Uint8Array }>): string {
+  const lines = [...files]
+    .map((file) => ({
+      path: file.path.replace(/\\/g, '/').replace(/^\.?\//, ''),
+      bytes: typeof file.content === 'string' ? Buffer.from(file.content, 'utf8') : Buffer.from(file.content)
+    }))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+    .map((file) => `${file.path}\n${createHash('sha256').update(file.bytes).digest('hex')}\n`)
+    .join('')
+  return createHash('sha256').update(lines).digest('hex')
+}
+
+export function normalizeVersionLabel(raw: string | undefined): string | undefined {
+  if (!raw) return undefined
+  const cleaned = raw.trim().replace(/^['"]|['"]$/g, '').replace(/^[vV]/, '')
+  return SEMVER.test(cleaned) ? cleaned : undefined
+}
+
+export function normalizeVersionDigest(raw: string | undefined): string | undefined {
+  if (!raw) return undefined
+  const cleaned = raw.trim().replace(/^['"]|['"]$/g, '')
+  return DIGEST_HEX.test(cleaned) ? cleaned.toLowerCase() : undefined
+}
+
+/** Resolve versionLabel/versionDigest for a usage against the installed catalog. */
+export function resolveSkillVersion(
+  skills: InstalledSkill[],
+  usage: { slug?: string; path?: string } | undefined
+): { versionLabel?: string; versionDigest?: string } {
+  if (!usage) return {}
+  const skill = (usage.path ? skills.find((item) => item.path === usage.path) : undefined)
+    || (usage.slug ? skills.find((item) => item.slug === usage.slug) : undefined)
+  return {
+    versionLabel: skill?.versionLabel,
+    versionDigest: skill?.versionDigest
+  }
 }
 
 export function withCompositeParents(skills: InstalledSkill[]): InstalledSkill[] {
@@ -234,10 +291,19 @@ function matchNamedSkillToken(text: string): SkillUsage | undefined {
 }
 
 function frontmatterName(content: string): string | undefined {
+  return frontmatterField(content, ['name'])
+}
+
+function frontmatterField(content: string, keys: string[]): string | undefined {
   const match = content.replace(/^\uFEFF/, '').match(/^---\r?\n([\s\S]*?)\r?\n---/)
   if (!match) return undefined
-  const name = match[1].match(/^name:\s*(.+)$/m)?.[1]?.trim()
-  return name ? name.replace(/^['"]|['"]$/g, '') : undefined
+  const block = match[1]
+  for (const key of keys) {
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const value = block.match(new RegExp(`^${escaped}:\\s*(.+)$`, 'm'))?.[1]?.trim()
+    if (value) return value.replace(/^['"]|['"]$/g, '')
+  }
+  return undefined
 }
 
 function parentDirName(path: string): string {

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { parseDocument } from 'yaml';
@@ -6,11 +5,15 @@ import { z } from 'zod';
 import { createArchive, readArchive, resolvePackageLimits } from '../platform/archive.js';
 import { normalizePackagePath, shouldExcludePackagePath } from '../platform/paths.js';
 import { PackageValidationError } from '../shared/errors.js';
-const SEMANTIC_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+import { VERSION_GATE_ERROR_CODES } from '../shared/constants.js';
+import { isInvalidVersionLabel, normalizeVersionLabel } from './semver.js';
+import { computeVersionDigest, sha256Hex } from './version-digest.js';
+import { assertSemverLabel } from './version-gate.js';
 const metadataSchema = z.object({
     name: z.string().trim().min(1).max(100),
     description: z.string().trim().min(1).max(2000),
-    version: z.string().trim().regex(SEMANTIC_VERSION).optional().default('0.0.0')
+    // version is validated separately so missing/invalid labels map to VERSION_SEMVER_REQUIRED
+    version: z.unknown().optional()
 }).passthrough();
 export async function prepareSkillPackage(inputPath, overrides = {}, metadataOverrides = {}) {
     const limits = resolvePackageLimits(overrides);
@@ -63,23 +66,68 @@ export async function prepareSkillPackage(inputPath, overrides = {}, metadataOve
         files = addGeneratedRootSkill(files, inputPath, metadataOverrides);
     }
     archive = createArchive(files, overrides);
-    const skillFile = files.find((file) => file.path === 'SKILL.md');
-    if (skillFile === undefined) {
+    const rootSkill = files.find((file) => file.path === 'SKILL.md');
+    if (rootSkill === undefined) {
         throw new PackageValidationError('Skill 包根目录缺少 SKILL.md', 'SKILL_FILE_REQUIRED');
     }
-    const metadata = parseMetadata(skillFile.content);
+    let skillContent = rootSkill.content;
+    let metadata = parseMetadata(skillContent);
+    // CLI --version overrides frontmatter when provided (composite / repair).
+    // Rewrite SKILL.md + archive so uploaded bytes match gate metadata/digest.
+    if (metadataOverrides.version !== undefined && metadataOverrides.version !== null) {
+        const overrideVersion = normalizeVersionLabel(String(metadataOverrides.version));
+        if (overrideVersion === null) {
+            throw versionSemverRequired(metadataOverrides.version);
+        }
+        if (overrideVersion !== metadata.version) {
+            skillContent = rewriteFrontmatterVersion(skillContent, overrideVersion);
+            files = files.map((file) => (file.path === 'SKILL.md' ? { path: 'SKILL.md', content: skillContent } : file));
+            archive = createArchive(files, overrides);
+            metadata = parseMetadata(skillContent);
+        }
+    }
     const manifest = createManifest(files);
     const manifestJson = JSON.stringify(manifest);
-    const normalizedVersion = JSON.stringify({ metadata, manifest });
+    // Content fingerprint — NOT sha256(version label). See version-digest.ts.
+    const versionDigest = computeVersionDigest(files);
     return {
         sourceType,
         archive,
-        artifactDigest: sha256(archive),
-        versionDigest: sha256(normalizedVersion),
-        manifestDigest: sha256(manifestJson),
+        artifactDigest: sha256Hex(archive),
+        versionDigest,
+        manifestDigest: sha256Hex(manifestJson),
         metadata,
         manifest
     };
+}
+/** Replace the frontmatter `version` field; used when CLI --version overrides. */
+function rewriteFrontmatterVersion(content, version) {
+    const markdown = new TextDecoder('utf-8', { fatal: true }).decode(content);
+    const lines = markdown.replace(/^\uFEFF/, '').split(/\r?\n/);
+    if (lines[0] !== '---') {
+        throw new PackageValidationError('SKILL.md 缺少 YAML frontmatter', 'INVALID_SKILL_FRONTMATTER');
+    }
+    const closingIndex = lines.findIndex((line, index) => index > 0 && (line === '---' || line === '...'));
+    if (closingIndex < 0) {
+        throw new PackageValidationError('SKILL.md 的 YAML frontmatter 未闭合', 'INVALID_SKILL_FRONTMATTER');
+    }
+    let replaced = false;
+    const next = lines.map((line, index) => {
+        if (index === 0 || index >= closingIndex)
+            return line;
+        if (/^version\s*:/i.test(line)) {
+            replaced = true;
+            return `version: ${version}`;
+        }
+        return line;
+    });
+    if (!replaced) {
+        next.splice(closingIndex, 0, `version: ${version}`);
+    }
+    return new TextEncoder().encode(`${next.join('\n')}\n`);
+}
+function versionSemverRequired(version) {
+    return new PackageValidationError('SKILL.md 缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, { version: version === undefined || version === null ? null : String(version) });
 }
 function normalizePackageRoot(files) {
     if (files.some((file) => file.path === 'SKILL.md'))
@@ -104,11 +152,21 @@ function addGeneratedRootSkill(files, inputPath, metadataOverrides) {
         || packageMetadata.description
         || readmeDescription(files)
         || `复合Skill包，包含 ${nestedSkillCount} 个子Skill。`, `复合Skill包，包含 ${nestedSkillCount} 个子Skill。`, 2000);
+    // No silent 0.0.0 default — composite packages must supply an explicit SemVer
+    // via --version or package.json / plugin.json version field.
+    const rawVersion = metadataOverrides.version ?? packageMetadata.version;
+    if (rawVersion === undefined || rawVersion === null || String(rawVersion).trim() === '') {
+        throw new PackageValidationError('复合Skill包缺少 version，请通过 --version 指定语义化版本号', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, { version: null });
+    }
+    const version = normalizeVersionLabel(String(rawVersion));
+    if (version === null) {
+        throw versionSemverRequired(rawVersion);
+    }
     const body = [
         '---',
         `name: ${yamlQuote(name)}`,
         `description: ${yamlQuote(description)}`,
-        'version: 0.0.0',
+        `version: ${yamlQuote(version)}`,
         '---',
         '',
         `# ${name}`,
@@ -127,7 +185,8 @@ function readPackageMetadata(files) {
             const value = JSON.parse(new TextDecoder().decode(file.content));
             return {
                 name: typeof value.name === 'string' ? value.name : undefined,
-                description: typeof value.description === 'string' ? value.description : undefined
+                description: typeof value.description === 'string' ? value.description : undefined,
+                version: typeof value.version === 'string' ? value.version : undefined
             };
         }
         catch {
@@ -253,19 +312,22 @@ function parseMetadata(content) {
     }
     const result = metadataSchema.safeParse(value);
     if (!result.success) {
-        throw new PackageValidationError('SKILL.md 的名称、描述或版本无效', 'INVALID_SKILL_METADATA');
+        throw new PackageValidationError('SKILL.md 的名称、描述无效', 'INVALID_SKILL_METADATA');
     }
+    const rawVersion = result.data.version;
+    if (isInvalidVersionLabel(rawVersion)) {
+        throw versionSemverRequired(rawVersion);
+    }
+    const version = assertSemverLabel(String(rawVersion));
     return {
         name: result.data.name,
         description: result.data.description,
-        version: result.data.version
+        version
     };
 }
 function createManifest(files) {
     return [...files]
         .sort((left, right) => Buffer.compare(Buffer.from(left.path, 'utf8'), Buffer.from(right.path, 'utf8')))
-        .map((file) => ({ path: file.path, size: file.content.byteLength, digest: sha256(file.content) }));
+        .map((file) => ({ path: file.path, size: file.content.byteLength, digest: sha256Hex(file.content) }));
 }
-function sha256(value) {
-    return createHash('sha256').update(value).digest('hex');
-}
+export { computeVersionDigest, VERSION_GATE_ERROR_CODES };

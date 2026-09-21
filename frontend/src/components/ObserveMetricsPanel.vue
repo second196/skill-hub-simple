@@ -92,6 +92,7 @@ type ObserveDetailLike = {
   trend?: Array<{ day: string; count: number; tokens?: number; usage?: Partial<SkillTokenUsage> }>
   clients?: Array<{ client_id: string; hostname?: string; os?: string; session_count?: number }>
   sessions?: ObserveSessionLike[]
+  versions?: Array<{ digest?: string; label?: string; source?: string; callCount?: number }>
   selectedSession?: ObserveChainLike | null
 }
 
@@ -99,17 +100,20 @@ const props = defineProps<{
   detail: ObserveDetailLike | null
   clientId?: string
   sessionId?: string
+  version?: string
 }>()
 
 const emit = defineEmits<{
   (e: 'change-client', clientId: string): void
   (e: 'change-session', sessionId: string): void
+  (e: 'change-version', version: string): void
 }>()
 
 const selectedId = ref<ObserveMetricId>('tokens')
 const selectedSessionKey = ref<string>('')
 const localClientId = ref<string>('')
 const localSessionId = ref<string>('')
+const localVersion = ref<string>('all')
 const sessionSort = ref<'tokens_desc' | 'tokens_asc' | 'turns_desc' | 'time_desc'>('tokens_desc')
 
 // 同步父级路由筛选
@@ -125,6 +129,14 @@ watch(
   () => props.sessionId,
   (value) => {
     localSessionId.value = value || ''
+  },
+  { immediate: true }
+)
+
+watch(
+  () => props.version,
+  (value) => {
+    localVersion.value = value || 'all'
   },
   { immediate: true }
 )
@@ -352,6 +364,26 @@ function onChangeSession(value: string) {
   selectedSessionKey.value = value
   emit('change-session', value)
 }
+
+function onChangeVersion(value: string) {
+  localVersion.value = value || 'all'
+  emit('change-version', value === 'all' ? '' : value)
+}
+
+const versionSelectOptions = computed(() => {
+  const list = props.detail?.versions || []
+  return [
+    { value: 'all', label: '全部版本', meta: '' },
+    { value: 'unknown', label: '未标注版本', meta: '' },
+    ...list
+      .filter((item) => item.digest)
+      .map((item) => ({
+        value: String(item.digest),
+        label: item.label ? `v${item.label}` : String(item.digest || '').slice(0, 8),
+        meta: item.source === 'inferred' ? '推断' : item.callCount != null ? `${item.callCount} 次` : ''
+      }))
+  ]
+})
 
 const turnRows = computed(() => {
   const turns = selectedSession.value?.turns || []
@@ -1864,6 +1896,12 @@ function exportCsv() {
   <section class="observe-metrics observe-metrics-rich" aria-label="指标观测">
     <div class="metrics-toolbar panel">
       <div class="toolbar-group">
+        <SelectField
+          label="Skill 版本"
+          :model-value="localVersion || 'all'"
+          :options="versionSelectOptions"
+          @update:model-value="onChangeVersion($event)"
+        />
         <SelectField
           label="指标"
           :model-value="selectedId"

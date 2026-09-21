@@ -198,6 +198,7 @@ type ObserveSession = {
 type ObserveStep = { step_id: string; seq: number; type: string; ts?: string; skill_slug?: string; payload?: Record<string, unknown> }
 type ObserveTurn = { id?: number; turn_index: number; started_at?: string; user_text?: string; steps: ObserveStep[] }
 type ObserveChain = ObserveSession & { os?: string; turns: ObserveTurn[] }
+type ObserveSkillVersion = { digest?: string; label?: string; source?: string; callCount?: number }
 type ObserveSkillDetail = {
   quality?: ObserveQuality
   problemSessions?: ObserveProblemSession[]
@@ -206,6 +207,7 @@ type ObserveSkillDetail = {
   trend: ObserveTrendPoint[]
   clients: ObserveClient[]
   sessions: ObserveSession[]
+  versions?: ObserveSkillVersion[]
   selectedSessionId?: number
   selectedSession?: ObserveChain | null
 }
@@ -226,6 +228,7 @@ const observeDetailLoading = ref(false)
 const observeDetailError = ref('')
 const observeClientId = ref('')
 const observeSessionId = ref('')
+const observeVersion = ref('')
 const observeShowToolSteps = ref(true)
 const observeShowStepContent = ref(true)
 const observeShowAssistantSteps = ref(true)
@@ -922,6 +925,7 @@ async function loadObserveSkill() {
   observeDetailError.value = ''
   observeClientId.value = typeof route.query.client === 'string' ? route.query.client : ''
   observeSessionId.value = typeof route.query.session === 'string' ? route.query.session : ''
+  observeVersion.value = typeof route.query.version === 'string' ? route.query.version : ''
   const rawTab = typeof route.query.tab === 'string' ? route.query.tab : ''
   observeDetailTab.value = rawTab === 'chain' || rawTab === 'metrics' ? rawTab : 'quality'
   observeChainView.value = route.query.view === 'tree' ? 'tree' : 'text'
@@ -932,6 +936,7 @@ async function loadObserveSkill() {
     const params = new URLSearchParams()
     if (observeClientId.value) params.set('clientId', observeClientId.value)
     if (observeSessionId.value) params.set('sessionId', observeSessionId.value)
+    if (observeVersion.value) params.set('version', observeVersion.value)
     const suffix = params.toString() ? `?${params}` : ''
     observeDetail.value = await request<ObserveSkillDetail>(`/api/observations/skills/${encodeURIComponent(observeSlug.value)}${suffix}`)
     if (!observeSessionId.value && observeDetail.value.selectedSessionId) {
@@ -948,6 +953,7 @@ async function loadObserveSkill() {
 function selectObserveClient(clientId: string) {
   const query: Record<string, string> = {}
   if (clientId) query.client = clientId
+  if (observeVersion.value) query.version = observeVersion.value
   if (isObserveSkill.value) query.tab = observeDetailTab.value
   const path = isObserveSkill.value ? `/observe/${observeSlug.value}` : '/observe/sessions'
   void router.push({ path, query })
@@ -958,13 +964,25 @@ function onMetricsChangeSession(sessionId: string) {
   observeSessionId.value = id
   const query: Record<string, string> = { tab: observeDetailTab.value }
   if (observeClientId.value) query.client = observeClientId.value
+  if (observeVersion.value) query.version = observeVersion.value
   if (id) query.session = id
+  void router.push({ path: `/observe/${observeSlug.value}`, query })
+}
+
+function onMetricsChangeVersion(version: string) {
+  const id = String(version || '')
+  observeVersion.value = id
+  observeSessionId.value = ''
+  const query: Record<string, string> = { tab: observeDetailTab.value }
+  if (observeClientId.value) query.client = observeClientId.value
+  if (id && id !== 'all') query.version = id
   void router.push({ path: `/observe/${observeSlug.value}`, query })
 }
 
 function selectObserveSession(session: ObserveSession) {
   const query: Record<string, string> = { session: String(session.id) }
   if (observeClientId.value || session.client_id) query.client = observeClientId.value || session.client_id
+  if (observeVersion.value) query.version = observeVersion.value
   if (isObserveSkill.value) query.tab = observeDetailTab.value
   const path = isObserveSkill.value ? `/observe/${observeSlug.value}` : '/observe/sessions'
   void router.push({ path, query })
@@ -975,6 +993,7 @@ function setObserveDetailTab(tab: ObserveDetailTab) {
   const query: Record<string, string> = { tab }
   if (observeClientId.value) query.client = observeClientId.value
   if (observeSessionId.value) query.session = observeSessionId.value
+  if (observeVersion.value) query.version = observeVersion.value
   if (tab === 'chain') query.view = observeChainView.value
   void router.replace({ path: `/observe/${observeSlug.value}`, query })
 }
@@ -2058,8 +2077,10 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             :detail="observeDetail"
             :client-id="observeClientId"
             :session-id="observeSessionId"
+            :version="observeVersion"
             @change-client="selectObserveClient"
             @change-session="onMetricsChangeSession"
+            @change-version="onMetricsChangeVersion"
           />
 
           <template v-else>

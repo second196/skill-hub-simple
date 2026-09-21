@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { createHash, randomUUID } from 'node:crypto'
 import type { ClientName, InstalledSkill, ObservationEvent, SkillUsage, StepType } from './types.js'
-import { discoverProjectSkillRoots, listInstalledSkills, matchSlashSkillCommands, matchSkillUsage, parentSlugsFor, slugify } from './catalog.js'
+import { discoverProjectSkillRoots, listInstalledSkills, matchSlashSkillCommands, matchSkillUsage, parentSlugsFor, resolveSkillVersion, slugify } from './catalog.js'
 import { extractPaths, isDocumentPath, readDocument } from './documents.js'
 import { sanitizePayload, sanitizeText } from './payload.js'
 import { loadClientId } from './store.js'
@@ -209,7 +209,8 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
           turnIndex,
           startSeq: seq,
           ts,
-          text: userText
+          text: userText,
+          skills
         })
         seq += textEvents.length
         for (const event of textEvents) {
@@ -276,7 +277,8 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
             ts,
             usage,
             args: input,
-            outcome: 'ok'
+            outcome: 'ok',
+            skills
           })
           seq += matchedEvents.length - 1
           tracker.rememberSkillEvents(matchedEvents, Math.max(turnIndex, 1))
@@ -438,7 +440,8 @@ async function scanCodex(clientId: string, skills: InstalledSkill[], files: stri
           turnIndex,
           startSeq: seq,
           ts,
-          text
+          text,
+          skills
         })
         seq += textEvents.length
         for (const event of textEvents) {
@@ -499,7 +502,8 @@ async function scanCodex(clientId: string, skills: InstalledSkill[], files: stri
             usage,
             args,
             outcome: 'ok',
-            toolName: name
+            toolName: name,
+            skills
           })
           seq += matchedEvents.length - 1
           tracker.rememberSkillEvents(matchedEvents, Math.max(turnIndex, 1))
@@ -590,9 +594,11 @@ function skillUsageEvents(input: {
   args: unknown
   outcome: 'ok' | 'error'
   toolName?: string
+  skills?: InstalledSkill[]
 }): ObservationEvent[] {
   const events: ObservationEvent[] = []
   let seq = input.startSeq
+  const version = resolveSkillVersion(input.skills || [], input.usage)
   events.push(makeEvent({
     clientId: input.clientId,
     clientName: input.clientName,
@@ -604,6 +610,8 @@ function skillUsageEvents(input: {
     ts: input.ts,
     skillSlug: input.usage.slug,
     skillName: input.usage.name,
+    skillVersionLabel: version.versionLabel,
+    skillVersionDigest: version.versionDigest,
     payload: {
       name: input.usage.name,
       args: input.args,
@@ -615,6 +623,7 @@ function skillUsageEvents(input: {
   }))
   for (const parent of input.usage.parents) {
     seq += 1
+    const parentVersion = resolveSkillVersion(input.skills || [], { slug: parent })
     events.push(makeEvent({
       clientId: input.clientId,
       clientName: input.clientName,
@@ -626,6 +635,8 @@ function skillUsageEvents(input: {
       ts: input.ts,
       skillSlug: parent,
       skillName: parent,
+      skillVersionLabel: parentVersion.versionLabel,
+      skillVersionDigest: parentVersion.versionDigest,
       payload: {
         name: parent,
         args: input.args,
@@ -650,6 +661,7 @@ function skillEventsFromUserText(input: {
   startSeq: number
   ts: string
   text: string
+  skills?: InstalledSkill[]
 }): ObservationEvent[] {
   const usages = matchSlashSkillCommands(input.text)
   if (!usages.length) return []
@@ -660,6 +672,7 @@ function skillEventsFromUserText(input: {
     seq += 1
     const child = usages.find((item) => item.slug !== usage.slug && item.parents.includes(usage.slug))
     const rollup = Boolean(child) && slugSet.has(usage.slug)
+    const version = resolveSkillVersion(input.skills || [], usage)
     events.push(makeEvent({
       clientId: input.clientId,
       clientName: input.clientName,
@@ -671,6 +684,8 @@ function skillEventsFromUserText(input: {
       ts: input.ts,
       skillSlug: usage.slug,
       skillName: usage.name,
+      skillVersionLabel: version.versionLabel,
+      skillVersionDigest: version.versionDigest,
       payload: {
         name: usage.name,
         args: { source: 'user_text', text: input.text.slice(0, 400) },
@@ -695,6 +710,8 @@ function makeEvent(input: {
   ts: string
   skillSlug?: string
   skillName?: string
+  skillVersionLabel?: string
+  skillVersionDigest?: string
   payload: Record<string, unknown>
 }): ObservationEvent {
   const stable = [
@@ -709,6 +726,9 @@ function makeEvent(input: {
     String(input.seq)
   ].join('|')
   const stepId = createHash('sha256').update(stable).digest('hex').slice(0, 24)
+  const versionPayload: Record<string, unknown> = {}
+  if (input.skillVersionLabel) versionPayload.skill_version_label = input.skillVersionLabel
+  if (input.skillVersionDigest) versionPayload.skill_version_digest = input.skillVersionDigest
   return {
     v: 1,
     event_id: randomUUID(),
@@ -723,8 +743,10 @@ function makeEvent(input: {
     ts: input.ts,
     skill_slug: input.skillSlug,
     skill_name: input.skillName,
+    skill_version_label: input.skillVersionLabel,
+    skill_version_digest: input.skillVersionDigest,
     source: 'scan',
-    payload: sanitizePayload(input.payload)
+    payload: sanitizePayload({ ...versionPayload, ...input.payload })
   }
 }
 

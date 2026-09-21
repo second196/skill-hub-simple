@@ -25,7 +25,7 @@ import java.util.zip.ZipInputStream;
 
 @Component
 public class SkillPackageParser {
-    private static final Pattern VERSION = Pattern.compile("^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$");
+    private static final Pattern VERSION = Pattern.compile(SkillVersions.SEMVER_REGEX);
     private final long maxPackageBytes;
     private final long maxExpandedBytes;
     private final int maxFiles;
@@ -50,13 +50,25 @@ public class SkillPackageParser {
         String name = text(metadata.get("name"), "name", 128);
         String description = text(metadata.get("description"), "description", 2048);
         Object rawVersion = metadata.get("version");
-        String version = rawVersion == null ? "0.0.0" : text(rawVersion, "version", 64);
-        if (!VERSION.matcher(version).matches()) throw new IllegalArgumentException("version 必须使用语义化版本号");
+        if (rawVersion == null) {
+            throw new SkillApiException("SKILL.md 缺少 version 字段（必须使用语义化版本号，不再默认 0.0.0）",
+                    SkillApiException.CODE_VERSION_REQUIRED);
+        }
+        String version = text(rawVersion, "version", 64);
+        version = SkillVersions.normalizeVersionLabel(version);
+        if (version == null || !SkillVersions.isSemVer(version)) {
+            throw new SkillApiException("version 必须使用语义化版本号",
+                    SkillApiException.CODE_VERSION_INVALID);
+        }
         Collections.sort(files, Comparator.comparing(SkillPackage.FileEntry::getPath));
-        StringBuilder canonical = new StringBuilder(name).append('\n').append(version).append('\n');
-        for (SkillPackage.FileEntry file : files) canonical.append(file.getPath()).append(':').append(file.getDigest()).append('\n');
+        List<String> paths = new ArrayList<String>(files.size());
+        List<String> digests = new ArrayList<String>(files.size());
+        for (SkillPackage.FileEntry file : files) {
+            paths.add(file.getPath());
+            digests.add(file.getDigest());
+        }
         return new SkillPackage(name, description, version,
-                sha256(canonical.toString().getBytes(StandardCharsets.UTF_8)), files);
+                SkillVersions.computeVersionDigest(paths, digests), files);
     }
 
     private List<SkillPackage.FileEntry> singleFile(byte[] bytes) {
@@ -134,10 +146,17 @@ public class SkillPackageParser {
                 packageMetadata.get("description"),
                 firstNonBlank(readmeDescription(files), "复合Skill包，包含 " + nestedSkillCount + " 个子Skill。"),
                 2048);
+        String version = packageMetadata.get("version");
+        if (version != null) version = version.trim();
+        if (version == null || version.isEmpty() || !VERSION.matcher(version).matches()) {
+            throw new SkillApiException(
+                    "复合Skill包缺少有效 version（请在 package.json / plugin.json 或 SKILL.md frontmatter 中声明语义化版本号）",
+                    SkillApiException.CODE_VERSION_REQUIRED);
+        }
         String generated = "---\n"
                 + "name: " + yamlQuote(name) + "\n"
                 + "description: " + yamlQuote(description) + "\n"
-                + "version: 0.0.0\n"
+                + "version: " + yamlQuote(version) + "\n"
                 + "---\n\n"
                 + "# " + name + "\n\n"
                 + "这是一个复合Skill包，包含若干可独立使用的子Skill。子Skill及其资源保留在原始目录结构中。\n";
@@ -159,6 +178,8 @@ public class SkillPackageParser {
                 Map<?, ?> map = (Map<?, ?>) value;
                 if (map.get("name") instanceof String) result.put("name", ((String) map.get("name")).trim());
                 if (map.get("description") instanceof String) result.put("description", ((String) map.get("description")).trim());
+                if (map.get("version") instanceof String) result.put("version", ((String) map.get("version")).trim());
+                else if (map.get("version") instanceof Number) result.put("version", String.valueOf(map.get("version")));
                 if (!result.isEmpty()) return result;
             } catch (RuntimeException ignored) {
                 // Invalid optional metadata should not prevent a valid composite package from uploading.

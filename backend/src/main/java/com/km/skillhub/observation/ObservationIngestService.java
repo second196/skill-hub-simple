@@ -130,7 +130,29 @@ public class ObservationIngestService {
                         payload.put("text", ObservationPayloads.sanitizeText(userText));
                         payloadJson = json(payload);
                     }
-                    repository.upsertStep(turnId, stepId, seq, type, ts, slug, payloadJson);
+                    String versionDigest = extractVersionField(step, "skillVersionDigest", "skill_version_digest", "versionDigest", "version_digest");
+                    String versionLabel = extractVersionField(step, "skillVersionLabel", "skill_version_label", "versionLabel", "version_label");
+                    String versionSource = extractVersionField(step, "skillVersionSource", "skill_version_source", "versionSource", "version_source");
+                    if (!isBlank(versionDigest)) {
+                        versionDigest = versionDigest.trim().toLowerCase(Locale.ROOT);
+                        if (versionDigest.length() > 64) versionDigest = versionDigest.substring(0, 64);
+                    } else {
+                        versionDigest = null;
+                    }
+                    if (!isBlank(versionLabel)) {
+                        versionLabel = versionLabel.trim();
+                        if (versionLabel.length() > 64) versionLabel = versionLabel.substring(0, 64);
+                    } else {
+                        versionLabel = null;
+                    }
+                    if (!isBlank(versionSource)) {
+                        versionSource = versionSource.trim().toLowerCase(Locale.ROOT);
+                        if (!"observed".equals(versionSource) && !"inferred".equals(versionSource)) versionSource = null;
+                    } else if (versionDigest != null) {
+                        versionSource = "observed";
+                    }
+                    repository.upsertStep(turnId, stepId, seq, type, ts, slug, payloadJson,
+                            versionDigest, versionLabel, versionSource);
                     stepCount += 1;
                 }
                 turnCount += 1;
@@ -148,6 +170,16 @@ public class ObservationIngestService {
         result.put("stepCount", Integer.valueOf(stepCount));
         result.put("skippedStepCount", Integer.valueOf(skipped));
         return result;
+    }
+
+    private String extractVersionField(Map<String, Object> step, String... keys) {
+        String value = text(step, keys);
+        if (!isBlank(value)) return value;
+        Map<String, Object> payload = asMap(step.get("payload"));
+        value = text(payload, keys);
+        if (!isBlank(value)) return value;
+        Map<String, Object> data = asMap(step.get("data"));
+        return text(data, keys);
     }
 
     private String resolveSlug(Map<String, Object> step, Map<String, String> platform, Map<String, String> nameToSlug, String fallback) {

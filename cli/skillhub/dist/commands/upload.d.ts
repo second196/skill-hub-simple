@@ -4,6 +4,14 @@ export interface UploadOptions {
     category: string;
     name?: string;
     description?: string;
+    /** SemVer override; required for composite packages without root SKILL.md version. */
+    version?: string;
     json: boolean;
 }
+/**
+ * Upload path (ZIP / directory / SKILL.md share this pipeline):
+ *   prepareSkillPackage (validate metadata + version SemVer + compute versionDigest)
+ *   → assertVersionBumpRequired (VERSION_BUMP_REQUIRED / VERSION_DIGEST_CONFLICT)
+ *   → HTTP POST /api/skills
+ */
 export declare function uploadCommand(options: UploadOptions): Promise<string>;

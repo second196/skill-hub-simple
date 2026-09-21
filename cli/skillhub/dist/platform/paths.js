@@ -1,11 +1,14 @@
 import { PackageValidationError } from '../shared/errors.js';
 const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:/;
-const EXCLUDED_DIRECTORIES = new Set(['.git', '.skillhub']);
+/** Directories never treated as skill business content. */
+const EXCLUDED_DIRECTORIES = new Set(['.git', '.skillhub', 'node_modules']);
+/** Exact file names never treated as skill business content. */
 const EXCLUDED_FILES = new Set([
     '.env',
     '.npmrc',
     '.pypirc',
     '.netrc',
+    '.ds_store',
     'credentials.json',
     'id_rsa',
     'id_ed25519'
@@ -27,6 +30,10 @@ export function normalizePackagePath(value, maxLength) {
     }
     return normalized;
 }
+/**
+ * Package-level exclusion: credentials, VCS metadata, dependency dirs, junk.
+ * Used when reading directories and when rejecting sensitive ZIP entries.
+ */
 export function shouldExcludePackagePath(value) {
     const segments = value.replace(/\\/g, '/').split('/');
     const fileName = segments[segments.length - 1]?.toLowerCase() ?? '';
@@ -34,7 +41,16 @@ export function shouldExcludePackagePath(value) {
         || EXCLUDED_FILES.has(fileName)
         || fileName.startsWith('.env.')
         || fileName.endsWith('.pem')
-        || fileName.endsWith('.key');
+        || fileName.endsWith('.key')
+        || fileName.endsWith('.tmp');
+}
+/**
+ * versionDigest exclusion: business-file fingerprint only.
+ * Excludes .git, node_modules, .DS_Store, *.tmp and other non-business paths.
+ * Currently identical to package exclusion so digest covers uploaded content.
+ */
+export function shouldExcludeFromVersionDigest(value) {
+    return shouldExcludePackagePath(value);
 }
 function unsafePath(path) {
     return new PackageValidationError('Skill 包包含不安全路径', 'UNSAFE_PACKAGE_PATH', { path });

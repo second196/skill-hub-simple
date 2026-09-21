@@ -113,17 +113,65 @@ function toIngestSession(session: TimelineSession) {
       turnIndex: turn.turnIndex,
       startedAt: turn.startedAt || undefined,
       userText: turn.userText,
-      steps: turn.steps.map((step) => ({
-        stepId: step.step_id,
-        seq: step.seq,
-        type: step.type,
-        ts: step.ts,
-        skillSlug: step.skill_slug,
-        skillName: step.skill_name,
-        payload: sanitizePayload(step.payload)
-      }))
+      steps: turn.steps.map((step) => toIngestStep(step))
     }))
   }
+}
+
+export function toIngestStep(step: ObservationEvent): {
+  stepId: string
+  seq: number
+  type: string
+  ts: string
+  skillSlug: string | undefined
+  skillName: string | undefined
+  skillVersionDigest?: string
+  skillVersionLabel?: string
+  skillVersionSource?: string
+  payload: Record<string, unknown>
+} {
+  const payload = sanitizePayload(step.payload || {}) as Record<string, unknown>
+  const versionLabel = firstText(
+    step.skill_version_label,
+    payload.skill_version_label,
+    payload.skillVersionLabel,
+    payload.versionLabel
+  )
+  const versionDigest = firstText(
+    step.skill_version_digest,
+    payload.skill_version_digest,
+    payload.skillVersionDigest,
+    payload.versionDigest
+  )
+  const versionFields: Record<string, unknown> = {}
+  if (versionDigest) {
+    versionFields.skillVersionDigest = versionDigest
+    if (versionLabel) versionFields.skillVersionLabel = versionLabel
+    versionFields.skillVersionSource = 'observed'
+  }
+  const nextPayload: Record<string, unknown> = { ...payload }
+  if (versionFields.skillVersionDigest) {
+    nextPayload.skillVersionDigest = versionFields.skillVersionDigest
+    if (versionFields.skillVersionLabel) nextPayload.skillVersionLabel = versionFields.skillVersionLabel
+    nextPayload.skillVersionSource = 'observed'
+  }
+  return {
+    stepId: step.step_id,
+    seq: step.seq,
+    type: step.type,
+    ts: step.ts,
+    skillSlug: step.skill_slug,
+    skillName: step.skill_name,
+    ...versionFields,
+    payload: nextPayload
+  }
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return undefined
 }
 
 export async function postJson(url: string, body: unknown): Promise<Record<string, unknown>> {
