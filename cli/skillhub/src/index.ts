@@ -36,7 +36,7 @@ cli.command('install <slug>', '下载并安装Skill到本地目录')
   .action(async (slug, options) => run(() => installCommand({ slug, serviceUrl: options.serviceUrl, target: options.target, version: options.version, json: Boolean(options.json) }), Boolean(options.json)))
 cli.command('version-codes', '导出版本门禁错误码')
   .action(async () => run(async () => JSON.stringify(VERSION_GATE_ERROR_CODES, null, 2), true))
-cli.help(); cli.version('0.2.2'); cli.parse()
+cli.help(); cli.version('0.3.0'); cli.parse()
 
 async function run(action: () => Promise<string>, json: boolean): Promise<void> {
   try { process.stdout.write(`${await action()}\n`) } catch (error: unknown) { process.stderr.write(`${formatError(error, json)}\n`); process.exitCode = 1 }
