@@ -4,7 +4,7 @@ import { unzipSync } from 'fflate';
 import { download } from '../clients/api-client.js';
 import { exposeSkillToAgent, installedAgentTargets, userSkillStoreRoot } from '../platform/agent-paths.js';
 export async function installCommand(options) {
-    const query = options.version ? `?version=${encodeURIComponent(options.version)}` : '';
+    const query = options.skillVersion ? `?version=${encodeURIComponent(options.skillVersion)}` : '';
     const archive = await download(options.serviceUrl, `/api/skills/${encodeURIComponent(options.slug)}/download${query}`);
     const files = unzipSync(archive);
     const userInstall = !options.target;
@@ -26,9 +26,17 @@ export async function installCommand(options) {
         mode: await exposeSkillToAgent(root, target, options.slug)
     }))) : [];
     return options.json
-        ? JSON.stringify({ ok: true, slug: options.slug, target: root, userInstall, agentLinks, fileCount: Object.keys(files).length })
+        ? JSON.stringify({
+            ok: true,
+            slug: options.slug,
+            version: options.skillVersion || null,
+            target: root,
+            userInstall,
+            agentLinks,
+            fileCount: Object.keys(files).length
+        })
         : [
-            `安装成功：${options.slug}`,
+            `安装成功：${options.slug}${options.skillVersion ? ` v${options.skillVersion}` : ''}`,
             `目录：${root}`,
             `文件：${Object.keys(files).length} 个`,
             ...(userInstall ? [`Agent 入口：${agentLinks.filter((item) => item.mode !== 'skipped').map((item) => item.path).join('、') || '未发现可用 Agent 目录'}`] : [])

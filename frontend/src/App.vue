@@ -26,8 +26,8 @@ import {
 import ObserveMetricsPanel from './components/ObserveMetricsPanel.vue'
 import { agentPrefixedTitle, dedupeSessionRows, sessionDisplayTitle, shortSessionKey } from './utils/session-title'
 
-type Skill = { id:number; slug:string; name:string; description:string; category:string; status:string; version_label:string; version_digest:string; download_count:number }
-type SkillVersion = { version_label:string; version_digest:string; created_at:string }
+type Skill = { id:number; slug:string; name:string; description:string; category:string; status:string; version_label:string; download_count:number }
+type SkillVersion = { version_label:string; created_at:string }
 type SkillDetail = Skill & { version_id:number; versions:SkillVersion[] }
 type FileItem = { path:string; content_type:string; size_bytes:number; content_digest:string }
 type DiscoverySkill = {
@@ -97,7 +97,7 @@ const tab = ref<'overview' | 'files' | 'versions'>('overview')
 const detailError = ref('')
 const includeOffline = ref(false)
 const expandedFolders = ref(new Set<string>(['__root__']))
-const selectedVersionDigest = ref('')
+const selectedVersionLabel = ref('')
 const versionFiles = ref<FileItem[]>([])
 const selectedVersionFile = ref('')
 const versionContent = ref('')
@@ -571,19 +571,19 @@ async function loadDetail() {
   detailError.value = ''
   tab.value = 'overview'
   versionFiles.value = []
-  selectedVersionDigest.value = ''
+  selectedVersionLabel.value = ''
   selectedVersionFile.value = ''
   versionContent.value = ''
   try {
     detail.value = await request<SkillDetail>(`/api/skills/${encodeURIComponent(String(route.params.slug))}`)
-    files.value = await request<FileItem[]>(`/api/skills/${encodeURIComponent(String(route.params.slug))}/files?version=${encodeURIComponent(detail.value.version_digest)}`)
+    files.value = await request<FileItem[]>(`/api/skills/${encodeURIComponent(String(route.params.slug))}/files?version=${encodeURIComponent(detail.value.version_label)}`)
     expandedFolders.value = allFolderKeys(files.value)
     const overviewFile = pickOverviewFile(files.value)
     if (overviewFile) {
       selectedFile.value = overviewFile.path
-      content.value = await requestText(overviewFile.path, detail.value.version_digest)
+      content.value = await requestText(overviewFile.path, detail.value.version_label)
     }
-    selectedVersionDigest.value = detail.value.version_digest
+    selectedVersionLabel.value = detail.value.version_label
     versionFiles.value = files.value
     versionExpandedFolders.value = new Set(expandedFolders.value)
     selectedVersionFile.value = overviewFile?.path || ''
@@ -1042,7 +1042,7 @@ function openProblemSession(session: ObserveProblemSession) {
   void router.push({ path: `/observe/${observeSlug.value}`, query })
 }
 
-async function requestText(path: string, version = detail.value?.version_digest || '') {
+async function requestText(path: string, version = detail.value?.version_label || '') {
   const response = await fetch(`/api/skills/${encodeURIComponent(String(route.params.slug))}/files/content?version=${encodeURIComponent(version)}&path=${encodeURIComponent(path)}`)
   if (!response.ok) throw new Error('文件读取失败')
   return response.text()
@@ -1059,42 +1059,42 @@ async function selectFile(path: string) {
 }
 
 async function selectVersion(version: SkillVersion) {
-  if (selectedVersionDigest.value === version.version_digest && versionFiles.value.length) return
-  const digest = version.version_digest
-  selectedVersionDigest.value = digest
+  if (selectedVersionLabel.value === version.version_label && versionFiles.value.length) return
+  const label = version.version_label
+  selectedVersionLabel.value = label
   selectedVersionFile.value = ''
   versionContent.value = ''
   versionFiles.value = []
   versionError.value = ''
   versionLoading.value = true
   try {
-    const loaded = await request<FileItem[]>(`/api/skills/${encodeURIComponent(String(route.params.slug))}/files?version=${encodeURIComponent(digest)}`)
-    if (selectedVersionDigest.value !== digest) return
+    const loaded = await request<FileItem[]>(`/api/skills/${encodeURIComponent(String(route.params.slug))}/files?version=${encodeURIComponent(label)}`)
+    if (selectedVersionLabel.value !== label) return
     versionFiles.value = loaded
     versionExpandedFolders.value = allFolderKeys(loaded)
     const first = pickOverviewFile(loaded)
     if (first) {
       selectedVersionFile.value = first.path
-      const loadedContent = await requestText(first.path, digest)
-      if (selectedVersionDigest.value === digest && selectedVersionFile.value === first.path) versionContent.value = loadedContent
+      const loadedContent = await requestText(first.path, label)
+      if (selectedVersionLabel.value === label && selectedVersionFile.value === first.path) versionContent.value = loadedContent
     }
   } catch (e) {
-    if (selectedVersionDigest.value === digest) versionError.value = e instanceof Error ? e.message : '版本文件加载失败'
+    if (selectedVersionLabel.value === label) versionError.value = e instanceof Error ? e.message : '版本文件加载失败'
   } finally {
-    if (selectedVersionDigest.value === digest) versionLoading.value = false
+    if (selectedVersionLabel.value === label) versionLoading.value = false
   }
 }
 
 async function selectVersionFile(path: string) {
-  const digest = selectedVersionDigest.value
+  const label = selectedVersionLabel.value
   selectedVersionFile.value = path
   versionContent.value = ''
   versionError.value = ''
   try {
-    const loadedContent = await requestText(path, digest)
-    if (selectedVersionDigest.value === digest && selectedVersionFile.value === path) versionContent.value = loadedContent
+    const loadedContent = await requestText(path, label)
+    if (selectedVersionLabel.value === label && selectedVersionFile.value === path) versionContent.value = loadedContent
   } catch (e) {
-    if (selectedVersionDigest.value === digest && selectedVersionFile.value === path) versionError.value = e instanceof Error ? e.message : '文件读取失败'
+    if (selectedVersionLabel.value === label && selectedVersionFile.value === path) versionError.value = e instanceof Error ? e.message : '文件读取失败'
   }
 }
 
@@ -2477,7 +2477,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             </div>
           </div>
           <div class="card-actions">
-            <a class="primary link" :href="`/api/skills/${detail.slug}/download?version=${detail.version_digest}`">下载Skill</a>
+            <a class="primary link" :href="`/api/skills/${detail.slug}/download?version=${detail.version_label}`">下载Skill</a>
             <button v-if="detail.status === 'ACTIVE'" class="danger" @click="openConfirmation('offline', detail)">下架Skill</button>
             <button class="danger" @click="openConfirmation('delete', detail)">删除Skill</button>
           </div>
@@ -2549,13 +2549,12 @@ function handleGlobalKeydown(event: KeyboardEvent) {
         <section v-else class="panel version-browser">
           <aside class="version-list" aria-label="版本列表">
             <div class="version-column-title">版本列表</div>
-            <div v-for="version in detail.versions" :key="version.version_digest" :class="['version-item', { selected: selectedVersionDigest === version.version_digest }]">
+            <div v-for="version in detail.versions" :key="version.version_label" :class="['version-item', { selected: selectedVersionLabel === version.version_label }]">
               <button class="version-select" @click="selectVersion(version)">
                 <strong>v{{ version.version_label }}</strong>
                 <span>{{ version.created_at.slice(0, 10) }}</span>
-                <code :title="version.version_digest">{{ version.version_digest.slice(0, 8) }}</code>
               </button>
-              <a class="version-download" :href="`/api/skills/${detail.slug}/download?version=${version.version_digest}`" :aria-label="`下载 v${version.version_label}`" :title="`下载 v${version.version_label}`">
+              <a class="version-download" :href="`/api/skills/${detail.slug}/download?version=${version.version_label}`" :aria-label="`下载 v${version.version_label}`" :title="`下载 v${version.version_label}`">
                 <Download :size="16" :stroke-width="1.8" aria-hidden="true" />
               </a>
             </div>

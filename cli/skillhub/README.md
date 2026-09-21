@@ -65,20 +65,25 @@ skillhub upload ./skill-a --category 研发 \
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--category <category>` | `其他` | 技能分类 |
+| `--category <category>` | 无 | 技能分类；包内 `category` 优先，平台已有 skill 继承原分类 |
 | `--name <name>` | 包内元数据/README/路径名 | 覆盖复合技能包的名称 |
 | `--description <description>` | 包内元数据/README | 覆盖复合技能包的描述 |
-| `--skill-version <semver>` | 根 SKILL.md 或 package.json | 技能包 SemVer；复合包无根 SKILL.md 时必填（或 package.json）。**不要用全局 `--version`**（那是 CLI 自身版本） |
 | `--service-url <url>` | `http://127.0.0.1:8080` | SkillHub 服务地址 |
 | `--json` | 关闭 | 输出机器可读的 JSON |
+
+#### 版本与分类契约
+
+- **`version` 必须写在 Skill 包内**：单包 = 根 `SKILL.md` frontmatter；复合包 = 包根 `package.json` / `.codex-plugin/plugin.json`。CLI **没有** `--skill-version` 上传参数，也**不会**注入版本。
+- 平台用 SemVer `version_label` 区分版本，**没有 digest**。同 skill 同 version 再上传返回 `VERSION_EXISTS`。
+- 分类优先级：包内 `category` > 平台已有 skill 分类 > CLI `--category` > `其他`。
+- 源目录不完整时：临时目录补全 → 完整覆盖回源目录 → 删除临时目录 → `skillhub upload`。也可用 `skillhub check` / `skillhub prepare`。
 
 #### 复合技能包
 
 - 根目录有 `SKILL.md` 时，整个目录或 ZIP 会作为一个技能上传，子目录和资源都会保留。
 - 根目录没有 `SKILL.md`，但包内存在一个或多个嵌套 `SKILL.md` 时，会作为一个复合技能包上传。
 - **不会**自动生成根目录 `SKILL.md`。已有 `README.md` 则原样保留；缺失时仅在**上传包内**生成 `README.md`（不回写本地工作区），平台概览展示该 README。
-- 复合技能包的 `version` **必须本地提供**（包根 `package.json` 的 `version`，或 CLI `--skill-version`），**不会**默认 `0.0.0`。全局 `skillhub --version` 只打印 CLI 工具版本，不是技能版本参数。
-- CLI 会根据包内标准元数据、README 标题和正文、输入路径名称确定名称和描述；可用 `--name` / `--description` 覆盖。
+- 复合技能包的 `version` **必须写在包根 package.json**，**不会**默认 `0.0.0`。
 
 复合包 `package.json` 示例（放在包根）：
 
@@ -86,16 +91,17 @@ skillhub upload ./skill-a --category 研发 \
 {
   "name": "my-composite-skill",
   "description": "复合Skill包说明",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "category": "研发"
 }
 ```
 
 ```bash
-skillhub upload ./my-composite --category 研发
-skillhub upload ./my-composite.zip --category 研发 --skill-version 1.0.0
+skillhub check ./my-composite --json
+skillhub upload ./my-composite --category 研发 --json
 ```
 
-有根 `SKILL.md` 的单包：frontmatter 必须含 `name`、`description`，且必须有合法 `version`（或 CLI `--skill-version`）。
+有根 `SKILL.md` 的单包：frontmatter 必须含 `name`、`description`，且必须有合法 `version`（可选 `category`）。
 
 CLI 对单个 ZIP、解压后总大小和单个文件的本地预检查上限均为 1GiB，后端也使用相同的 1GiB 业务容量限制。
 
@@ -148,7 +154,7 @@ skillhub install ui-ux-pro-max --target ./vendor/skills
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--target <directory>` | 用户级安装 | 指定项目或自定义安装父目录 |
-| `--digest <digest>` | 默认最新版本 | 指定平台版本摘要（不要用全局 `--version`） |
+| `--skill-version <semver>` | 默认最新版本 | 安装指定包内 SemVer `version_label`（不要用全局 `--version`） |
 | `--service-url <url>` | `http://127.0.0.1:8080` | SkillHub 服务地址 |
 | `--json` | 关闭 | 输出机器可读的 JSON |
 

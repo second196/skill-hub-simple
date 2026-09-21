@@ -43,10 +43,14 @@ public class SkillController {
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> upload(@RequestParam MultipartFile file,
-                                      @RequestParam(defaultValue = "其他") String category) throws java.io.IOException {
-        String normalizedCategory = category == null ? "其他" : category.trim();
-        if (normalizedCategory.isEmpty() || normalizedCategory.length() > 128) throw new IllegalArgumentException("分类不能为空且不能超过 128 字符");
-        return repository.save(parser.parse(file.getOriginalFilename(), file.getBytes()), normalizedCategory);
+                                      @RequestParam(required = false) String category) throws java.io.IOException {
+        // Category priority is resolved in repository: package > existing platform > this request > 其他.
+        // Do not send version/digest form fields — version is parsed from the package content only.
+        String requestCategory = category == null ? null : category.trim();
+        if (requestCategory != null && requestCategory.length() > 128) {
+            throw new IllegalArgumentException("分类不能超过 128 字符");
+        }
+        return repository.save(parser.parse(file.getOriginalFilename(), file.getBytes()), requestCategory);
     }
 
     @GetMapping("/{slug}")

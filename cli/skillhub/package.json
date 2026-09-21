@@ -1,6 +1,6 @@
 {
   "name": "@second196/skillhub-cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Skill Hub CLI for uploading, discovering, and installing skills",
   "type": "module",
   "bin": {
@@ -11,8 +11,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node ./scripts/mark-executable.cjs dist/index.js && node ./scripts/copy-readme.cjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json && node ./scripts/mark-executable.cjs dist/index.js && node ./scripts/copy-readme.cjs",
+    "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node ./scripts/version-gate.test.mjs",
     "prepublishOnly": "npm run build"
   },
@@ -20,7 +20,6 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@second196/skillhub-cli": "file:second196-skillhub-cli-0.3.0.tgz",
     "cac": "6.7.14",
     "fflate": "0.8.2",
     "yaml": "2.8.3",

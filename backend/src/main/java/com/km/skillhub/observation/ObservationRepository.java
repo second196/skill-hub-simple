@@ -82,26 +82,25 @@ public class ObservationRepository {
     }
 
     public void upsertStep(long turnId, String stepId, int seq, String type, Instant ts, String skillSlug, String payloadJson) {
-        upsertStep(turnId, stepId, seq, type, ts, skillSlug, payloadJson, null, null, null);
+        upsertStep(turnId, stepId, seq, type, ts, skillSlug, payloadJson, null, null);
     }
 
     public void upsertStep(long turnId, String stepId, int seq, String type, Instant ts, String skillSlug, String payloadJson,
-                           String skillVersionDigest, String skillVersionLabel, String skillVersionSource) {
+                           String skillVersionLabel, String skillVersionSource) {
         jdbc.update(
                 "INSERT INTO observation_step (turn_id, step_id, seq, type, ts, skill_slug, payload, " +
-                        "skill_version_digest, skill_version_label, skill_version_source) " +
-                        "VALUES (?,?,?,?,?,?,?::jsonb,?,?,?) " +
+                        "skill_version_label, skill_version_source) " +
+                        "VALUES (?,?,?,?,?,?,?::jsonb,?,?) " +
                         "ON CONFLICT (turn_id, step_id) DO UPDATE SET " +
                         "seq=EXCLUDED.seq, type=EXCLUDED.type, ts=COALESCE(EXCLUDED.ts, observation_step.ts), " +
                         "skill_slug=COALESCE(EXCLUDED.skill_slug, observation_step.skill_slug), " +
                         "payload=CASE WHEN length(EXCLUDED.payload::text) >= length(observation_step.payload::text) " +
                         "THEN EXCLUDED.payload ELSE observation_step.payload END, " +
-                        "skill_version_digest=COALESCE(EXCLUDED.skill_version_digest, observation_step.skill_version_digest), " +
                         "skill_version_label=COALESCE(EXCLUDED.skill_version_label, observation_step.skill_version_label), " +
                         "skill_version_source=COALESCE(EXCLUDED.skill_version_source, observation_step.skill_version_source), " +
                         "updated_at=CURRENT_TIMESTAMP",
                 turnId, stepId, seq, type, timestamp(ts), skillSlug, ObservationPayloads.forJsonb(payloadJson),
-                skillVersionDigest, skillVersionLabel, skillVersionSource);
+                skillVersionLabel, skillVersionSource);
     }
 
     public void saveBatch(String batchId, String clientId, int sessions, int turns, int steps, int skipped) {

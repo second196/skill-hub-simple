@@ -1,5 +1,7 @@
-import { basename } from 'node:path'
-import { prepareSkillPackage } from '../services/skill-package-service.js'
+import { cp, lstat, mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, join, resolve } from 'node:path'
+import { prepareSkillPackage, inspectSkillPackage } from '../services/skill-package-service.js'
 import { assertVersionBumpRequired } from '../services/version-gate.js'
 import { apiRequest } from '../clients/api-client.js'
 import { CliError } from '../shared/errors.js'
@@ -7,49 +9,80 @@ import { CliError } from '../shared/errors.js'
 export interface UploadOptions {
   inputPaths: string[]
   serviceUrl: string
-  category: string
+  category?: string
   name?: string
   description?: string
-  /** SemVer override; required for composite packages without root SKILL.md (or package.json version). */
-  version?: string
   json: boolean
+  /** Run local package completeness check before network upload. Default true. */
+  check?: boolean
 }
 
 /**
  * Upload path (ZIP / directory / SKILL.md share this pipeline):
- *   prepareSkillPackage (validate metadata + version SemVer + compute versionDigest)
- *   → assertVersionBumpRequired (VERSION_BUMP_REQUIRED / VERSION_DIGEST_CONFLICT)
+ *   local completeness check (package must declare SemVer version)
+ *   → prepareSkillPackage (parse version/category from package content only)
+ *   → assertVersionBumpRequired (VERSION_EXISTS / VERSION_BUMP_REQUIRED)
  *   → HTTP POST /api/skills
+ *   → optional list verification when --json
+ *
+ * Version is NEVER taken from CLI flags. If package metadata is incomplete:
+ * copy skill to a temp dir → complete package.json/SKILL.md there →
+ * overwrite the skill source with the complete tree → delete temp → upload again.
  */
 export async function uploadCommand(options: UploadOptions): Promise<string> {
   const results: Array<Record<string, unknown>> = []
   for (const inputPath of options.inputPaths) {
     try {
+      if (options.check !== false) {
+        const inspection = await inspectSkillPackage(inputPath)
+        if (!inspection.ok) {
+          throw new CliError(
+            inspection.messages[0] || 'Skill 包内元数据不完整',
+            'VERSION_SEMVER_REQUIRED',
+            5,
+            {
+              missing: inspection.missing,
+              packageKind: inspection.packageKind,
+              prepareFlow: [
+                '创建临时目录并完整复制 Skill',
+                '在临时目录补全包内 version（及 category）',
+                '将临时目录完整内容覆盖回技能源目录',
+                '删除临时目录',
+                `skillhub upload ${inputPath} --json`
+              ]
+            }
+          )
+        }
+      }
       const prepared = await prepareSkillPackage(inputPath, {}, {
         name: options.name,
         description: options.description,
-        version: options.version
+        category: options.category
       })
       await assertVersionBumpRequired({
         serviceUrl: options.serviceUrl,
-        metadata: prepared.metadata,
-        versionDigest: prepared.versionDigest
+        metadata: prepared.metadata
       })
       const form = new FormData()
       form.append('file', new Blob([prepared.archive]), `${basename(inputPath)}.zip`)
-      form.append('category', options.category)
-      // Forward client-computed version gate fields for server-side re-validation.
-      form.append('version', prepared.metadata.version)
-      form.append('versionDigest', prepared.versionDigest)
+      // Category is optional: server priority = package > existing platform > this value > 其他
+      if (prepared.metadata.category) form.append('category', prepared.metadata.category)
+      else if (options.category) form.append('category', options.category)
       const result = await apiRequest<Record<string, unknown>>(options.serviceUrl, '/api/skills', {
         method: 'POST',
         body: form as unknown as BodyInit
       })
+      const version = prepared.metadata.version
+      const slug = String((result as { slug?: unknown }).slug ?? '')
+      const category = String((result as { category?: unknown }).category ?? prepared.metadata.category ?? options.category ?? '')
+      const verify = await verifyUpload(options.serviceUrl, slug, version, category)
       results.push({
         ok: true,
         inputPath,
-        version: prepared.metadata.version,
-        versionDigest: prepared.versionDigest,
+        version,
+        slug,
+        category,
+        verify,
         ...result
       })
     } catch (error: unknown) {
@@ -63,8 +96,8 @@ export async function uploadCommand(options: UploadOptions): Promise<string> {
     }
   }
 
-  const succeeded = results.filter((item) => item.ok)
-  const failed = results.filter((item) => !item.ok)
+  const succeeded = results.filter((item) => item.ok === true)
+  const failed = results.filter((item) => item.ok !== true)
   if (failed.length > 0) process.exitCode = 1
   if (options.json) {
     return JSON.stringify({
@@ -77,10 +110,135 @@ export async function uploadCommand(options: UploadOptions): Promise<string> {
   }
   const lines = [`上传完成：成功 ${succeeded.length} 个，失败 ${failed.length} 个`]
   for (const item of succeeded) {
-    lines.push(`成功：${String(item.inputPath)} → ${String(item.name)}（${String(item.slug)}）v${String(item.version)}`)
+    const verify = item.verify as { ok?: boolean; message?: string } | undefined
+    lines.push(`成功：${String(item.inputPath)} → ${String(item.name)}（${String(item.slug)}）v${String(item.version)} [${String(item.category)}]`)
+    if (verify && verify.ok === false) {
+      lines.push(`  警告：上传后核验失败 — ${String(verify.message || '')}`)
+    }
   }
   for (const item of failed) {
     lines.push(`失败：${String(item.inputPath)} → ${String(item.message)}`)
   }
+  return lines.join('\n')
+}
+
+/** Closed-loop verification: list --json must show slug + version_label + category. */
+async function verifyUpload(
+  serviceUrl: string,
+  slug: string,
+  version: string,
+  category: string
+): Promise<{ ok: boolean; message?: string; row?: Record<string, unknown> }> {
+  if (!slug || !version) {
+    return { ok: false, message: '上传响应缺少 slug/version，无法核验' }
+  }
+  try {
+    const items = await apiRequest<Array<Record<string, unknown>>>(serviceUrl, '/api/skills?status=ACTIVE')
+    const row = Array.isArray(items)
+      ? items.find((item) => String(item.slug ?? '') === slug)
+      : undefined
+    if (!row) {
+      return { ok: false, message: `list 未找到 slug=${slug}` }
+    }
+    const rowVersion = String(row.version_label ?? '')
+    const rowCategory = String(row.category ?? '')
+    if (rowVersion !== version) {
+      return { ok: false, message: `version_label 不一致：期望 ${version}，实际 ${rowVersion}`, row }
+    }
+    if (category && rowCategory !== category) {
+      return { ok: false, message: `category 不一致：期望 ${category}，实际 ${rowCategory}`, row }
+    }
+    return { ok: true, row }
+  } catch (error: unknown) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+export interface PrepareOptions {
+  inputPath: string
+  json: boolean
+}
+
+/**
+ * Official prepare flow for incomplete skill sources:
+ * temp copy → require complete package metadata → overwrite source → delete temp.
+ * Does not invent version. Fails when version/category cannot be resolved from package content.
+ */
+export async function prepareCommand(options: PrepareOptions): Promise<string> {
+  const source = resolve(options.inputPath)
+  const inspection = await inspectSkillPackage(source)
+  if (!inspection.ok) {
+    throw new CliError(
+      inspection.messages[0] || 'Skill 包内元数据不完整，无法 prepare',
+      'VERSION_SEMVER_REQUIRED',
+      5,
+      {
+        missing: inspection.missing,
+        prepareFlow: [
+          '创建临时目录并完整复制 Skill',
+          '在临时目录补全 package.json / SKILL.md 的 version（及 category）',
+          'skillhub prepare <skill-dir>  # 校验通过后覆盖回源目录',
+          'skillhub upload <skill-dir> --json'
+        ]
+      }
+    )
+  }
+  const stat = await lstat(source)
+  if (!stat.isDirectory()) {
+    throw new CliError('prepare 仅支持技能源目录', 'UNSUPPORTED_SKILL_PATH', 5)
+  }
+  const tempRoot = await mkdtemp(join(tmpdir(), 'skillhub-prepare-'))
+  const tempSkill = join(tempRoot, 'skill')
+  try {
+    await mkdir(tempSkill, { recursive: true })
+    await cp(source, tempSkill, { recursive: true, force: true })
+    const tempInspection = await inspectSkillPackage(tempSkill)
+    if (!tempInspection.ok || !tempInspection.metadata?.version) {
+      throw new CliError(
+        '临时目录中的 Skill 包仍不完整',
+        'VERSION_SEMVER_REQUIRED',
+        5,
+        { messages: tempInspection.messages, missing: tempInspection.missing }
+      )
+    }
+    // Overwrite source with the complete temp tree.
+    await rm(source, { recursive: true, force: true })
+    await mkdir(source, { recursive: true })
+    await cp(tempSkill, source, { recursive: true, force: true })
+    const finalInspection = await inspectSkillPackage(source)
+    const payload = {
+      ok: finalInspection.ok,
+      source,
+      packageKind: finalInspection.packageKind,
+      metadata: finalInspection.metadata,
+      messages: finalInspection.ok
+        ? ['已用完整包覆盖技能源目录，可直接 upload']
+        : finalInspection.messages
+    }
+    return options.json ? JSON.stringify(payload) : payload.messages.join('\n')
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+}
+
+export interface CheckOptions {
+  inputPath: string
+  json: boolean
+}
+
+export async function checkCommand(options: CheckOptions): Promise<string> {
+  const inspection = await inspectSkillPackage(options.inputPath)
+  if (options.json) return JSON.stringify(inspection)
+  const lines = [
+    `检查：${options.inputPath}`,
+    `类型：${inspection.packageKind}`,
+    `结果：${inspection.ok ? '通过' : '未通过'}`
+  ]
+  if (inspection.metadata) {
+    lines.push(`name: ${inspection.metadata.name}`)
+    lines.push(`version: ${inspection.metadata.version}`)
+    lines.push(`category: ${inspection.metadata.category || '(未声明)'}`)
+  }
+  for (const message of inspection.messages) lines.push(`- ${message}`)
   return lines.join('\n')
 }

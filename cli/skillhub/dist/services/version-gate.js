@@ -1,19 +1,17 @@
 import { apiRequest } from '../clients/api-client.js';
 import { PackageValidationError } from '../shared/errors.js';
-import { VERSION_BUMP_REQUIRED_MESSAGE, VERSION_DIGEST_CONFLICT_MESSAGE, VERSION_GATE_ERROR_CODES, versionRequiredExample } from '../shared/constants.js';
+import { VERSION_BUMP_REQUIRED_MESSAGE, VERSION_EXISTS_MESSAGE, VERSION_GATE_ERROR_CODES, versionRequiredExample } from '../shared/constants.js';
 import { compareSemver, latestFormalVersion, normalizeVersionLabel, parseSemver } from './semver.js';
 /**
- * VERSION_BUMP_REQUIRED / VERSION_DIGEST_CONFLICT gate — run before upload POST.
+ * VERSION_EXISTS / VERSION_BUMP_REQUIRED gate — run before upload POST.
+ * Version identity is SemVer version_label only (no content digest).
  *
  * Decision table:
- * - Skill not on platform                → allow (first upload)
- * - Local digest matches any platform version → allow (idempotent)
- * - Same version_label + different digest → VERSION_DIGEST_CONFLICT
- * - Content differs from all platform digests AND local version is not
- *   strictly greater than the latest formal platform version
- *   → VERSION_BUMP_REQUIRED
- * - Local version is new and greater than latest formal → allow
- * - Platform unreachable / malformed response → skip check (server re-validates)
+ * - Skill not on platform                         → allow (first upload)
+ * - Same version_label already on platform        → VERSION_EXISTS (immutable)
+ * - Local version <= latest formal platform       → VERSION_BUMP_REQUIRED
+ * - Local version strictly greater than latest    → allow
+ * - Platform unreachable / malformed response     → skip check (server re-validates)
  */
 export async function assertVersionBumpRequired(input) {
     if (!input.serviceUrl || input.serviceUrl.trim().length === 0) {
@@ -21,8 +19,7 @@ export async function assertVersionBumpRequired(input) {
     }
     const localVersion = normalizeVersionLabel(input.metadata.version);
     if (localVersion === null) {
-        // prepareSkillPackage should have rejected this already; fail closed.
-        throw new PackageValidationError('SKILL.md 缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, { version: input.metadata.version, ...versionRequiredExample({ ...input.metadata, packageKind: 'skill-md' }) });
+        throw new PackageValidationError('Skill 包内缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, { version: input.metadata.version, ...versionRequiredExample({ ...input.metadata, packageKind: 'skill-md' }) });
     }
     let snapshot;
     try {
@@ -30,48 +27,46 @@ export async function assertVersionBumpRequired(input) {
         snapshot = await fetcher(input.serviceUrl, input.metadata.name);
     }
     catch (_error) {
-        // Network / platform errors: do not block offline upload; server re-validates.
         return;
     }
     if (snapshot === null || snapshot.versions.length === 0) {
         return;
     }
-    const versions = snapshot.versions
-        .map((item) => ({
-        versionLabel: normalizeVersionLabel(item.versionLabel) ?? item.versionLabel,
-        versionDigest: String(item.versionDigest || '')
-    }))
-        .filter((item) => item.versionDigest.length > 0);
-    // Idempotent: identical content already published under any label.
-    if (versions.some((item) => item.versionDigest === input.versionDigest)) {
-        return;
-    }
-    // Same label on platform but different content.
-    const sameLabel = versions.find((item) => item.versionLabel === localVersion);
-    if (sameLabel !== undefined) {
-        throw new PackageValidationError(VERSION_DIGEST_CONFLICT_MESSAGE, VERSION_GATE_ERROR_CODES.VERSION_DIGEST_CONFLICT, {
+    const labels = snapshot.versions
+        .map((item) => normalizeVersionLabel(item.versionLabel) ?? item.versionLabel)
+        .filter((item) => item.length > 0);
+    const maxFormal = latestFormalVersion(labels);
+    const suggested = suggestNextVersion(maxFormal);
+    if (labels.some((label) => label === localVersion)) {
+        throw new PackageValidationError(VERSION_EXISTS_MESSAGE, VERSION_GATE_ERROR_CODES.VERSION_EXISTS, {
             version: localVersion,
-            localDigest: input.versionDigest,
-            platformDigest: sameLabel.versionDigest,
-            slug: snapshot.slug
+            maxFormal,
+            suggestedNextVersion: suggested,
+            slug: snapshot.slug,
+            hint: '请修改包内 version（单 Skill：SKILL.md frontmatter；复合包：package.json）为大于平台当前版本的 SemVer 后重新上传。CLI 不注入版本号。'
         });
     }
-    // Content changed and version was not bumped above latest formal release.
-    const latestFormal = latestFormalVersion(versions.map((item) => item.versionLabel));
-    if (latestFormal !== null && compareSemver(localVersion, latestFormal) <= 0) {
+    if (maxFormal !== null && compareSemver(localVersion, maxFormal) <= 0) {
         throw new PackageValidationError(VERSION_BUMP_REQUIRED_MESSAGE, VERSION_GATE_ERROR_CODES.VERSION_BUMP_REQUIRED, {
             version: localVersion,
-            latestFormal,
-            localDigest: input.versionDigest,
-            slug: snapshot.slug
+            maxFormal,
+            suggestedNextVersion: suggested,
+            slug: snapshot.slug,
+            hint: '请提升包内 version 后再上传（单 Skill：SKILL.md frontmatter；复合包：package.json）。'
         });
     }
-    // New version greater than latest formal → allow.
+}
+function suggestNextVersion(maxFormal) {
+    if (maxFormal === null)
+        return '0.0.1';
+    const parsed = parseSemver(maxFormal);
+    if (parsed === null || parsed.prerelease.length > 0)
+        return '0.0.1';
+    return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
 }
 /**
  * Resolve a platform skill by name (case-insensitive) or derived slug,
  * then load version history from GET /api/skills/{slug}.
- * Falls back to the list-row version when detail is unavailable.
  */
 export async function fetchPlatformSkillFromService(serviceUrl, name) {
     const list = await apiRequest(serviceUrl, '/api/skills?includeOffline=true');
@@ -99,9 +94,8 @@ export async function fetchPlatformSkillFromService(serviceUrl, name) {
     }
     if (versions.length === 0) {
         const listLabel = match.version_label;
-        const listDigest = match.version_digest;
-        if (typeof listLabel === 'string' && typeof listDigest === 'string' && listDigest.length > 0) {
-            versions = [{ versionLabel: listLabel, versionDigest: listDigest }];
+        if (typeof listLabel === 'string' && listLabel.length > 0) {
+            versions = [{ versionLabel: listLabel }];
         }
     }
     return {
@@ -120,27 +114,23 @@ function extractVersions(detail) {
             continue;
         const record = entry;
         const label = record.version_label ?? record.versionLabel;
-        const digest = record.version_digest ?? record.versionDigest;
-        if (typeof label !== 'string' || typeof digest !== 'string')
+        if (typeof label !== 'string' || label.trim().length === 0)
             continue;
-        if (label.trim().length === 0 || digest.trim().length === 0)
-            continue;
-        versions.push({ versionLabel: label.trim(), versionDigest: digest.trim() });
+        versions.push({ versionLabel: label.trim() });
     }
     return versions;
 }
 /** Mirror backend SkillRepository.uniqueSlug base slug derivation. */
 export function slugifySkillName(name) {
-    const base = name
+    return name
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '');
-    return base;
 }
 /** Exported for tests: validate a label the same way the package service does. */
 export function assertSemverLabel(version) {
     if (parseSemver(version) === null) {
-        throw new PackageValidationError('SKILL.md 缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, { version, ...versionRequiredExample({ packageKind: 'skill-md' }) });
+        throw new PackageValidationError('Skill 包内缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, { version, ...versionRequiredExample({ packageKind: 'skill-md' }) });
     }
     return normalizeVersionLabel(version);
 }

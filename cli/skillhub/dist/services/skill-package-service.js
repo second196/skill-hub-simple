@@ -7,14 +7,18 @@ import { normalizePackagePath, shouldExcludePackagePath } from '../platform/path
 import { PackageValidationError } from '../shared/errors.js';
 import { VERSION_GATE_ERROR_CODES, versionRequiredExample } from '../shared/constants.js';
 import { isInvalidVersionLabel, normalizeVersionLabel } from './semver.js';
-import { computeVersionDigest, sha256Hex } from './version-digest.js';
 import { assertSemverLabel } from './version-gate.js';
 const metadataSchema = z.object({
     name: z.string().trim().min(1).max(100),
     description: z.string().trim().min(1).max(2000),
+    category: z.string().trim().max(128).optional(),
     // version is validated separately so missing/invalid labels map to VERSION_SEMVER_REQUIRED
     version: z.unknown().optional()
 }).passthrough();
+/**
+ * Prepare a skill package for upload.
+ * Version/category are parsed from package content only — CLI never injects version.
+ */
 export async function prepareSkillPackage(inputPath, overrides = {}, metadataOverrides = {}) {
     const limits = resolvePackageLimits(overrides);
     let inputStat;
@@ -65,24 +69,9 @@ export async function prepareSkillPackage(inputPath, overrides = {}, metadataOve
     const rootSkill = files.find((file) => file.path === 'SKILL.md');
     let metadata;
     if (rootSkill !== undefined) {
-        let skillContent = rootSkill.content;
-        metadata = parseMetadata(skillContent);
-        // CLI --version overrides frontmatter when provided (repair path).
-        // Rewrite SKILL.md so uploaded bytes match gate metadata/digest.
-        if (metadataOverrides.version !== undefined && metadataOverrides.version !== null) {
-            const overrideVersion = normalizeVersionLabel(String(metadataOverrides.version));
-            if (overrideVersion === null) {
-                throw versionSemverRequired(metadataOverrides.version);
-            }
-            if (overrideVersion !== metadata.version) {
-                skillContent = rewriteFrontmatterVersion(skillContent, overrideVersion);
-                files = files.map((file) => (file.path === 'SKILL.md' ? { path: 'SKILL.md', content: skillContent } : file));
-                metadata = parseMetadata(skillContent);
-            }
-        }
+        metadata = parseMetadata(rootSkill.content);
     }
     else {
-        // Composite without root SKILL.md: never invent SKILL.md; ensure README.md instead.
         const nestedSkillCount = files.filter((file) => file.path.endsWith('/SKILL.md')).length;
         if (nestedSkillCount === 0) {
             throw new PackageValidationError('Skill 包缺少 SKILL.md，且没有可识别的子Skill（至少需要一个 */SKILL.md 或根 SKILL.md）', 'SKILL_FILE_REQUIRED');
@@ -92,49 +81,21 @@ export async function prepareSkillPackage(inputPath, overrides = {}, metadataOve
     }
     archive = createArchive(files, overrides);
     const manifest = createManifest(files);
-    const manifestJson = JSON.stringify(manifest);
-    // Content fingerprint — NOT sha256(version label). See version-digest.ts.
-    const versionDigest = computeVersionDigest(files);
     return {
         sourceType,
         archive,
-        artifactDigest: sha256Hex(archive),
-        versionDigest,
-        manifestDigest: sha256Hex(manifestJson),
         metadata,
         manifest
     };
 }
-/** Replace the frontmatter `version` field; used when CLI --version overrides. */
-function rewriteFrontmatterVersion(content, version) {
-    const markdown = new TextDecoder('utf-8', { fatal: true }).decode(content);
-    const lines = markdown.replace(/^\uFEFF/, '').split(/\r?\n/);
-    if (lines[0] !== '---') {
-        throw new PackageValidationError('SKILL.md 缺少 YAML frontmatter', 'INVALID_SKILL_FRONTMATTER');
-    }
-    const closingIndex = lines.findIndex((line, index) => index > 0 && (line === '---' || line === '...'));
-    if (closingIndex < 0) {
-        throw new PackageValidationError('SKILL.md 的 YAML frontmatter 未闭合', 'INVALID_SKILL_FRONTMATTER');
-    }
-    let replaced = false;
-    const next = lines.map((line, index) => {
-        if (index === 0 || index >= closingIndex)
-            return line;
-        if (/^version\s*:/i.test(line)) {
-            replaced = true;
-            return `version: ${version}`;
-        }
-        return line;
-    });
-    if (!replaced) {
-        next.splice(closingIndex, 0, `version: ${version}`);
-    }
-    return new TextEncoder().encode(`${next.join('\n')}\n`);
-}
 function versionSemverRequired(version, overrides = {}) {
-    return new PackageValidationError('SKILL.md 缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, {
+    return new PackageValidationError('Skill 包内缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, {
         version: version === undefined || version === null ? null : String(version),
-        ...versionRequiredExample({ ...overrides, packageKind: 'skill-md' })
+        ...versionRequiredExample({
+            name: overrides.name,
+            description: overrides.description,
+            packageKind: overrides.packageKind || 'skill-md'
+        })
     });
 }
 function normalizePackageRoot(files) {
@@ -187,20 +148,23 @@ function resolveCompositeMetadata(files, inputPath, metadataOverrides) {
         || packageMetadata.description
         || readmeDescription(files)
         || `复合Skill包，包含 ${nestedSkillCount} 个子Skill。`, `复合Skill包，包含 ${nestedSkillCount} 个子Skill。`, 2000);
-    // No silent 0.0.0 default — composite packages must supply an explicit SemVer
-    // via --version or package.json / plugin.json version field.
-    const rawVersion = metadataOverrides.version ?? packageMetadata.version;
+    // Version must come from package content (package.json / plugin.json). CLI never injects it.
+    const rawVersion = packageMetadata.version;
     if (rawVersion === undefined || rawVersion === null || String(rawVersion).trim() === '') {
-        throw new PackageValidationError('复合Skill包缺少 version', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, {
+        throw new PackageValidationError('复合Skill包缺少 version（请写在包根 package.json / .codex-plugin/plugin.json）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, {
             version: null,
             ...versionRequiredExample({ name, description, packageKind: 'composite' })
         });
     }
     const version = normalizeVersionLabel(String(rawVersion));
     if (version === null) {
-        throw versionSemverRequired(rawVersion, { name, description });
+        throw versionSemverRequired(rawVersion, { name, description, packageKind: 'composite' });
     }
-    return { name, description, version };
+    const packageCategory = packageMetadata.category?.trim();
+    const category = packageCategory && packageCategory.length > 0
+        ? packageCategory.slice(0, 128)
+        : (metadataOverrides.category?.trim() || undefined);
+    return category ? { name, description, version, category } : { name, description, version };
 }
 function findRootReadme(files) {
     return files.find((file) => file.path.toLowerCase() === 'readme.md')?.path;
@@ -215,7 +179,8 @@ function readPackageMetadata(files) {
             return {
                 name: typeof value.name === 'string' ? value.name : undefined,
                 description: typeof value.description === 'string' ? value.description : undefined,
-                version: typeof value.version === 'string' ? value.version : undefined
+                version: typeof value.version === 'string' ? value.version : undefined,
+                category: typeof value.category === 'string' ? value.category : undefined
             };
         }
         catch {
@@ -342,18 +307,68 @@ function parseMetadata(content) {
     }
     const rawVersion = result.data.version;
     if (isInvalidVersionLabel(rawVersion)) {
-        throw versionSemverRequired(rawVersion, { name: result.data.name, description: result.data.description });
+        throw versionSemverRequired(rawVersion, {
+            name: result.data.name,
+            description: result.data.description,
+            packageKind: 'skill-md'
+        });
     }
     const version = assertSemverLabel(String(rawVersion));
-    return {
+    const category = result.data.category?.trim();
+    const metadata = {
         name: result.data.name,
         description: result.data.description,
         version
     };
+    if (category && category.length > 0)
+        metadata.category = category.slice(0, 128);
+    return metadata;
 }
 function createManifest(files) {
     return [...files]
         .sort((left, right) => Buffer.compare(Buffer.from(left.path, 'utf8'), Buffer.from(right.path, 'utf8')))
-        .map((file) => ({ path: file.path, size: file.content.byteLength, digest: sha256Hex(file.content) }));
+        .map((file) => ({ path: file.path, size: file.content.byteLength }));
 }
-export { computeVersionDigest, VERSION_GATE_ERROR_CODES };
+/** Local preflight used by skillhub check / upload. Does not invent missing fields. */
+export async function inspectSkillPackage(inputPath) {
+    const packageKind = await packageKindOf(inputPath);
+    try {
+        const prepared = await prepareSkillPackage(inputPath);
+        const missing = [];
+        if (!prepared.metadata.version)
+            missing.push('version');
+        return {
+            ok: missing.length === 0,
+            packageKind,
+            metadata: prepared.metadata,
+            missing,
+            messages: missing.length === 0 ? ['包内元数据完整，可以上传'] : missing.map((field) => `缺少 ${field}`)
+        };
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+            ok: false,
+            packageKind,
+            missing: /version/i.test(message) ? ['version'] : [],
+            messages: [message]
+        };
+    }
+}
+async function packageKindOf(inputPath) {
+    try {
+        const stat = await lstat(inputPath);
+        if (stat.isFile()) {
+            const files = inputPath.toLowerCase().endsWith('.zip')
+                ? readArchive(new Uint8Array(await readFile(inputPath)))
+                : [{ path: 'SKILL.md', content: new Uint8Array(await readFile(inputPath)) }];
+            return files.some((file) => file.path === 'SKILL.md') ? 'skill-md' : 'composite';
+        }
+        const files = await readDirectoryFiles(inputPath, {});
+        return files.some((file) => file.path === 'SKILL.md') ? 'skill-md' : 'composite';
+    }
+    catch {
+        return 'composite';
+    }
+}
+export { VERSION_GATE_ERROR_CODES };

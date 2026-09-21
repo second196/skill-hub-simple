@@ -9,20 +9,20 @@ export declare const EXIT_CODE: {
 };
 /**
  * Skill package version-gate error codes (CLI + server contract).
- * Backend should re-validate with the same codes before accepting upload.
+ * Version identity is SemVer version_label only — no content digest.
  */
 export declare const VERSION_GATE_ERROR_CODES: {
-    /** SKILL.md frontmatter version is missing / empty / "latest" / not SemVer */
+    /** Package content is missing a valid SemVer version (SKILL.md frontmatter or package.json). */
     readonly VERSION_SEMVER_REQUIRED: "VERSION_SEMVER_REQUIRED";
-    /** Local content digest differs from platform and version_label was not bumped */
+    /** Package SemVer is not strictly greater than the latest formal platform version. */
     readonly VERSION_BUMP_REQUIRED: "VERSION_BUMP_REQUIRED";
-    /** Same version_label exists on platform with a different content digest */
-    readonly VERSION_DIGEST_CONFLICT: "VERSION_DIGEST_CONFLICT";
+    /** Same skill + same version_label already exists on the platform (immutable). */
+    readonly VERSION_EXISTS: "VERSION_EXISTS";
 };
 export type VersionGateErrorCode = (typeof VERSION_GATE_ERROR_CODES)[keyof typeof VERSION_GATE_ERROR_CODES];
-export declare const VERSION_BUMP_REQUIRED_MESSAGE = "Skill \u5185\u5BB9\u5DF2\u4FEE\u6539\u4F46\u7248\u672C\u53F7\u672A\u5347\uFF0C\u8BF7\u5148\u4FEE\u6539 SKILL.md \u4E2D\u7684 version \u518D\u4E0A\u4F20";
-export declare const VERSION_DIGEST_CONFLICT_MESSAGE = "Skill \u7248\u672C\u53F7\u5728\u5E73\u53F0\u4E0A\u5DF2\u5B58\u5728\u4F46\u5185\u5BB9\u6458\u8981\u4E0D\u4E00\u81F4\uFF0C\u8BF7\u5347\u7248\u540E\u518D\u4E0A\u4F20";
-/** Actionable example when version is missing/invalid. Composite packages must not invent root SKILL.md. */
+export declare const VERSION_BUMP_REQUIRED_MESSAGE = "Skill \u5305\u5185 version \u672A\u8D85\u8FC7\u5E73\u53F0\u6700\u65B0\u6B63\u5F0F\u7248\uFF0C\u8BF7\u63D0\u5347\u5305\u5185 version \u540E\u518D\u4E0A\u4F20";
+export declare const VERSION_EXISTS_MESSAGE = "\u8BE5 version \u5728\u5E73\u53F0\u4E0A\u5DF2\u5B58\u5728\u4E14\u4E0D\u53EF\u8986\u76D6\uFF0C\u8BF7\u63D0\u5347\u5305\u5185 version \u540E\u518D\u4E0A\u4F20";
+/** Actionable example when version is missing/invalid. Version must live inside the package. */
 export declare function versionRequiredExample(overrides?: {
     name?: string;
     description?: string;
@@ -31,7 +31,7 @@ export declare function versionRequiredExample(overrides?: {
 }): {
     hint: string;
     example: {
-        packageJson: Record<string, string>;
+        packageJson?: Record<string, string> | undefined;
         skillMd?: string | undefined;
         cli: string;
     };

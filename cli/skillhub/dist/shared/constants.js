@@ -9,40 +9,44 @@ export const EXIT_CODE = {
 };
 /**
  * Skill package version-gate error codes (CLI + server contract).
- * Backend should re-validate with the same codes before accepting upload.
+ * Version identity is SemVer version_label only — no content digest.
  */
 export const VERSION_GATE_ERROR_CODES = {
-    /** SKILL.md frontmatter version is missing / empty / "latest" / not SemVer */
+    /** Package content is missing a valid SemVer version (SKILL.md frontmatter or package.json). */
     VERSION_SEMVER_REQUIRED: 'VERSION_SEMVER_REQUIRED',
-    /** Local content digest differs from platform and version_label was not bumped */
+    /** Package SemVer is not strictly greater than the latest formal platform version. */
     VERSION_BUMP_REQUIRED: 'VERSION_BUMP_REQUIRED',
-    /** Same version_label exists on platform with a different content digest */
-    VERSION_DIGEST_CONFLICT: 'VERSION_DIGEST_CONFLICT'
+    /** Same skill + same version_label already exists on the platform (immutable). */
+    VERSION_EXISTS: 'VERSION_EXISTS'
 };
-export const VERSION_BUMP_REQUIRED_MESSAGE = 'Skill 内容已修改但版本号未升，请先修改 SKILL.md 中的 version 再上传';
-export const VERSION_DIGEST_CONFLICT_MESSAGE = 'Skill 版本号在平台上已存在但内容摘要不一致，请升版后再上传';
-/** Actionable example when version is missing/invalid. Composite packages must not invent root SKILL.md. */
+export const VERSION_BUMP_REQUIRED_MESSAGE = 'Skill 包内 version 未超过平台最新正式版，请提升包内 version 后再上传';
+export const VERSION_EXISTS_MESSAGE = '该 version 在平台上已存在且不可覆盖，请提升包内 version 后再上传';
+/** Actionable example when version is missing/invalid. Version must live inside the package. */
 export function versionRequiredExample(overrides = {}) {
     const packageKind = overrides.packageKind || 'composite';
     const name = overrides.name || (packageKind === 'composite' ? 'my-composite-skill' : 'my-skill');
     const description = overrides.description || (packageKind === 'composite' ? '复合Skill包说明' : 'Skill说明');
     const hint = packageKind === 'composite'
-        ? '复合包：不要创建根 SKILL.md。version 必须本地提供——包根 package.json 的 version，或 CLI --skill-version（全局 --version 是 CLI 自身版本开关，不是技能版本）。平台/CLI 不会自动创建版本号，也不会默认 0.0.0。'
-        : 'version 必须为语义化版本（如 1.0.0）；写在 SKILL.md frontmatter，或用 package.json / CLI --skill-version。平台/CLI 不会自动创建版本号。';
+        ? '复合包：不要创建根 SKILL.md。version 必须写在包根 package.json 或 .codex-plugin/plugin.json。CLI 不注入版本号；平台/CLI 不会自动创建版本号，也不会默认 0.0.0。若源目录不完整：先复制到临时目录补全，再完整覆盖回源目录后上传。'
+        : 'version 必须写在根 SKILL.md frontmatter（SemVer，如 1.0.0）。CLI 不注入版本号。可选在同一 frontmatter 声明 category。';
     const example = {
-        packageJson: {
+        cli: 'skillhub upload <skill-dir> --json'
+    };
+    if (packageKind === 'composite') {
+        example.packageJson = {
             name,
             description,
-            version: '1.0.0'
-        },
-        cli: 'skillhub upload <path> --skill-version 1.0.0'
-    };
-    if (packageKind === 'skill-md') {
+            version: '1.0.0',
+            category: '研发'
+        };
+    }
+    else {
         example.skillMd =
             '---\n' +
                 `name: ${name}\n` +
                 `description: ${description}\n` +
                 'version: 1.0.0\n' +
+                'category: 研发\n' +
                 '---\n';
     }
     return { hint, example };

@@ -150,9 +150,9 @@ public class ObservationIngestService {
                         versionLabel = null;
                     }
                     String versionSource = "skill".equals(type) && versionLabel != null ? "observed" : null;
-                    // Digest column is not used for observation identity anymore.
+                    // Version identity is skill_version_label only — digest column removed.
                     repository.upsertStep(turnId, stepId, seq, type, ts, slug, payloadJson,
-                            null, versionLabel, versionSource);
+                            versionLabel, versionSource);
                     stepCount += 1;
                 }
                 turnCount += 1;

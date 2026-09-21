@@ -45,20 +45,23 @@ public class SkillPackageParser {
         String name;
         String description;
         String version;
+        String category = null;
         SkillPackage.FileEntry rootSkill = null;
         for (SkillPackage.FileEntry file : files) if ("SKILL.md".equals(file.getPath())) rootSkill = file;
         if (rootSkill != null) {
             Map<?, ?> metadata = parseFrontmatter(rootSkill.getContent());
             name = text(metadata.get("name"), "name", 128);
             description = text(metadata.get("description"), "description", 2048);
+            category = optionalText(metadata.get("category"), 128);
             Object rawVersion = metadata.get("version");
             if (rawVersion == null) {
                 throw new SkillApiException(
-                        "SKILL.md 缺少 version 字段（必须使用语义化版本号，不再默认 0.0.0）",
+                        "SKILL.md 缺少 version 字段（必须写在包内 frontmatter，使用语义化版本号）",
                         SkillApiException.CODE_VERSION_REQUIRED,
                         SkillApiException.versionRequiredDetails(
                                 metadata.get("name") == null ? null : String.valueOf(metadata.get("name")),
-                                metadata.get("description") == null ? null : String.valueOf(metadata.get("description"))));
+                                metadata.get("description") == null ? null : String.valueOf(metadata.get("description")),
+                                "skill-md"));
             }
             version = text(rawVersion, "version", 64);
         } else {
@@ -79,31 +82,26 @@ public class SkillPackageParser {
                     packageMetadata.get("description"),
                     firstNonBlank(readmeDescription(files), "复合Skill包，包含 " + nestedSkillCount + " 个子Skill。"),
                     2048);
+            category = optionalText(packageMetadata.get("category"), 128);
             version = packageMetadata.get("version");
             if (version != null) version = version.trim();
             if (version == null || version.isEmpty() || !VERSION.matcher(version).matches()) {
                 throw new SkillApiException(
-                        "复合Skill包缺少 version",
+                        "复合Skill包缺少 version（请写在包根 package.json / .codex-plugin/plugin.json，CLI 不注入版本）",
                         SkillApiException.CODE_VERSION_REQUIRED,
-                        SkillApiException.versionRequiredDetails(name, description));
+                        SkillApiException.versionRequiredDetails(name, description, "composite"));
             }
         }
         version = SkillVersions.normalizeVersionLabel(version);
         if (version == null || !SkillVersions.isSemVer(version)) {
             throw new SkillApiException(
-                    "version 必须使用语义化版本号",
+                    "version 必须使用包内声明的语义化版本号",
                     SkillApiException.CODE_VERSION_INVALID,
-                    SkillApiException.versionRequiredDetails(name, description));
+                    SkillApiException.versionRequiredDetails(name, description,
+                            rootSkill != null ? "skill-md" : "composite"));
         }
         Collections.sort(files, Comparator.comparing(SkillPackage.FileEntry::getPath));
-        List<String> paths = new ArrayList<String>(files.size());
-        List<String> digests = new ArrayList<String>(files.size());
-        for (SkillPackage.FileEntry file : files) {
-            paths.add(file.getPath());
-            digests.add(file.getDigest());
-        }
-        return new SkillPackage(name, description, version,
-                SkillVersions.computeVersionDigest(paths, digests), files);
+        return new SkillPackage(name, description, version, category, files);
     }
 
     private List<SkillPackage.FileEntry> singleFile(byte[] bytes) {
@@ -218,6 +216,7 @@ public class SkillPackageParser {
                 Map<?, ?> map = (Map<?, ?>) value;
                 if (map.get("name") instanceof String) result.put("name", ((String) map.get("name")).trim());
                 if (map.get("description") instanceof String) result.put("description", ((String) map.get("description")).trim());
+                if (map.get("category") instanceof String) result.put("category", ((String) map.get("category")).trim());
                 if (map.get("version") instanceof String) result.put("version", ((String) map.get("version")).trim());
                 else if (map.get("version") instanceof Number) result.put("version", String.valueOf(map.get("version")));
                 if (!result.isEmpty()) return result;
@@ -317,6 +316,13 @@ public class SkillPackageParser {
     private String text(Object value, String field, int max) {
         String result = value instanceof String ? ((String) value).trim() : "";
         if (result.isEmpty() || result.length() > max) throw new IllegalArgumentException("SKILL.md 的 " + field + " 无效");
+        return result;
+    }
+
+    private String optionalText(Object value, int max) {
+        if (!(value instanceof String)) return null;
+        String result = ((String) value).trim();
+        if (result.isEmpty() || result.length() > max) return null;
         return result;
     }
 

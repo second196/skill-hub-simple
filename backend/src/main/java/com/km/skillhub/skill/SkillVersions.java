@@ -1,12 +1,8 @@
 package com.km.skillhub.skill;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
-
 /**
- * SemVer helpers for skill version_label comparison and package version_digest.
- * version_digest = SHA-256 of normalized package lines: path\nsha256(bytes)\n (posix path sort).
+ * SemVer helpers for skill version_label comparison.
+ * Version identity is the SemVer label only — content digest is not part of the contract.
  */
 public final class SkillVersions {
     /**
@@ -20,7 +16,8 @@ public final class SkillVersions {
     }
 
     public static boolean isSemVer(String value) {
-        return normalizeVersionLabel(value) != null && normalizeVersionLabel(value).matches(SEMVER_REGEX);
+        String normalized = normalizeVersionLabel(value);
+        return normalized != null && normalized.matches(SEMVER_REGEX);
     }
 
     /** Strip optional leading v/V and trim; return null if empty after normalize. */
@@ -32,33 +29,6 @@ public final class SkillVersions {
             if (!rest.isEmpty() && Character.isDigit(rest.charAt(0))) v = rest;
         }
         return v.isEmpty() ? null : v;
-    }
-
-    /**
-     * Content-addressed version digest, aligned with the standardized package algorithm:
-     * files sorted by posix path; each line {@code path\nsha256(bytes)\n}; digest = sha256(concat lines).
-     */
-    public static String computeVersionDigest(List<String> paths, List<String> fileDigests) {
-        if (paths == null || fileDigests == null || paths.size() != fileDigests.size()) {
-            throw new IllegalArgumentException("版本摘要输入无效");
-        }
-        List<int[]> order = new ArrayList<int[]>(paths.size());
-        for (int i = 0; i < paths.size(); i++) order.add(new int[] { i });
-        final List<String> pathList = paths;
-        java.util.Collections.sort(order, new java.util.Comparator<int[]>() {
-            @Override
-            public int compare(int[] a, int[] b) {
-                return pathList.get(a[0]).compareTo(pathList.get(b[0]));
-            }
-        });
-        StringBuilder lines = new StringBuilder();
-        for (int[] idx : order) {
-            String path = pathList.get(idx[0]);
-            if (path == null) path = "";
-            path = path.replace('\\', '/');
-            lines.append(path).append('\n').append(fileDigests.get(idx[0])).append('\n');
-        }
-        return SkillPackageParser.sha256(lines.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     /**
@@ -88,10 +58,28 @@ public final class SkillVersions {
         return Integer.compare(as.length, bs.length);
     }
 
-    public static String normalizeDigest(String digest) {
-        if (digest == null) return null;
-        String trimmed = digest.trim().toLowerCase(Locale.ROOT);
-        return trimmed.isEmpty() ? null : trimmed;
+    /** Latest formal (non-prerelease) SemVer among labels; null when none. */
+    public static String latestFormalVersion(Iterable<String> labels) {
+        String latest = null;
+        if (labels == null) return null;
+        for (String label : labels) {
+            String normalized = normalizeVersionLabel(label);
+            if (normalized == null || !isSemVer(normalized)) continue;
+            Parsed parsed = parse(normalized);
+            if (parsed == null || !parsed.pre.isEmpty()) continue;
+            if (latest == null || compareSemVer(normalized, latest) > 0) latest = normalized;
+        }
+        return latest;
+    }
+
+    /**
+     * Suggest the next publishable SemVer after {@code maxFormal}.
+     * Increments patch; falls back to 0.0.1 when there is no formal baseline.
+     */
+    public static String suggestNextVersion(String maxFormal) {
+        Parsed parsed = parse(maxFormal);
+        if (parsed == null || !parsed.pre.isEmpty()) return "0.0.1";
+        return parsed.major + "." + parsed.minor + "." + (parsed.patch + 1);
     }
 
     private static int comparePreIdentifier(String a, String b) {

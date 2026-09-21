@@ -44,14 +44,6 @@ export function shouldExcludePackagePath(value) {
         || fileName.endsWith('.key')
         || fileName.endsWith('.tmp');
 }
-/**
- * versionDigest exclusion: business-file fingerprint only.
- * Excludes .git, node_modules, .DS_Store, *.tmp and other non-business paths.
- * Currently identical to package exclusion so digest covers uploaded content.
- */
-export function shouldExcludeFromVersionDigest(value) {
-    return shouldExcludePackagePath(value);
-}
 function unsafePath(path) {
     return new PackageValidationError('Skill 包包含不安全路径', 'UNSAFE_PACKAGE_PATH', { path });
 }
