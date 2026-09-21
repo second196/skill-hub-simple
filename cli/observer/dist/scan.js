@@ -571,7 +571,6 @@ function skillUsageEvents(input) {
         skillSlug: input.usage.slug,
         skillName: input.usage.name,
         skillVersionLabel: version.versionLabel,
-        skillVersionDigest: version.versionDigest,
         payload: {
             name: input.usage.name,
             args: input.args,
@@ -596,7 +595,6 @@ function skillUsageEvents(input) {
             skillSlug: parent,
             skillName: parent,
             skillVersionLabel: parentVersion.versionLabel,
-            skillVersionDigest: parentVersion.versionDigest,
             payload: {
                 name: parent,
                 args: input.args,
@@ -635,7 +633,6 @@ function skillEventsFromUserText(input) {
             skillSlug: usage.slug,
             skillName: usage.name,
             skillVersionLabel: version.versionLabel,
-            skillVersionDigest: version.versionDigest,
             payload: {
                 name: usage.name,
                 args: { source: 'user_text', text: input.text.slice(0, 400) },
@@ -664,8 +661,6 @@ function makeEvent(input) {
     const versionPayload = {};
     if (input.skillVersionLabel)
         versionPayload.skill_version_label = input.skillVersionLabel;
-    if (input.skillVersionDigest)
-        versionPayload.skill_version_digest = input.skillVersionDigest;
     return {
         v: 1,
         event_id: randomUUID(),
@@ -681,7 +676,6 @@ function makeEvent(input) {
         skill_slug: input.skillSlug,
         skill_name: input.skillName,
         skill_version_label: input.skillVersionLabel,
-        skill_version_digest: input.skillVersionDigest,
         source: 'scan',
         payload: sanitizePayload({ ...versionPayload, ...input.payload })
     };

@@ -216,16 +216,22 @@ await test('prepareSkillPackage versionDigest stable for same content', async ()
   assert.equal(a.metadata.version, '1.0.0')
 })
 
-await test('prepareSkillPackage composite without --version throws VERSION_SEMVER_REQUIRED', async () => {
+await test('prepareSkillPackage composite without package version throws VERSION_SEMVER_REQUIRED', async () => {
   const dir = join(tempRoot, 'composite')
   await mkdir(join(dir, 'child-a'), { recursive: true })
   await mkdir(join(dir, 'child-b'), { recursive: true })
   await writeFile(join(dir, 'child-a', 'SKILL.md'), skillMd({ name: 'Child A', version: '1.0.0' }), 'utf8')
   await writeFile(join(dir, 'child-b', 'SKILL.md'), skillMd({ name: 'Child B', version: '1.0.0' }), 'utf8')
-  await expectPackageErrorAsync(() => prepareSkillPackage(dir), VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED)
+  const error = await expectPackageErrorAsync(() => prepareSkillPackage(dir), VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED)
+  assert.ok(error.details?.example?.packageJson?.version === '1.0.0')
+  assert.ok(typeof error.details?.example?.cli === 'string')
+  assert.ok(typeof error.details?.hint === 'string')
+  assert.ok(!error.details?.example?.skillMd)
+  assert.ok(String(error.details?.hint || '').includes('不要创建根 SKILL.md'))
+  assert.ok(String(error.details?.example?.cli || '').includes('--skill-version'))
 })
 
-await test('prepareSkillPackage composite with --version writes version into generated SKILL.md', async () => {
+await test('prepareSkillPackage composite with explicit version ensures README.md, does not invent SKILL.md', async () => {
   const dir = join(tempRoot, 'composite-ok')
   await mkdir(join(dir, 'child-a'), { recursive: true })
   await mkdir(join(dir, 'child-b'), { recursive: true })
@@ -233,7 +239,35 @@ await test('prepareSkillPackage composite with --version writes version into gen
   await writeFile(join(dir, 'child-b', 'SKILL.md'), skillMd({ name: 'Child B', version: '1.0.0' }), 'utf8')
   const prepared = await prepareSkillPackage(dir, {}, { version: 'v0.1.0', name: 'Composite' })
   assert.equal(prepared.metadata.version, '0.1.0')
-  assert.ok(prepared.manifest.some((entry) => entry.path === 'SKILL.md'))
+  assert.equal(prepared.metadata.name, 'Composite')
+  assert.ok(prepared.manifest.some((entry) => entry.path === 'README.md'))
+  assert.ok(!prepared.manifest.some((entry) => entry.path === 'SKILL.md'))
+  assert.ok(prepared.manifest.some((entry) => entry.path === 'child-a/SKILL.md'))
+  assert.ok(prepared.manifest.some((entry) => entry.path === 'child-b/SKILL.md'))
+})
+
+await test('prepareSkillPackage composite keeps existing README.md and never adds root SKILL.md', async () => {
+  const dir = join(tempRoot, 'composite-readme')
+  await mkdir(join(dir, 'child-a'), { recursive: true })
+  await writeFile(join(dir, 'child-a', 'SKILL.md'), skillMd({ name: 'Child A', version: '1.0.0' }), 'utf8')
+  const originalReadme = '# Custom Composite\n\nExisting readme body.\n'
+  await writeFile(join(dir, 'README.md'), originalReadme, 'utf8')
+  const prepared = await prepareSkillPackage(dir, {}, { version: '1.2.3' })
+  assert.equal(prepared.metadata.version, '1.2.3')
+  assert.ok(prepared.manifest.some((entry) => entry.path === 'README.md'))
+  assert.ok(!prepared.manifest.some((entry) => entry.path === 'SKILL.md'))
+  const { readArchive } = await import('../dist/platform/archive.js')
+  const files = readArchive(prepared.archive)
+  const readme = files.find((file) => file.path === 'README.md')
+  assert.ok(readme)
+  assert.equal(new TextDecoder().decode(readme.content), originalReadme)
+})
+
+await test('prepareSkillPackage composite without any skill files rejects SKILL_FILE_REQUIRED', async () => {
+  const dir = join(tempRoot, 'empty-docs')
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, 'notes.txt'), 'no skills', 'utf8')
+  await expectPackageErrorAsync(() => prepareSkillPackage(dir, {}, { version: '1.0.0' }), 'SKILL_FILE_REQUIRED')
 })
 
 // --- version gate decisions ---

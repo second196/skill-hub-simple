@@ -69,11 +69,25 @@ const skills = ref<Skill[]>([])
 const loading = ref(false)
 const error = ref('')
 
-type UploadItem = { file: File; status: 'pending' | 'uploading' | 'success' | 'error'; message?: string; slug?: string }
+type UploadExample = {
+  packageJson?: Record<string, unknown>
+  skillMd?: string
+  cli?: string
+}
+type UploadHint = { hint?: string; example?: UploadExample }
+type UploadItem = {
+  file: File
+  status: 'pending' | 'uploading' | 'success' | 'error'
+  message?: string
+  slug?: string
+  hint?: string
+  example?: UploadExample
+}
 const uploadFiles = ref<UploadItem[]>([])
 const uploadCategory = ref('')
 const uploadBusy = ref(false)
 const uploadError = ref('')
+const uploadHint = ref<UploadHint | null>(null)
 
 const detail = ref<SkillDetail | null>(null)
 const files = ref<FileItem[]>([])
@@ -198,7 +212,7 @@ type ObserveSession = {
 type ObserveStep = { step_id: string; seq: number; type: string; ts?: string; skill_slug?: string; payload?: Record<string, unknown> }
 type ObserveTurn = { id?: number; turn_index: number; started_at?: string; user_text?: string; steps: ObserveStep[] }
 type ObserveChain = ObserveSession & { os?: string; turns: ObserveTurn[] }
-type ObserveSkillVersion = { digest?: string; label?: string; source?: string; callCount?: number }
+type ObserveSkillVersion = { label?: string; source?: string; callCount?: number }
 type ObserveSkillDetail = {
   quality?: ObserveQuality
   problemSessions?: ObserveProblemSession[]
@@ -359,6 +373,15 @@ function renderMarkdownContent(value: string) {
 
 const renderedMarkdown = computed(() => renderMarkdownContent(content.value))
 const renderedFileMarkdown = computed(() => isMarkdownPath(selectedFile.value) ? renderMarkdownContent(content.value) : '')
+
+/** Overview source: root SKILL.md, else root README.md, else first file. */
+function pickOverviewFile(items: Array<{ path: string }>): { path: string } | undefined {
+  return items.find((item) => item.path === 'SKILL.md')
+    || items.find((item) => item.path.toLowerCase() === 'readme.md')
+    || items[0]
+}
+
+const overviewSourceLabel = computed(() => selectedFile.value || '概览')
 const renderedVersionMarkdown = computed(() => isMarkdownPath(selectedVersionFile.value) ? renderMarkdownContent(versionContent.value) : '')
 
 function buildFileTree(items: Array<FileItem | DiscoveryFile>, rootLabel = detail.value?.name || 'Skill') {
@@ -405,8 +428,16 @@ function allFolderKeys(items: Array<{ path:string }>) {
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    throw new Error(body.message || `请求失败（${response.status}）`)
+    const body = await response.json().catch(() => ({} as Record<string, unknown>))
+    const err = new Error(String(body.message || `请求失败（${response.status}）`)) as Error & {
+      code?: string
+      hint?: string
+      example?: UploadExample
+    }
+    if (typeof body.code === 'string') err.code = body.code
+    if (typeof body.hint === 'string') err.hint = body.hint
+    if (body.example && typeof body.example === 'object') err.example = body.example as UploadExample
+    throw err
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
@@ -547,15 +578,15 @@ async function loadDetail() {
     detail.value = await request<SkillDetail>(`/api/skills/${encodeURIComponent(String(route.params.slug))}`)
     files.value = await request<FileItem[]>(`/api/skills/${encodeURIComponent(String(route.params.slug))}/files?version=${encodeURIComponent(detail.value.version_digest)}`)
     expandedFolders.value = allFolderKeys(files.value)
-    const readme = files.value.find((item) => item.path === 'SKILL.md') || files.value[0]
-    if (readme) {
-      selectedFile.value = readme.path
-      content.value = await requestText(readme.path, detail.value.version_digest)
+    const overviewFile = pickOverviewFile(files.value)
+    if (overviewFile) {
+      selectedFile.value = overviewFile.path
+      content.value = await requestText(overviewFile.path, detail.value.version_digest)
     }
     selectedVersionDigest.value = detail.value.version_digest
     versionFiles.value = files.value
     versionExpandedFolders.value = new Set(expandedFolders.value)
-    selectedVersionFile.value = readme?.path || ''
+    selectedVersionFile.value = overviewFile?.path || ''
     versionContent.value = content.value
   } catch (e) {
     detailError.value = e instanceof Error ? e.message : 'Skill详情加载失败'
@@ -1041,7 +1072,7 @@ async function selectVersion(version: SkillVersion) {
     if (selectedVersionDigest.value !== digest) return
     versionFiles.value = loaded
     versionExpandedFolders.value = allFolderKeys(loaded)
-    const first = loaded.find((item) => item.path === 'SKILL.md') || loaded[0]
+    const first = pickOverviewFile(loaded)
     if (first) {
       selectedVersionFile.value = first.path
       const loadedContent = await requestText(first.path, digest)
@@ -1071,7 +1102,15 @@ async function upload() {
   if (!uploadFiles.value.length) return
   uploadBusy.value = true
   uploadError.value = ''
-  uploadFiles.value = uploadFiles.value.map((item) => ({ ...item, status: 'pending', message: undefined, slug: undefined }))
+  uploadHint.value = null
+  uploadFiles.value = uploadFiles.value.map((item) => ({
+    ...item,
+    status: 'pending' as const,
+    message: undefined,
+    slug: undefined,
+    hint: undefined,
+    example: undefined
+  }))
   let firstSlug = ''
   try {
     for (const item of uploadFiles.value) {
@@ -1085,8 +1124,14 @@ async function upload() {
         item.slug = result.slug
         firstSlug ||= result.slug
       } catch (e) {
+        const err = e as Error & { hint?: string; example?: UploadExample }
         item.status = 'error'
-        item.message = e instanceof Error ? e.message : '上传失败'
+        item.message = err.message || '上传失败'
+        if (err.hint || err.example) {
+          item.hint = err.hint
+          item.example = err.example
+          if (!uploadHint.value) uploadHint.value = { hint: err.hint, example: err.example }
+        }
       }
     }
     await loadCategories()
@@ -1094,7 +1139,9 @@ async function upload() {
       await router.push(`/skills/${firstSlug}`)
     }
   } catch (e) {
-    uploadError.value = e instanceof Error ? e.message : '上传失败'
+    const err = e as Error & { hint?: string; example?: UploadExample }
+    uploadError.value = err.message || '上传失败'
+    if (err.hint || err.example) uploadHint.value = { hint: err.hint, example: err.example }
   } finally {
     uploadBusy.value = false
   }
@@ -2366,7 +2413,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                 <span class="drop-action">选择文件</span>
               </span>
               <span class="drop-title">{{ uploadFiles.length ? `已选择 ${uploadFiles.length} 个文件` : '上传Skill包' }}</span>
-              <span class="drop-subtitle">{{ uploadFiles.length ? '可以提交批量发布' : '支持 ZIP、目录压缩包或多个 SKILL.md 文件' }}</span>
+              <span class="drop-subtitle">{{ uploadFiles.length ? '可以提交批量发布' : '支持 ZIP、目录压缩包或多个 SKILL.md 文件；复合包可无根 SKILL.md，概览展示 README.md' }}</span>
             </label>
 
             <div v-if="uploadFiles.length" class="upload-queue" aria-live="polite">
@@ -2377,6 +2424,21 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                 <span v-else-if="item.status === 'success'" class="upload-queue-status success">已完成</span>
                 <span v-else class="upload-queue-status error">失败：{{ item.message }}</span>
               </div>
+            </div>
+
+            <div v-if="uploadHint?.example?.packageJson || uploadHint?.example?.skillMd" class="upload-example" aria-live="polite">
+              <p class="upload-example-hint">{{ uploadHint?.hint || '请补齐版本元数据后重新上传。平台不会自动创建 version。' }}</p>
+              <template v-if="uploadHint?.example?.packageJson">
+                <p class="upload-example-label">请在包根添加 <code>package.json</code>（示例）：</p>
+                <pre class="upload-example-code">{{ JSON.stringify(uploadHint?.example?.packageJson, null, 2) }}</pre>
+              </template>
+              <template v-if="uploadHint?.example?.skillMd">
+                <p class="upload-example-label">或在根 <code>SKILL.md</code> frontmatter 中声明 <code>version</code>（示例）：</p>
+                <pre class="upload-example-code">{{ uploadHint?.example?.skillMd }}</pre>
+              </template>
+              <p v-if="uploadHint?.example?.cli" class="upload-example-label">
+                CLI 也可指定：<code>{{ uploadHint?.example?.cli }}</code>
+              </p>
             </div>
 
             <p v-if="uploadError" class="error">{{ uploadError }}</p>
@@ -2392,6 +2454,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             <h2>准备好你的Skill包</h2>
             <div class="note-list">
               <p>每个文件会独立上传，复合Skill包会保留完整目录结构。</p>
+              <p>复合包若没有根 SKILL.md，概览会展示 README.md；version 必须来自包根 package.json 或 CLI --version，平台不会自动创建。</p>
               <p>也可以直接交给Agent创建并上传。</p>
             </div>
           </aside>
@@ -2450,7 +2513,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
         </div>
 
         <section v-if="tab === 'overview'" class="panel markdown">
-          <h2>SKILL.md</h2>
+          <h2>{{ overviewSourceLabel }}</h2>
           <article class="markdown-body" v-html="renderedMarkdown"></article>
         </section>
 

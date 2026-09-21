@@ -35,8 +35,6 @@ export interface ObservationEvent {
   skill_name?: string
   /** Skill package version label captured at trigger/scan time (SemVer, no leading v). */
   skill_version_label?: string
-  /** Skill package content digest captured at trigger/scan time. */
-  skill_version_digest?: string
   source: EventSource
   payload: Record<string, unknown>
 }
@@ -49,8 +47,6 @@ export interface InstalledSkill {
   source?: 'global' | 'project'
   /** SemVer label from SKILL.md frontmatter (`version`), leading `v` stripped. */
   versionLabel?: string
-  /** Package digest: frontmatter `version_digest`/`versionDigest`, else computed content hash. */
-  versionDigest?: string
 }
 
 export interface SkillUsage {

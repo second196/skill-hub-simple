@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ObservationIngestServiceTest {
@@ -21,22 +22,19 @@ class ObservationIngestServiceTest {
         ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
 
         Map<String, Object> body = bodyWithSteps(
-                step("skill", "sop-requirement", "sop-requirement"),
-                step("skill", "using-product-development", "using-product-development"),
-                step("skill", "brainstorming", "brainstorming"),
-                step("skill", "superpowers", "superpowers"),
-                step("skill", "local-only-skill", "local-only-skill")
+                step("skill", "sop-requirement", "sop-requirement", "1.0.0"),
+                step("skill", "using-product-development", "using-product-development", "1.0.0"),
+                step("skill", "brainstorming", "brainstorming", "1.0.0"),
+                step("skill", "superpowers", "superpowers", "1.0.0"),
+                step("skill", "local-only-skill", "local-only-skill", "1.0.0")
         );
 
         Map<String, Object> result = service.ingest(body);
         assertEquals(Integer.valueOf(5), result.get("stepCount"));
-        // sop-* rolls up to platform parent UPD
         assertEquals("using-product-development", slugs.get(0));
         assertEquals("using-product-development", slugs.get(1));
-        // Unlisted composite child keeps no own slug; parent rollup step keeps superpowers
         assertEquals(null, slugs.get(2));
         assertEquals("superpowers", slugs.get(3));
-        // Local-only skill is not uploaded as a platform observation card
         assertEquals(null, slugs.get(4));
     }
 
@@ -49,8 +47,8 @@ class ObservationIngestServiceTest {
         ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
 
         Map<String, Object> body = bodyWithSteps(
-                step("skill", "brainstorming", "brainstorming"),
-                step("skill", "superpowers", "superpowers")
+                step("skill", "brainstorming", "brainstorming", "1.0.0"),
+                step("skill", "superpowers", "superpowers", "1.0.0")
         );
 
         service.ingest(body);
@@ -67,7 +65,7 @@ class ObservationIngestServiceTest {
         ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
 
         Map<String, Object> body = bodyWithSteps(
-                step("skill", null, "Using Product Development")
+                step("skill", null, "Using Product Development", "2.1.0")
         );
         service.ingest(body);
         assertEquals("using-product-development", slugs.get(0));
@@ -75,7 +73,7 @@ class ObservationIngestServiceTest {
     }
 
     @Test
-    void writesSkillVersionColumnsFromIngestPayload() {
+    void writesVersionLabelOnlyAndIgnoresDigest() {
         List<String> slugs = new ArrayList<String>();
         Map<String, List<String>> versions = versionLists();
         Map<String, String> platform = new LinkedHashMap<String, String>();
@@ -83,40 +81,68 @@ class ObservationIngestServiceTest {
         ObservationRepository repository = stubRepository(slugs, versions, platform);
         ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
 
-        Map<String, Object> skillStep = step("skill", "using-product-development", "using-product-development");
+        Map<String, Object> skillStep = step("skill", "using-product-development", "using-product-development", "1.2.0");
         skillStep.put("skillVersionDigest", "ABCDEF0123456789abcdef0123456789ABCDEF0123456789abcdef0123456789");
         skillStep.put("skillVersionLabel", "1.2.0");
         skillStep.put("skillVersionSource", "observed");
 
-        Map<String, Object> snakeStep = step("skill", "using-product-development", "using-product-development");
+        Map<String, Object> snakeStep = step("skill", "using-product-development", "using-product-development", "v1.3.0");
         snakeStep.put("skill_version_digest", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-        snakeStep.put("skill_version_label", "1.3.0");
-        snakeStep.put("skill_version_source", "inferred");
+        snakeStep.put("skill_version_label", "v1.3.0");
 
-        Map<String, Object> payloadStep = step("skill", "using-product-development", "using-product-development");
+        Map<String, Object> payloadStep = step("skill", "using-product-development", "using-product-development", null);
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put("name", "using-product-development");
         payload.put("version_digest", "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210");
         payload.put("version_label", "2.0.0");
         payloadStep.put("payload", payload);
 
-        service.ingest(bodyWithSteps(skillStep, snakeStep, payloadStep));
+        Map<String, Object> result = service.ingest(bodyWithSteps(skillStep, snakeStep, payloadStep));
+        assertEquals(Integer.valueOf(3), result.get("stepCount"));
 
-        assertEquals("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-                versions.get("digest").get(0));
+        assertNull(versions.get("digest").get(0));
         assertEquals("1.2.0", versions.get("label").get(0));
         assertEquals("observed", versions.get("source").get(0));
 
-        assertEquals("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                versions.get("digest").get(1));
-        assertEquals("1.3.0", versions.get("label").get(1));
-        assertEquals("inferred", versions.get("source").get(1));
+        assertNull(versions.get("digest").get(1));
+        assertEquals("v1.3.0", versions.get("label").get(1));
+        assertEquals("observed", versions.get("source").get(1));
 
-        assertEquals("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-                versions.get("digest").get(2));
+        assertNull(versions.get("digest").get(2));
         assertEquals("2.0.0", versions.get("label").get(2));
-        // payload-only digest defaults source to observed
         assertEquals("observed", versions.get("source").get(2));
+    }
+
+    @Test
+    void discardsWholeSessionWhenSkillLacksVersion() {
+        List<String> slugs = new ArrayList<String>();
+        Map<String, List<String>> versions = versionLists();
+        ObservationRepository repository = stubRepository(slugs, versions, platformParentsOnly());
+        ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
+
+        Map<String, Object> versioned = step("skill", "using-product-development", "using-product-development", "1.0.0");
+        Map<String, Object> unversioned = step("skill", "superpowers", "superpowers", null);
+        unversioned.put("skillVersionDigest", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+        Map<String, Object> result = service.ingest(bodyWithSteps(versioned, unversioned));
+        assertEquals(Integer.valueOf(0), result.get("stepCount"));
+        assertEquals(Integer.valueOf(0), result.get("sessionCount"));
+        assertTrue(slugs.isEmpty());
+    }
+
+    @Test
+    void acceptsSessionWhenAllSkillStepsHaveSemVer() {
+        List<String> slugs = new ArrayList<String>();
+        Map<String, List<String>> versions = versionLists();
+        ObservationRepository repository = stubRepository(slugs, versions, platformParentsOnly());
+        ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
+
+        Map<String, Object> result = service.ingest(bodyWithSteps(
+                step("user", null, null, null),
+                step("skill", "using-product-development", "using-product-development", "1.0.0")
+        ));
+        assertEquals(Integer.valueOf(2), result.get("stepCount"));
+        assertEquals(Integer.valueOf(1), result.get("sessionCount"));
     }
 
     private Map<String, List<String>> versionLists() {
@@ -206,13 +232,15 @@ class ObservationIngestServiceTest {
         return body;
     }
 
-    private Map<String, Object> step(String type, String skillSlug, String skillName) {
+    private Map<String, Object> step(String type, String skillSlug, String skillName, String versionLabel) {
         Map<String, Object> step = new LinkedHashMap<String, Object>();
         step.put("type", type);
         if (skillSlug != null) step.put("skillSlug", skillSlug);
-        step.put("skillName", skillName);
+        if (skillName != null) step.put("skillName", skillName);
+        if (versionLabel != null) step.put("skillVersionLabel", versionLabel);
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
-        payload.put("name", skillName);
+        if (skillName != null) payload.put("name", skillName);
+        if (versionLabel != null) payload.put("skill_version_label", versionLabel);
         step.put("payload", payload);
         return step;
     }

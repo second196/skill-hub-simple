@@ -29,3 +29,39 @@ export const VERSION_BUMP_REQUIRED_MESSAGE =
 
 export const VERSION_DIGEST_CONFLICT_MESSAGE =
   'Skill 版本号在平台上已存在但内容摘要不一致，请升版后再上传'
+
+/** Actionable example when version is missing/invalid. Composite packages must not invent root SKILL.md. */
+export function versionRequiredExample(overrides: {
+  name?: string
+  description?: string
+  /** composite → package.json; skill-md → frontmatter example only */
+  packageKind?: 'composite' | 'skill-md'
+} = {}) {
+  const packageKind = overrides.packageKind || 'composite'
+  const name = overrides.name || (packageKind === 'composite' ? 'my-composite-skill' : 'my-skill')
+  const description = overrides.description || (packageKind === 'composite' ? '复合Skill包说明' : 'Skill说明')
+  const hint = packageKind === 'composite'
+    ? '复合包：不要创建根 SKILL.md。version 必须本地提供——包根 package.json 的 version，或 CLI --skill-version（全局 --version 是 CLI 自身版本开关，不是技能版本）。平台/CLI 不会自动创建版本号，也不会默认 0.0.0。'
+    : 'version 必须为语义化版本（如 1.0.0）；写在 SKILL.md frontmatter，或用 package.json / CLI --skill-version。平台/CLI 不会自动创建版本号。'
+  const example: {
+    packageJson: Record<string, string>
+    skillMd?: string
+    cli: string
+  } = {
+    packageJson: {
+      name,
+      description,
+      version: '1.0.0'
+    },
+    cli: 'skillhub upload <path> --skill-version 1.0.0'
+  }
+  if (packageKind === 'skill-md') {
+    example.skillMd =
+      '---\n' +
+      `name: ${name}\n` +
+      `description: ${description}\n` +
+      'version: 1.0.0\n' +
+      '---\n'
+  }
+  return { hint, example }
+}

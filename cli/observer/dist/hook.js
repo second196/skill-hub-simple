@@ -102,7 +102,6 @@ async function eventsFromHook(phase, clientName, payload) {
     let skillSlug = usage?.slug;
     let skillName = usage?.name;
     let skillVersionLabel;
-    let skillVersionDigest;
     let body = { name: toolName, args: input, result: response ?? '' };
     if (usage) {
         type = 'skill';
@@ -110,7 +109,6 @@ async function eventsFromHook(phase, clientName, payload) {
         skillSlug = usage.slug;
         const version = resolveSkillVersion(skills, usage);
         skillVersionLabel = version.versionLabel;
-        skillVersionDigest = version.versionDigest;
         body = {
             name: skillName,
             args: input,
@@ -118,7 +116,7 @@ async function eventsFromHook(phase, clientName, payload) {
             outcome: isError(response) ? 'error' : 'ok',
             match: usage.match,
             duration_ms: undefined,
-            ...versionPayloadFields(skillVersionLabel, skillVersionDigest)
+            ...versionPayloadFields(skillVersionLabel)
         };
     }
     else if (documentPath) {
@@ -132,14 +130,13 @@ async function eventsFromHook(phase, clientName, payload) {
         skillName = primary.name;
         const version = resolveSkillVersion(skills, primary);
         skillVersionLabel = version.versionLabel;
-        skillVersionDigest = version.versionDigest;
         body = {
             name: skillName,
             args: { source: 'user_text', text: userText.slice(0, 400) },
             result: stringify(response),
             outcome: 'ok',
             match: primary.match,
-            ...versionPayloadFields(skillVersionLabel, skillVersionDigest)
+            ...versionPayloadFields(skillVersionLabel)
         };
     }
     if (phase === 'pre' && type === 'tool' && !usage && !documentPath && clientName === 'codex')
@@ -159,7 +156,6 @@ async function eventsFromHook(phase, clientName, payload) {
         skill_slug: skillSlug,
         skill_name: skillName,
         skill_version_label: skillVersionLabel,
-        skill_version_digest: skillVersionDigest,
         source: 'hook',
         payload: sanitizePayload(body)
     };
@@ -174,7 +170,6 @@ async function eventsFromHook(phase, clientName, payload) {
                 skill_slug: parent,
                 skill_name: parent,
                 skill_version_label: parentVersion.versionLabel,
-                skill_version_digest: parentVersion.versionDigest,
                 payload: sanitizePayload({
                     name: parent,
                     args: input,
@@ -183,19 +178,17 @@ async function eventsFromHook(phase, clientName, payload) {
                     rollup: true,
                     child_slug: usage.slug,
                     child_name: usage.name,
-                    ...versionPayloadFields(parentVersion.versionLabel, parentVersion.versionDigest)
+                    ...versionPayloadFields(parentVersion.versionLabel)
                 })
             });
         }
     }
     return events;
 }
-function versionPayloadFields(label, digest) {
+function versionPayloadFields(label) {
     const fields = {};
     if (label)
         fields.skill_version_label = label;
-    if (digest)
-        fields.skill_version_digest = digest;
     return fields;
 }
 function usageFromExplicit(name) {

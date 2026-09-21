@@ -56,12 +56,55 @@ public class ObservationController {
                                      @RequestParam(required = false) String clientId,
                                      @RequestParam(required = false) Long sessionId,
                                      @RequestParam(required = false) String version) {
-        return repository.skillDetail(slug, clientId, sessionId, version);
+        try {
+            return repository.skillDetail(slug, clientId, sessionId, version);
+        } catch (IllegalArgumentException ex) {
+            // Platform skill missing only — keep other clients on a structured 400.
+            throw ex;
+        } catch (RuntimeException ex) {
+            // Observation data missing/broken must not 500 the metrics page.
+            Map<String, Object> fallback = new LinkedHashMap<String, Object>();
+            Map<String, Object> skillCard = new LinkedHashMap<String, Object>();
+            skillCard.put("slug", slug);
+            skillCard.put("name", slug);
+            fallback.put("skill", skillCard);
+            fallback.put("versions", java.util.Collections.emptyList());
+            fallback.put("clients", java.util.Collections.emptyList());
+            fallback.put("sessions", java.util.Collections.emptyList());
+            fallback.put("problemSessions", java.util.Collections.emptyList());
+            fallback.put("trend", java.util.Collections.emptyList());
+            Map<String, Object> kpis = new LinkedHashMap<String, Object>();
+            kpis.put("callCount", 0);
+            kpis.put("sessionCount", 0);
+            kpis.put("clientCount", 0);
+            kpis.put("turnCount", 0);
+            kpis.put("tokenTotal", 0L);
+            kpis.put("tokenInput", 0L);
+            kpis.put("tokenCacheRead", 0L);
+            kpis.put("tokenCacheWrite", 0L);
+            kpis.put("tokenOutput", 0L);
+            kpis.put("tokenRequests", 0L);
+            fallback.put("kpis", kpis);
+            Map<String, Object> quality = new LinkedHashMap<String, Object>();
+            quality.put("calls", 0);
+            quality.put("errors", 0);
+            quality.put("completeLoads", 0);
+            quality.put("healthScore", 0);
+            quality.put("errorRate", 0d);
+            quality.put("reloadRate", 0d);
+            quality.put("loadCompleteRate", 0d);
+            fallback.put("quality", quality);
+            fallback.put("selectedSessionId", null);
+            fallback.put("selectedSession", null);
+            fallback.put("degraded", true);
+            fallback.put("message", "暂无可用观测数据，已返回空指标");
+            return fallback;
+        }
     }
 
     /**
-     * Observed + published version list for a skill dropdown.
-     * Combines skill_version (formal) with DISTINCT observation_step.skill_version_digest.
+     * Observed + published version labels for a skill dropdown.
+     * Observation identity is SemVer skill_version_label only (no content digest).
      */
     @GetMapping("/skills/{slug}/versions")
     public List<Map<String, Object>> skillVersions(@PathVariable String slug) {

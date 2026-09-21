@@ -59,6 +59,12 @@ public class ObservationIngestService {
                 skipped += 1;
                 continue;
             }
+            // Contract: discard the whole session if any skill step lacks a SemVer version label.
+            // Observation skill identity is version_label only — content digest is ignored.
+            if (sessionHasUnversionedSkill(session)) {
+                skipped += 1;
+                continue;
+            }
             String clientName = text(session, "clientName", "client_name");
             if (isBlank(clientName)) clientName = "unknown";
             Instant startedAt = instant(session, "startedAt", "started_at");
@@ -120,7 +126,13 @@ public class ObservationIngestService {
                     int seq = integer(step.get("seq"), i + 1);
                     Instant ts = instant(step, "ts", "timestamp");
                     Object rawPayload = step.containsKey("payload") ? step.get("payload") : step.get("data");
-                    String payloadJson = json(ObservationPayloads.sanitize(rawPayload));
+                    Map<String, Object> payloadMap = asMap(ObservationPayloads.sanitize(rawPayload));
+                    // Never persist content-digest version identity on observation steps.
+                    payloadMap.remove("skill_version_digest");
+                    payloadMap.remove("skillVersionDigest");
+                    payloadMap.remove("version_digest");
+                    payloadMap.remove("versionDigest");
+                    String payloadJson = json(payloadMap);
                     if (("user".equals(type) || "assistant".equals(type)) && "{}".equals(payloadJson) && !isBlank(payloadText(step))) {
                         Map<String, Object> payload = new LinkedHashMap<String, Object>();
                         payload.put("text", ObservationPayloads.sanitizeText(payloadText(step)));
@@ -130,29 +142,17 @@ public class ObservationIngestService {
                         payload.put("text", ObservationPayloads.sanitizeText(userText));
                         payloadJson = json(payload);
                     }
-                    String versionDigest = extractVersionField(step, "skillVersionDigest", "skill_version_digest", "versionDigest", "version_digest");
                     String versionLabel = extractVersionField(step, "skillVersionLabel", "skill_version_label", "versionLabel", "version_label");
-                    String versionSource = extractVersionField(step, "skillVersionSource", "skill_version_source", "versionSource", "version_source");
-                    if (!isBlank(versionDigest)) {
-                        versionDigest = versionDigest.trim().toLowerCase(Locale.ROOT);
-                        if (versionDigest.length() > 64) versionDigest = versionDigest.substring(0, 64);
-                    } else {
-                        versionDigest = null;
-                    }
                     if (!isBlank(versionLabel)) {
                         versionLabel = versionLabel.trim();
                         if (versionLabel.length() > 64) versionLabel = versionLabel.substring(0, 64);
                     } else {
                         versionLabel = null;
                     }
-                    if (!isBlank(versionSource)) {
-                        versionSource = versionSource.trim().toLowerCase(Locale.ROOT);
-                        if (!"observed".equals(versionSource) && !"inferred".equals(versionSource)) versionSource = null;
-                    } else if (versionDigest != null) {
-                        versionSource = "observed";
-                    }
+                    String versionSource = "skill".equals(type) && versionLabel != null ? "observed" : null;
+                    // Digest column is not used for observation identity anymore.
                     repository.upsertStep(turnId, stepId, seq, type, ts, slug, payloadJson,
-                            versionDigest, versionLabel, versionSource);
+                            null, versionLabel, versionSource);
                     stepCount += 1;
                 }
                 turnCount += 1;
@@ -180,6 +180,32 @@ public class ObservationIngestService {
         if (!isBlank(value)) return value;
         Map<String, Object> data = asMap(step.get("data"));
         return text(data, keys);
+    }
+
+    /** Whole-session discard when any skill step lacks SemVer version label. */
+    private boolean sessionHasUnversionedSkill(Map<String, Object> session) {
+        for (Object turnObj : asList(session.get("turns"))) {
+            Map<String, Object> turn = asMap(turnObj);
+            for (Object stepObj : asList(turn.get("steps"))) {
+                Map<String, Object> step = asMap(stepObj);
+                if (!"skill".equals(typeOf(step))) continue;
+                String label = extractVersionField(step, "skillVersionLabel", "skill_version_label", "versionLabel", "version_label");
+                if (!isValidSemVerLabel(label)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static final java.util.regex.Pattern SEMVER =
+            java.util.regex.Pattern.compile("^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$");
+
+    static boolean isValidSemVerLabel(String raw) {
+        if (raw == null) return false;
+        String cleaned = raw.trim();
+        if (cleaned.length() > 1 && (cleaned.charAt(0) == 'v' || cleaned.charAt(0) == 'V') && Character.isDigit(cleaned.charAt(1))) {
+            cleaned = cleaned.substring(1);
+        }
+        return SEMVER.matcher(cleaned).matches();
     }
 
     private String resolveSlug(Map<String, Object> step, Map<String, String> platform, Map<String, String> nameToSlug, String fallback) {

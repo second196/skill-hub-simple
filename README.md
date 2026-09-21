@@ -207,6 +207,10 @@ skillhub upload ./skill-a.zip ./skill-b.zip --category 工具 --json
 | `--category <category>` | `其他` | 技能分类 |
 | `--name <name>` | 自动生成 | 没有根目录 `SKILL.md` 的复合包名称覆盖值 |
 | `--description <description>` | 自动生成 | 没有根目录 `SKILL.md` 的复合包描述覆盖值 |
+| `--category <category>` | `其他` | 技能分类 |
+| `--name <name>` | 包内元数据/README/路径名 | 覆盖复合技能包名称 |
+| `--description <description>` | 包内元数据/README | 覆盖复合技能包描述 |
+| `--skill-version <semver>` | 根 SKILL.md 或 package.json | 技能包 SemVer；复合包无根 SKILL.md 时必填（或 package.json）。全局 `--version` 只打印 CLI 版本 |
 | `--service-url <url>` | `http://127.0.0.1:8080` | SkillHub 后端地址 |
 | `--json` | 关闭 | 输出 JSON |
 
@@ -216,6 +220,7 @@ skillhub upload ./skill-a.zip ./skill-b.zip --category 工具 --json
 skillhub upload ./my-skill.zip --category 研发
 skillhub upload ./my-skill --category 研发
 skillhub upload ./my-skill/SKILL.md --category 工具
+skillhub upload ./composite.zip --category 研发 --skill-version 1.0.0
 skillhub upload ./my-skill.zip --category 研发 --service-url http://192.168.1.10:8080
 skillhub upload ./my-skill.zip --category 研发 --json
 ```
@@ -223,13 +228,10 @@ skillhub upload ./my-skill.zip --category 研发 --json
 上传包要求：
 
 - 有根目录 `SKILL.md` 时，整个目录或 ZIP 会作为一个完整 Skill 上传，嵌套的子 Skill 和其他资源会原样保留。
-- 没有根目录 `SKILL.md` 但包含多个嵌套 `SKILL.md` 时，CLI 和后端会识别为复合 Skill，自动生成根入口文件，不会选择或拆分某一个子 Skill。
+- 没有根目录 `SKILL.md` 但包含多个嵌套 `SKILL.md` 时，识别为复合 Skill；**不会自动生成根 `SKILL.md`**。已有 `README.md` 则保留，缺失时仅在上传包内生成 README 供平台概览展示。
 - 复合 Skill 的名称和描述会依次从包内标准配置、README 标题和正文、输入目录或 ZIP 名称中生成；可以使用 `--name` 和 `--description` 覆盖。
-- `SKILL.md` 必须使用 UTF-8 编码并包含 YAML frontmatter。
-- frontmatter 必须包含 `name` 和 `description`。
-- `version` 可选；省略时使用 `0.0.0`。
-- 如果填写 `version`，必须是语义化版本号，例如 `1.0.0` 或 `1.2.3-beta.1`。
-- 同一 `version` 重复上传且内容相同时为幂等；内容不同时会**追加为同版本号的新修订**（不报错），`install` 默认仍取最新一条。
+- **`version` 必须本地提供**（复合包：包根 `package.json` 或 `--skill-version`；单包：根 `SKILL.md` frontmatter 或 `--skill-version`）。不会默认 `0.0.0`。全局 `skillhub --version` 只显示 CLI 工具版本，与技能包版本无关。
+- 有根 `SKILL.md` 时：frontmatter 必须包含 `name`、`description`，且须有合法 SemVer `version`。
 - 不要上传符号链接、`.env`、凭据、私钥或不安全路径。
 - CLI 与后端对单个压缩包、解压后总大小和单个文件的容量上限均为 1GiB。
 
@@ -273,7 +275,7 @@ skillhub install <slug> [options]
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--target <directory>` | 用户级目录 | 显式指定项目或自定义安装目录 |
-| `--version <digest>` | 最新版本 | 指定版本摘要 |
+| `--digest <digest>` | 最新版本 | 指定平台版本摘要（不要用全局 `--version`） |
 | `--service-url <url>` | `http://127.0.0.1:8080` | SkillHub 后端地址 |
 | `--json` | 关闭 | 输出 JSON |
 
@@ -285,7 +287,7 @@ skillhub install <slug> [options]
 skillhub install using-product-development
 skillhub install ui-ux-pro-max --target .skills
 skillhub install token-efficient-development --target ./vendor/skills
-skillhub install using-product-development --version <version-digest>
+skillhub install using-product-development --digest <version-digest>
 skillhub install using-product-development --service-url http://192.168.1.10:8080 --json
 ```
 

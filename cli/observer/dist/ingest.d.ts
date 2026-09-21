@@ -1,6 +1,10 @@
 import { fetchPlatformSkills } from './platform.js';
 import { type TimelineSession } from './timeline.js';
 import type { ObservationEvent } from './types.js';
+/** SemVer label from step/payload, if any. Digest is intentionally ignored. */
+export declare function skillStepVersionLabel(step: ObservationEvent): string | undefined;
+/** True when any skill step in the session lacks a SemVer version label. */
+export declare function sessionHasUnversionedSkill(session: TimelineSession): boolean;
 export declare function ingestEvents(serviceUrl: string, events: ObservationEvent[]): Promise<string>;
 export declare function ingestSessions(serviceUrl: string, sessions: TimelineSession[]): Promise<string>;
 export declare function annotateSessions(sessions: TimelineSession[], platform: Awaited<ReturnType<typeof fetchPlatformSkills>>): TimelineSession[];
@@ -11,7 +15,6 @@ export declare function toIngestStep(step: ObservationEvent): {
     ts: string;
     skillSlug: string | undefined;
     skillName: string | undefined;
-    skillVersionDigest?: string;
     skillVersionLabel?: string;
     skillVersionSource?: string;
     payload: Record<string, unknown>;

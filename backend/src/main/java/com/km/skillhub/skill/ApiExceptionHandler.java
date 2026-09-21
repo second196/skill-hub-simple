@@ -15,6 +15,12 @@ public class ApiExceptionHandler {
         Map<String, Object> body = new LinkedHashMap<String, Object>();
         body.put("message", exception.getMessage());
         body.put("code", exception.getCode());
+        Map<String, Object> details = exception.getDetails();
+        if (details != null && !details.isEmpty()) {
+            for (Map.Entry<String, Object> entry : details.entrySet()) {
+                body.put(entry.getKey(), entry.getValue());
+            }
+        }
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 
@@ -26,3 +32,4 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 }
+

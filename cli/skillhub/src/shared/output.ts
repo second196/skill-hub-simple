@@ -1,10 +1,39 @@
 import { CliError } from './errors.js'
 
+export interface VersionExamplePayload {
+  packageJson?: Record<string, unknown>
+  skillMd?: string
+  cli?: string
+}
+
 export function formatError(error: unknown, json: boolean): string {
   const cliError = error instanceof CliError
     ? error
     : new CliError(error instanceof Error ? error.message : '未知错误', 'UNEXPECTED_ERROR', 1)
-  return json
-    ? JSON.stringify({ ok: false, code: cliError.code, message: cliError.message, ...cliError.details })
-    : `错误：${cliError.message}`
+  if (json) {
+    return JSON.stringify({ ok: false, code: cliError.code, message: cliError.message, ...cliError.details })
+  }
+  const lines = [`错误：${cliError.message}`]
+  const details = (cliError.details || {}) as {
+    hint?: string
+    example?: VersionExamplePayload
+  }
+  const example = details.example
+  if (example?.packageJson) {
+    lines.push('', '请在包根添加 package.json（示例，复合包不要创建根 SKILL.md）：')
+    lines.push(JSON.stringify(example.packageJson, null, 2))
+  }
+  if (example?.skillMd) {
+    lines.push('', '或在已有根 SKILL.md 的 frontmatter 中声明 version（示例，仅适用于单包）：')
+    lines.push(example.skillMd)
+  }
+  if (example?.cli) {
+    lines.push('', 'CLI 上传时也可指定：')
+    lines.push(`  ${example.cli}`)
+  }
+  if (details.hint) {
+    lines.push('', details.hint)
+  }
+  return lines.join('\n')
 }
+

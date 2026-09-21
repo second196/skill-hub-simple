@@ -10,7 +10,7 @@ export interface UploadOptions {
   category: string
   name?: string
   description?: string
-  /** SemVer override; required for composite packages without root SKILL.md version. */
+  /** SemVer override; required for composite packages without root SKILL.md (or package.json version). */
   version?: string
   json: boolean
 }

@@ -142,7 +142,7 @@ public class SkillRepository {
         if (maxFormal != null && SkillVersions.isSemVer(incomingLabel)
                 && SkillVersions.compareSemVer(incomingLabel, maxFormal) < 0) {
             throw new SkillApiException(
-                    "Skill 内容已修改但版本号未升，请先修改 SKILL.md 中的 version 再上传（" + maxFormal + "）",
+                    "Skill 内容已修改但版本号未升，请先提升 version（SKILL.md frontmatter 或 package.json/plugin.json）再上传（" + maxFormal + "）",
                     SkillApiException.CODE_VERSION_BUMP_REQUIRED);
         }
         if (incomingDigest != null) {

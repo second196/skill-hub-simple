@@ -42,23 +42,58 @@ public class SkillPackageParser {
         if (bytes == null || bytes.length == 0) throw new IllegalArgumentException("上传文件不能为空");
         if (bytes.length > maxPackageBytes) throw new IllegalArgumentException("上传文件超过大小限制");
         List<SkillPackage.FileEntry> files = isMarkdown(filename) ? singleFile(bytes) : normalizePackageRoot(unzip(filename, bytes));
-        if (!hasRootSkill(files)) files = addGeneratedRootSkill(files, filename);
-        SkillPackage.FileEntry skillFile = null;
-        for (SkillPackage.FileEntry file : files) if ("SKILL.md".equals(file.getPath())) skillFile = file;
-        if (skillFile == null) throw new IllegalArgumentException("Skill 根目录必须包含 SKILL.md");
-        Map<?, ?> metadata = parseFrontmatter(skillFile.getContent());
-        String name = text(metadata.get("name"), "name", 128);
-        String description = text(metadata.get("description"), "description", 2048);
-        Object rawVersion = metadata.get("version");
-        if (rawVersion == null) {
-            throw new SkillApiException("SKILL.md 缺少 version 字段（必须使用语义化版本号，不再默认 0.0.0）",
-                    SkillApiException.CODE_VERSION_REQUIRED);
+        String name;
+        String description;
+        String version;
+        SkillPackage.FileEntry rootSkill = null;
+        for (SkillPackage.FileEntry file : files) if ("SKILL.md".equals(file.getPath())) rootSkill = file;
+        if (rootSkill != null) {
+            Map<?, ?> metadata = parseFrontmatter(rootSkill.getContent());
+            name = text(metadata.get("name"), "name", 128);
+            description = text(metadata.get("description"), "description", 2048);
+            Object rawVersion = metadata.get("version");
+            if (rawVersion == null) {
+                throw new SkillApiException(
+                        "SKILL.md 缺少 version 字段（必须使用语义化版本号，不再默认 0.0.0）",
+                        SkillApiException.CODE_VERSION_REQUIRED,
+                        SkillApiException.versionRequiredDetails(
+                                metadata.get("name") == null ? null : String.valueOf(metadata.get("name")),
+                                metadata.get("description") == null ? null : String.valueOf(metadata.get("description"))));
+            }
+            version = text(rawVersion, "version", 64);
+        } else {
+            // Composite without root SKILL.md: do not invent SKILL.md; ensure README.md for overview.
+            int nestedSkillCount = 0;
+            for (SkillPackage.FileEntry file : files) if (file.getPath().endsWith("/SKILL.md")) nestedSkillCount++;
+            if (nestedSkillCount == 0) {
+                throw new IllegalArgumentException("Skill 包缺少 SKILL.md，且没有可识别的子Skill（至少需要一个 */SKILL.md 或根 SKILL.md）");
+            }
+            files = ensureCompositeReadme(files, filename);
+            Map<String, String> packageMetadata = packageMetadata(files);
+            String fallbackName = baseName(filename);
+            name = cleanMetadata(
+                    packageMetadata.get("name"),
+                    firstNonBlank(readmeTitle(files), fallbackName, "composite-skill"),
+                    100);
+            description = cleanMetadata(
+                    packageMetadata.get("description"),
+                    firstNonBlank(readmeDescription(files), "复合Skill包，包含 " + nestedSkillCount + " 个子Skill。"),
+                    2048);
+            version = packageMetadata.get("version");
+            if (version != null) version = version.trim();
+            if (version == null || version.isEmpty() || !VERSION.matcher(version).matches()) {
+                throw new SkillApiException(
+                        "复合Skill包缺少 version",
+                        SkillApiException.CODE_VERSION_REQUIRED,
+                        SkillApiException.versionRequiredDetails(name, description));
+            }
         }
-        String version = text(rawVersion, "version", 64);
         version = SkillVersions.normalizeVersionLabel(version);
         if (version == null || !SkillVersions.isSemVer(version)) {
-            throw new SkillApiException("version 必须使用语义化版本号",
-                    SkillApiException.CODE_VERSION_INVALID);
+            throw new SkillApiException(
+                    "version 必须使用语义化版本号",
+                    SkillApiException.CODE_VERSION_INVALID,
+                    SkillApiException.versionRequiredDetails(name, description));
         }
         Collections.sort(files, Comparator.comparing(SkillPackage.FileEntry::getPath));
         List<String> paths = new ArrayList<String>(files.size());
@@ -126,16 +161,25 @@ public class SkillPackageParser {
         return normalized;
     }
 
-    private boolean hasRootSkill(List<SkillPackage.FileEntry> files) {
-        for (SkillPackage.FileEntry file : files) if ("SKILL.md".equals(file.getPath())) return true;
-        return false;
+    private String findRootReadme(List<SkillPackage.FileEntry> files) {
+        for (SkillPackage.FileEntry file : files) {
+            if ("readme.md".equalsIgnoreCase(file.getPath())) return file.getPath();
+        }
+        return null;
     }
 
-    private List<SkillPackage.FileEntry> addGeneratedRootSkill(List<SkillPackage.FileEntry> files, String filename) {
+    /** Keep existing root README.* bytes unchanged; only create when the package has none. */
+    private List<SkillPackage.FileEntry> ensureCompositeReadme(List<SkillPackage.FileEntry> files, String filename) {
+        if (findRootReadme(files) != null) return files;
         int nestedSkillCount = 0;
-        for (SkillPackage.FileEntry file : files) if (file.getPath().endsWith("/SKILL.md")) nestedSkillCount++;
-        if (nestedSkillCount == 0) throw new IllegalArgumentException("Skill 根目录必须包含 SKILL.md");
-
+        List<String> nestedSkills = new ArrayList<String>();
+        for (SkillPackage.FileEntry file : files) {
+            if (!file.getPath().endsWith("/SKILL.md")) continue;
+            nestedSkillCount += 1;
+            String skillPath = file.getPath().substring(0, file.getPath().length() - "SKILL.md".length());
+            if (skillPath.endsWith("/")) skillPath = skillPath.substring(0, skillPath.length() - 1);
+            nestedSkills.add(skillPath);
+        }
         Map<String, String> packageMetadata = packageMetadata(files);
         String fallbackName = baseName(filename);
         String name = cleanMetadata(
@@ -146,22 +190,18 @@ public class SkillPackageParser {
                 packageMetadata.get("description"),
                 firstNonBlank(readmeDescription(files), "复合Skill包，包含 " + nestedSkillCount + " 个子Skill。"),
                 2048);
-        String version = packageMetadata.get("version");
-        if (version != null) version = version.trim();
-        if (version == null || version.isEmpty() || !VERSION.matcher(version).matches()) {
-            throw new SkillApiException(
-                    "复合Skill包缺少有效 version（请在 package.json / plugin.json 或 SKILL.md frontmatter 中声明语义化版本号）",
-                    SkillApiException.CODE_VERSION_REQUIRED);
+        StringBuilder body = new StringBuilder();
+        body.append("# ").append(name).append("\n\n");
+        body.append(description).append("\n\n");
+        body.append("这是一个复合Skill包，包含若干可独立使用的子Skill。子Skill及其资源保留在原始目录结构中。\n");
+        if (!nestedSkills.isEmpty()) {
+            body.append("\n## 子 Skill\n\n");
+            for (String skillPath : nestedSkills) {
+                body.append("- `").append(skillPath).append("`\n");
+            }
         }
-        String generated = "---\n"
-                + "name: " + yamlQuote(name) + "\n"
-                + "description: " + yamlQuote(description) + "\n"
-                + "version: " + yamlQuote(version) + "\n"
-                + "---\n\n"
-                + "# " + name + "\n\n"
-                + "这是一个复合Skill包，包含若干可独立使用的子Skill。子Skill及其资源保留在原始目录结构中。\n";
         List<SkillPackage.FileEntry> result = new ArrayList<SkillPackage.FileEntry>(files.size() + 1);
-        result.add(entry("SKILL.md", generated.getBytes(StandardCharsets.UTF_8)));
+        result.add(entry("README.md", body.toString().getBytes(StandardCharsets.UTF_8)));
         result.addAll(files);
         return result;
     }
@@ -239,10 +279,6 @@ public class SkillPackageParser {
         if (candidate.isEmpty()) candidate = fallback;
         if (candidate.length() > max) candidate = candidate.substring(0, max).trim();
         return candidate.isEmpty() ? fallback : candidate;
-    }
-
-    private String yamlQuote(String value) {
-        return "'" + value.replace("'", "''") + "'";
     }
 
     private Map<?, ?> parseFrontmatter(byte[] bytes) {

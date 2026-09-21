@@ -1,10 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { computeSkillPackageDigest, normalizeVersionDigest, normalizeVersionLabel, parseSkillFile, resolveSkillVersion } from './catalog.js';
-import { toIngestStep } from './ingest.js';
+import { normalizeVersionLabel, parseSkillFile, resolveSkillVersion } from './catalog.js';
+import { sessionHasUnversionedSkill, skillStepVersionLabel, toIngestStep } from './ingest.js';
 import { buildTimeline } from './timeline.js';
-test('parseSkillFile reads version label and digest from frontmatter', () => {
+test('parseSkillFile reads version label only (no content digest)', () => {
     const skill = parseSkillFile('/tmp/demo/SKILL.md', [
         '---',
         'name: demo-skill',
@@ -15,42 +14,21 @@ test('parseSkillFile reads version label and digest from frontmatter', () => {
     ].join('\n'));
     assert.ok(skill);
     assert.equal(skill.versionLabel, '1.2.3-beta.1');
-    assert.equal(skill.versionDigest, 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789');
+    assert.equal('versionDigest' in skill, false);
 });
-test('parseSkillFile computes SKILL.md digest when frontmatter digest is missing', () => {
-    const content = '---\nname: bare-skill\nversion: 2.0.0\n---\n# bare\n';
-    const skill = parseSkillFile('/tmp/bare/SKILL.md', content);
+test('parseSkillFile omits version when frontmatter has no SemVer version', () => {
+    const skill = parseSkillFile('/tmp/bare/SKILL.md', '---\nname: bare-skill\nversion: latest\n---\n# bare\n');
     assert.ok(skill);
-    assert.equal(skill.versionLabel, '2.0.0');
-    const expected = createHash('sha256')
-        .update(`SKILL.md\n${createHash('sha256').update(Buffer.from(content, 'utf8')).digest('hex')}\n`)
-        .digest('hex');
-    assert.equal(skill.versionDigest, expected);
-    assert.equal(skill.versionDigest, computeSkillPackageDigest([{ path: 'SKILL.md', content }]));
+    assert.equal(skill.versionLabel, undefined);
 });
-test('computeSkillPackageDigest sorts posix paths and hashes each file line', () => {
-    const digest = computeSkillPackageDigest([
-        { path: 'scripts\\run.js', content: 'b' },
-        { path: 'SKILL.md', content: 'a' }
-    ]);
-    const expected = createHash('sha256')
-        .update(`SKILL.md\n${createHash('sha256').update('a').digest('hex')}\n` +
-        `scripts/run.js\n${createHash('sha256').update('b').digest('hex')}\n`)
-        .digest('hex');
-    assert.equal(digest, expected);
-});
-test('normalize helpers reject non-semver and non-hex values', () => {
+test('normalizeVersionLabel rejects non-semver values', () => {
     assert.equal(normalizeVersionLabel('v1.0.0'), '1.0.0');
     assert.equal(normalizeVersionLabel('1.0'), undefined);
     assert.equal(normalizeVersionLabel('latest'), undefined);
-    assert.equal(normalizeVersionDigest('DEADBEEF'), undefined);
-    assert.equal(normalizeVersionDigest('a'.repeat(64)), 'a'.repeat(64));
+    assert.equal(normalizeVersionLabel('ad8d764'), undefined);
 });
-test('skill events keep version fields and ingest forwards observed version', () => {
-    const skillPath = '/home/u/.claude/skills/demo-skill/SKILL.md';
-    const versionLabel = '3.1.4';
-    const versionDigest = 'f'.repeat(64);
-    const event = {
+function skillEvent(overrides = {}) {
+    return {
         v: 1,
         event_id: 'e1',
         client_id: 'c1',
@@ -64,47 +42,60 @@ test('skill events keep version fields and ingest forwards observed version', ()
         ts: '2026-01-01T00:00:00.000Z',
         skill_slug: 'demo-skill',
         skill_name: 'demo-skill',
-        skill_version_label: versionLabel,
-        skill_version_digest: versionDigest,
         source: 'scan',
+        payload: { name: 'demo-skill', outcome: 'ok' },
+        ...overrides
+    };
+}
+test('toIngestStep forwards version label only and strips digest fields', () => {
+    const step = skillEvent({
+        skill_version_label: '3.1.4',
         payload: {
             name: 'demo-skill',
-            outcome: 'ok',
-            skill_version_label: versionLabel,
-            skill_version_digest: versionDigest,
-            path: skillPath
+            skill_version_label: '3.1.4',
+            skill_version_digest: 'f'.repeat(64),
+            skillVersionDigest: 'f'.repeat(64)
         }
-    };
-    const sessions = buildTimeline([event]);
-    assert.equal(sessions.length, 1);
-    assert.equal(sessions[0].title, 'Demo session');
-    const step = sessions[0].turns[0].steps[0];
-    assert.equal(step.skill_version_label, versionLabel);
-    assert.equal(step.skill_version_digest, versionDigest);
+    });
     const ingestStep = toIngestStep(step);
-    assert.equal(ingestStep.skillSlug, 'demo-skill');
-    assert.equal(ingestStep.skillVersionLabel, versionLabel);
-    assert.equal(ingestStep.skillVersionDigest, versionDigest);
+    assert.equal(ingestStep.skillVersionLabel, '3.1.4');
     assert.equal(ingestStep.skillVersionSource, 'observed');
+    assert.equal('skillVersionDigest' in ingestStep, false);
     const payload = ingestStep.payload;
-    assert.equal(payload.skillVersionLabel, versionLabel);
-    assert.equal(payload.skillVersionDigest, versionDigest);
-    assert.equal(payload.skillVersionSource, 'observed');
+    assert.equal(payload.skillVersionLabel, '3.1.4');
+    assert.equal(payload.skillVersionDigest, undefined);
+    assert.equal(payload.skill_version_digest, undefined);
 });
-test('resolveSkillVersion matches by path then slug', () => {
+test('sessionHasUnversionedSkill discards sessions with unversioned skill steps', () => {
+    const versioned = buildTimeline([skillEvent({ skill_version_label: '1.0.0' })]);
+    assert.equal(sessionHasUnversionedSkill(versioned[0]), false);
+    const unversioned = buildTimeline([
+        skillEvent({ skill_version_label: undefined, payload: { name: 'demo-skill', skill_version_digest: 'a'.repeat(64) } })
+    ]);
+    assert.equal(sessionHasUnversionedSkill(unversioned[0]), true);
+    const digestOnly = buildTimeline([
+        skillEvent({ skill_version_label: undefined, payload: { name: 'demo-skill', skillVersionDigest: 'b'.repeat(64) } })
+    ]);
+    assert.equal(sessionHasUnversionedSkill(digestOnly[0]), true);
+});
+test('resolveSkillVersion matches by path then slug and returns label only', () => {
     const skills = [
         {
             slug: 'demo-skill',
             name: 'demo-skill',
             path: '/x/demo-skill/SKILL.md',
-            versionLabel: '0.1.0',
-            versionDigest: '1'.repeat(64)
+            versionLabel: '0.1.0'
         }
     ];
     const byPath = resolveSkillVersion(skills, { slug: 'other', path: '/x/demo-skill/SKILL.md' });
     assert.equal(byPath.versionLabel, '0.1.0');
     const bySlug = resolveSkillVersion(skills, { slug: 'demo-skill' });
-    assert.equal(bySlug.versionDigest, '1'.repeat(64));
+    assert.equal(bySlug.versionLabel, '0.1.0');
+    assert.equal('versionDigest' in bySlug, false);
     const missing = resolveSkillVersion(skills, { slug: 'unknown' });
     assert.equal(missing.versionLabel, undefined);
+});
+test('skillStepVersionLabel accepts payload label and rejects digest-looking values', () => {
+    assert.equal(skillStepVersionLabel(skillEvent({ payload: { skillVersionLabel: 'v2.0.0' } })), '2.0.0');
+    assert.equal(skillStepVersionLabel(skillEvent({ payload: { skillVersionDigest: 'abc' } })), undefined);
 });

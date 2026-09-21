@@ -127,8 +127,11 @@ public class ObservationRepository {
 
     /**
      * Optional version filter for observation_step queries.
-     * Values: omitted/null/"all" (no filter), "unknown" (null digest), or a content digest.
-     * SQL prefers the skill_version_digest column on observation_step.
+     * Values: omitted/null/"all" (no filter), or a SemVer version label (e.g. 1.0.0 / v1.0.0).
+     * Observation skill identity is skill_version_label only — content digest is not used.
+     *
+     * SQL is inlined as escaped literals (no JDBC placeholders) so the same fragment can be
+     * safely embedded into multiple aggregates (usageSum CASE WHEN ...) without parameter-count bugs.
      */
     static final class VersionFilter {
         static final VersionFilter ALL = new VersionFilter("", new Object[0]);
@@ -145,10 +148,22 @@ public class ObservationRepository {
             String value = versionFilter.trim();
             if (value.isEmpty() || "all".equalsIgnoreCase(value)) return ALL;
             if ("unknown".equalsIgnoreCase(value)) {
-                return new VersionFilter(" AND (st.skill_version_digest IS NULL OR TRIM(st.skill_version_digest)='')", new Object[0]);
+                return new VersionFilter(" AND (st.skill_version_label IS NULL OR TRIM(st.skill_version_label)='')", new Object[0]);
             }
-            String digest = value.toLowerCase(Locale.ROOT);
-            return new VersionFilter(" AND TRIM(st.skill_version_digest)=?", new Object[] { digest });
+            String label = value.trim();
+            if (label.length() > 1 && (label.charAt(0) == 'v' || label.charAt(0) == 'V') && Character.isDigit(label.charAt(1))) {
+                label = label.substring(1);
+            }
+            String safeLabel = sqlLiteral(label);
+            String safePrefixed = sqlLiteral("v" + label);
+            return new VersionFilter(
+                    " AND (TRIM(st.skill_version_label)='" + safeLabel + "' OR TRIM(st.skill_version_label)='" + safePrefixed + "')",
+                    new Object[0]);
+        }
+
+        private static String sqlLiteral(String value) {
+            if (value == null) return "";
+            return value.replace("'", "''");
         }
 
         Object[] prepend(Object first) {
@@ -167,6 +182,34 @@ public class ObservationRepository {
         }
     }
 
+    /** COUNT/queryForObject that never throws on empty result — observation pages must stay up. */
+    private Integer safeCount(String sql, Object... args) {
+        try {
+            Integer value = jdbc.queryForObject(sql, Integer.class, args);
+            return value == null ? Integer.valueOf(0) : value;
+        } catch (RuntimeException ex) {
+            return Integer.valueOf(0);
+        }
+    }
+
+    private static Map<String, Object> emptyTokenUsage() {
+        Map<String, Object> usage = new LinkedHashMap<String, Object>();
+        usage.put("inputTokens", Long.valueOf(0L));
+        usage.put("cacheReadTokens", Long.valueOf(0L));
+        usage.put("cacheWriteTokens", Long.valueOf(0L));
+        usage.put("outputTokens", Long.valueOf(0L));
+        usage.put("totalTokens", Long.valueOf(0L));
+        usage.put("requestCount", Long.valueOf(0L));
+        usage.put("turnsWithTokens", Integer.valueOf(0));
+        usage.put("input_tokens", Long.valueOf(0L));
+        usage.put("cache_read_input_tokens", Long.valueOf(0L));
+        usage.put("cache_creation_input_tokens", Long.valueOf(0L));
+        usage.put("output_tokens", Long.valueOf(0L));
+        usage.put("total_tokens", Long.valueOf(0L));
+        usage.put("request_count", Long.valueOf(0L));
+        return usage;
+    }
+
     /**
      * Skill-level token usage aggregated from observation_step.payload.usage
      * written by observer scan. Leaf skill steps only (rollup excluded).
@@ -176,45 +219,50 @@ public class ObservationRepository {
     }
 
     public Map<String, Object> skillTokenSummary(String slug, String versionFilter) {
-        VersionFilter vf = VersionFilter.of(versionFilter);
-        String leafFilter = NON_ROLLUP_SKILL + vf.sql;
-        Map<String, Object> row = firstOrNull(jdbc.queryForList(
-                "SELECT " +
-                        usageSum("input_tokens", leafFilter) + " AS token_input, " +
-                        usageSum("cache_read_input_tokens", leafFilter) + " AS token_cache_read, " +
-                        usageSum("cache_creation_input_tokens", leafFilter) + " AS token_cache_write, " +
-                        usageSum("output_tokens", leafFilter) + " AS token_output, " +
-                        usageSum("total_tokens", leafFilter) + " AS token_total, " +
-                        usageSum("request_count", leafFilter) + " AS token_requests, " +
-                        "COUNT(*) FILTER (WHERE " + leafFilter + " AND jsonb_exists(st.payload, 'usage')) AS turns_with_tokens " +
-                        "FROM observation_step st " +
-                        "WHERE st.skill_slug=? AND st.type='skill'" + vf.sql,
-                vf.prepend(slug)));
-        long input = longOf(row == null ? null : row.get("token_input"));
-        long cacheRead = longOf(row == null ? null : row.get("token_cache_read"));
-        long cacheWrite = longOf(row == null ? null : row.get("token_cache_write"));
-        long output = longOf(row == null ? null : row.get("token_output"));
-        long total = longOf(row == null ? null : row.get("token_total"));
-        if (total <= 0 && (input > 0 || cacheRead > 0 || cacheWrite > 0 || output > 0)) {
-            total = input + cacheRead + cacheWrite + output;
+        try {
+            VersionFilter vf = VersionFilter.of(versionFilter);
+            // Version filter lives only in WHERE (literal SQL, no bind params).
+            // Aggregates keep NON_ROLLUP_SKILL only — avoids repeating ? placeholders in usageSum.
+            Map<String, Object> row = firstOrNull(jdbc.queryForList(
+                    "SELECT " +
+                            usageSum("input_tokens", NON_ROLLUP_SKILL) + " AS token_input, " +
+                            usageSum("cache_read_input_tokens", NON_ROLLUP_SKILL) + " AS token_cache_read, " +
+                            usageSum("cache_creation_input_tokens", NON_ROLLUP_SKILL) + " AS token_cache_write, " +
+                            usageSum("output_tokens", NON_ROLLUP_SKILL) + " AS token_output, " +
+                            usageSum("total_tokens", NON_ROLLUP_SKILL) + " AS token_total, " +
+                            usageSum("request_count", NON_ROLLUP_SKILL) + " AS token_requests, " +
+                            "COUNT(*) FILTER (WHERE " + NON_ROLLUP_SKILL + " AND jsonb_exists(st.payload, 'usage')) AS turns_with_tokens " +
+                            "FROM observation_step st " +
+                            "WHERE st.skill_slug=? AND st.type='skill'" + vf.sql,
+                    vf.prepend(slug)));
+            long input = longOf(row == null ? null : row.get("token_input"));
+            long cacheRead = longOf(row == null ? null : row.get("token_cache_read"));
+            long cacheWrite = longOf(row == null ? null : row.get("token_cache_write"));
+            long output = longOf(row == null ? null : row.get("token_output"));
+            long total = longOf(row == null ? null : row.get("token_total"));
+            if (total <= 0 && (input > 0 || cacheRead > 0 || cacheWrite > 0 || output > 0)) {
+                total = input + cacheRead + cacheWrite + output;
+            }
+            long requests = longOf(row == null ? null : row.get("token_requests"));
+            int turnsWithTokens = intOf(row == null ? null : row.get("turns_with_tokens"));
+            Map<String, Object> usage = new LinkedHashMap<String, Object>();
+            usage.put("inputTokens", Long.valueOf(input));
+            usage.put("cacheReadTokens", Long.valueOf(cacheRead));
+            usage.put("cacheWriteTokens", Long.valueOf(cacheWrite));
+            usage.put("outputTokens", Long.valueOf(output));
+            usage.put("totalTokens", Long.valueOf(total));
+            usage.put("requestCount", Long.valueOf(requests));
+            usage.put("turnsWithTokens", Integer.valueOf(turnsWithTokens));
+            usage.put("input_tokens", Long.valueOf(input));
+            usage.put("cache_read_input_tokens", Long.valueOf(cacheRead));
+            usage.put("cache_creation_input_tokens", Long.valueOf(cacheWrite));
+            usage.put("output_tokens", Long.valueOf(output));
+            usage.put("total_tokens", Long.valueOf(total));
+            usage.put("request_count", Long.valueOf(requests));
+            return usage;
+        } catch (RuntimeException ex) {
+            return emptyTokenUsage();
         }
-        long requests = longOf(row == null ? null : row.get("token_requests"));
-        int turnsWithTokens = intOf(row == null ? null : row.get("turns_with_tokens"));
-        Map<String, Object> usage = new LinkedHashMap<String, Object>();
-        usage.put("inputTokens", Long.valueOf(input));
-        usage.put("cacheReadTokens", Long.valueOf(cacheRead));
-        usage.put("cacheWriteTokens", Long.valueOf(cacheWrite));
-        usage.put("outputTokens", Long.valueOf(output));
-        usage.put("totalTokens", Long.valueOf(total));
-        usage.put("requestCount", Long.valueOf(requests));
-        usage.put("turnsWithTokens", Integer.valueOf(turnsWithTokens));
-        usage.put("input_tokens", Long.valueOf(input));
-        usage.put("cache_read_input_tokens", Long.valueOf(cacheRead));
-        usage.put("cache_creation_input_tokens", Long.valueOf(cacheWrite));
-        usage.put("output_tokens", Long.valueOf(output));
-        usage.put("total_tokens", Long.valueOf(total));
-        usage.put("request_count", Long.valueOf(requests));
-        return usage;
     }
 
     public List<Map<String, Object>> listObservedSkills() {
@@ -273,53 +321,71 @@ public class ObservationRepository {
     }
 
     public Map<String, Object> skillQualitySummary(String slug, String versionFilter) {
-        VersionFilter vf = VersionFilter.of(versionFilter);
-        Map<String, Object> row = firstOrNull(jdbc.queryForList(
-                "WITH skill_steps AS (" +
-                        " SELECT st.id, st.turn_id, st.seq, st.payload, t.session_id" +
-                        " FROM observation_step st JOIN observation_turn t ON t.id=st.turn_id" +
-                        " WHERE st.skill_slug=? AND st.type='skill'" +
-                        "   AND COALESCE(st.payload->>'rollup','false') <> 'true'" + vf.sql +
-                        "), turn_loads AS (" +
-                        " SELECT turn_id, COUNT(*) AS loads" +
-                        " FROM skill_steps GROUP BY turn_id" +
-                        " )" +
-                        "SELECT" +
-                        " (SELECT COUNT(*) FROM skill_steps) AS calls," +
-                        " (SELECT COUNT(DISTINCT session_id) FROM skill_steps) AS sessions," +
-                        " (SELECT COUNT(*) FROM turn_loads) AS skill_turns," +
-                        " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'outcome','ok')='error') AS errors," +
-                        " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','') IN ('file','path') " +
-                        "   OR COALESCE(payload->>'path','') ILIKE '%SKILL.md%') AS complete_loads," +
-                        " (SELECT COUNT(*) FROM turn_loads WHERE loads >= 2) AS reload_turns" ,
-                vf.prepend(slug)));
-        int calls = intOf(row == null ? null : row.get("calls"));
-        int sessions = intOf(row == null ? null : row.get("sessions"));
-        int skillTurns = intOf(row == null ? null : row.get("skill_turns"));
-        int errors = intOf(row == null ? null : row.get("errors"));
-        int complete = intOf(row == null ? null : row.get("complete_loads"));
-        int reloadTurns = intOf(row == null ? null : row.get("reload_turns"));
-        double errorRate = calls == 0 ? 0d : (double) errors / calls;
-        double reloadRate = skillTurns == 0 ? 0d : (double) reloadTurns / skillTurns;
-        double loadCompleteRate = calls == 0 ? 0d : (double) complete / calls;
-        double progress = clamp01(calls == 0 ? 0d : (double) complete / Math.max(calls, 1) * 0.5d + 0.5d * (1d - errorRate));
-        double health = 100d * (0.35d * loadCompleteRate + 0.30d * (1d - errorRate) + 0.25d * (1d - reloadRate) + 0.10d * progress);
+        try {
+            VersionFilter vf = VersionFilter.of(versionFilter);
+            Map<String, Object> row = firstOrNull(jdbc.queryForList(
+                    "WITH skill_steps AS (" +
+                            " SELECT st.id, st.turn_id, st.seq, st.payload, t.session_id" +
+                            " FROM observation_step st JOIN observation_turn t ON t.id=st.turn_id" +
+                            " WHERE st.skill_slug=? AND st.type='skill'" +
+                            "   AND COALESCE(st.payload->>'rollup','false') <> 'true'" + vf.sql +
+                            "), turn_loads AS (" +
+                            " SELECT turn_id, COUNT(*) AS loads" +
+                            " FROM skill_steps GROUP BY turn_id" +
+                            " )" +
+                            "SELECT" +
+                            " (SELECT COUNT(*) FROM skill_steps) AS calls," +
+                            " (SELECT COUNT(DISTINCT session_id) FROM skill_steps) AS sessions," +
+                            " (SELECT COUNT(*) FROM turn_loads) AS skill_turns," +
+                            " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'outcome','ok')='error') AS errors," +
+                            " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','') IN ('file','path') " +
+                            "   OR COALESCE(payload->>'path','') ILIKE '%SKILL.md%') AS complete_loads," +
+                            " (SELECT COUNT(*) FROM turn_loads WHERE loads >= 2) AS reload_turns",
+                    vf.prepend(slug)));
+            int calls = intOf(row == null ? null : row.get("calls"));
+            int sessions = intOf(row == null ? null : row.get("sessions"));
+            int skillTurns = intOf(row == null ? null : row.get("skill_turns"));
+            int errors = intOf(row == null ? null : row.get("errors"));
+            int complete = intOf(row == null ? null : row.get("complete_loads"));
+            int reloadTurns = intOf(row == null ? null : row.get("reload_turns"));
+            double errorRate = calls == 0 ? 0d : (double) errors / calls;
+            double reloadRate = skillTurns == 0 ? 0d : (double) reloadTurns / skillTurns;
+            double loadCompleteRate = calls == 0 ? 0d : (double) complete / calls;
+            double progress = clamp01(calls == 0 ? 0d : (double) complete / Math.max(calls, 1) * 0.5d + 0.5d * (1d - errorRate));
+            double health = 100d * (0.35d * loadCompleteRate + 0.30d * (1d - errorRate) + 0.25d * (1d - reloadRate) + 0.10d * progress);
 
-        Map<String, Object> quality = new LinkedHashMap<String, Object>();
-        quality.put("calls", Integer.valueOf(calls));
-        quality.put("sessions", Integer.valueOf(sessions));
-        quality.put("skillTurns", Integer.valueOf(skillTurns));
-        quality.put("errors", Integer.valueOf(errors));
-        quality.put("completeLoads", Integer.valueOf(complete));
-        quality.put("reloadTurns", Integer.valueOf(reloadTurns));
-        quality.put("errorRate", Double.valueOf(round2(errorRate)));
-        quality.put("reloadRate", Double.valueOf(round2(reloadRate)));
-        quality.put("loadCompleteRate", Double.valueOf(round2(loadCompleteRate)));
-        quality.put("progress", Double.valueOf(round2(progress)));
-        quality.put("progressLabel", progressLabel(progress));
-        quality.put("healthScore", Integer.valueOf((int) Math.round(health)));
-        quality.put("healthLabel", healthLabel(health));
-        return quality;
+            Map<String, Object> quality = new LinkedHashMap<String, Object>();
+            quality.put("calls", Integer.valueOf(calls));
+            quality.put("sessions", Integer.valueOf(sessions));
+            quality.put("skillTurns", Integer.valueOf(skillTurns));
+            quality.put("errors", Integer.valueOf(errors));
+            quality.put("completeLoads", Integer.valueOf(complete));
+            quality.put("reloadTurns", Integer.valueOf(reloadTurns));
+            quality.put("errorRate", Double.valueOf(round2(errorRate)));
+            quality.put("reloadRate", Double.valueOf(round2(reloadRate)));
+            quality.put("loadCompleteRate", Double.valueOf(round2(loadCompleteRate)));
+            quality.put("progress", Double.valueOf(round2(progress)));
+            quality.put("progressLabel", progressLabel(progress));
+            quality.put("healthScore", Integer.valueOf((int) Math.round(health)));
+            quality.put("healthLabel", healthLabel(health));
+            return quality;
+        } catch (RuntimeException ex) {
+            Map<String, Object> quality = new LinkedHashMap<String, Object>();
+            quality.put("calls", Integer.valueOf(0));
+            quality.put("sessions", Integer.valueOf(0));
+            quality.put("skillTurns", Integer.valueOf(0));
+            quality.put("errors", Integer.valueOf(0));
+            quality.put("completeLoads", Integer.valueOf(0));
+            quality.put("reloadTurns", Integer.valueOf(0));
+            quality.put("errorRate", Double.valueOf(0d));
+            quality.put("reloadRate", Double.valueOf(0d));
+            quality.put("loadCompleteRate", Double.valueOf(0d));
+            quality.put("progress", Double.valueOf(0d));
+            quality.put("progressLabel", progressLabel(0d));
+            quality.put("healthScore", Integer.valueOf(0));
+            quality.put("healthLabel", healthLabel(0d));
+            return quality;
+        }
     }
 
     public Map<String, Object> skillQuality(String slug) {
@@ -870,29 +936,35 @@ public class ObservationRepository {
         Map<String, Object> result = new LinkedHashMap<String, Object>();
         result.put("skill", skill);
         result.put("versionFilter", versionFilter == null || versionFilter.trim().isEmpty() ? "all" : versionFilter.trim());
-        result.put("versions", skillVersions(slug));
+        List<Map<String, Object>> versions = java.util.Collections.emptyList();
+        try {
+            versions = skillVersions(slug);
+        } catch (RuntimeException ignored) {
+            versions = java.util.Collections.emptyList();
+        }
+        result.put("versions", versions);
 
         Map<String, Object> kpis = new LinkedHashMap<String, Object>();
-        kpis.put("callCount", jdbc.queryForObject(
+        kpis.put("callCount", safeCount(
                 "SELECT COUNT(*) FROM observation_step st " +
                         "WHERE st.skill_slug=? AND (st.type='skill' " +
                         "OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL))" + vf.sql,
-                Integer.class, vf.prepend(slug)));
-        kpis.put("sessionCount", jdbc.queryForObject(
+                vf.prepend(slug)));
+        kpis.put("sessionCount", safeCount(
                 "SELECT COUNT(DISTINCT sess.id) FROM observation_session sess " +
                         "JOIN observation_turn t ON t.session_id=sess.id " +
                         "JOIN observation_step st ON st.turn_id=t.id WHERE st.skill_slug=?" + vf.sql,
-                Integer.class, vf.prepend(slug)));
-        kpis.put("clientCount", jdbc.queryForObject(
+                vf.prepend(slug)));
+        kpis.put("clientCount", safeCount(
                 "SELECT COUNT(DISTINCT c.client_id) FROM observation_client c " +
                         "JOIN observation_session sess ON sess.client_row_id=c.id " +
                         "JOIN observation_turn t ON t.session_id=sess.id " +
                         "JOIN observation_step st ON st.turn_id=t.id WHERE st.skill_slug=?" + vf.sql,
-                Integer.class, vf.prepend(slug)));
-        kpis.put("turnCount", jdbc.queryForObject(
+                vf.prepend(slug)));
+        kpis.put("turnCount", safeCount(
                 "SELECT COUNT(DISTINCT t.id) FROM observation_turn t " +
                         "JOIN observation_step st ON st.turn_id=t.id WHERE st.skill_slug=?" + vf.sql,
-                Integer.class, vf.prepend(slug)));
+                vf.prepend(slug)));
         result.put("kpis", kpis);
         Map<String, Object> tokenUsage = skillTokenSummary(slug, versionFilter);
         kpis.put("tokenTotal", tokenUsage.get("totalTokens"));
@@ -903,30 +975,53 @@ public class ObservationRepository {
         kpis.put("tokenRequests", tokenUsage.get("requestCount"));
         kpis.put("tokenUsage", tokenUsage);
         result.put("tokenUsage", tokenUsage);
-        result.put("trend", fillTrend(trendBySkill(slug).get(slug)));
-        Map<String, Object> quality = skillQuality(slug, versionFilter);
+        Map<String, List<Map<String, Object>>> trends;
+        try {
+            trends = trendBySkill(slug);
+        } catch (RuntimeException ignored) {
+            trends = new LinkedHashMap<String, List<Map<String, Object>>>();
+        }
+        result.put("trend", fillTrend(trends.get(slug)));
+        Map<String, Object> quality;
+        try {
+            quality = skillQuality(slug, versionFilter);
+        } catch (RuntimeException ignored) {
+            quality = skillQualitySummary(slug, versionFilter);
+        }
         quality.put("tokenUsage", tokenUsage);
         result.put("quality", quality);
-        result.put("problemSessions", skillProblemSessions(slug, 20, versionFilter));
+        List<Map<String, Object>> problemSessions;
+        try {
+            problemSessions = skillProblemSessions(slug, 20, versionFilter);
+        } catch (RuntimeException ignored) {
+            problemSessions = java.util.Collections.emptyList();
+        }
+        result.put("problemSessions", problemSessions);
 
-        result.put("clients", jdbc.queryForList(
-                "SELECT c.client_id, c.hostname, c.os, COUNT(DISTINCT sess.id) AS session_count, MAX(c.last_seen_at) AS last_seen_at " +
-                        "FROM observation_client c " +
-                        "JOIN observation_session sess ON sess.client_row_id=c.id " +
-                        "JOIN observation_turn t ON t.session_id=sess.id " +
-                        "JOIN observation_step st ON st.turn_id=t.id " +
-                        "WHERE st.skill_slug=?" + vf.sql + " GROUP BY c.client_id, c.hostname, c.os ORDER BY last_seen_at DESC",
-                vf.prepend(slug)));
+        List<Map<String, Object>> clients;
+        try {
+            clients = jdbc.queryForList(
+                    "SELECT c.client_id, c.hostname, c.os, COUNT(DISTINCT sess.id) AS session_count, MAX(c.last_seen_at) AS last_seen_at " +
+                            "FROM observation_client c " +
+                            "JOIN observation_session sess ON sess.client_row_id=c.id " +
+                            "JOIN observation_turn t ON t.session_id=sess.id " +
+                            "JOIN observation_step st ON st.turn_id=t.id " +
+                            "WHERE st.skill_slug=?" + vf.sql + " GROUP BY c.client_id, c.hostname, c.os ORDER BY last_seen_at DESC",
+                    vf.prepend(slug));
+        } catch (RuntimeException ignored) {
+            clients = java.util.Collections.emptyList();
+        }
+        result.put("clients", clients);
 
         String sessionSql = "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, " +
                 "sess.started_at, sess.ended_at, COUNT(DISTINCT t.id) AS turn_count, " +
                 "COALESCE(NULLIF(MAX(sess.title), ''), MIN(stitle.title)) AS title, MIN(sraw.raw_title) AS raw_title, " +
-                usageSum("input_tokens", NON_ROLLUP_SKILL + vf.sql) + " AS token_input, " +
-                usageSum("cache_read_input_tokens", NON_ROLLUP_SKILL + vf.sql) + " AS token_cache_read, " +
-                usageSum("cache_creation_input_tokens", NON_ROLLUP_SKILL + vf.sql) + " AS token_cache_write, " +
-                usageSum("output_tokens", NON_ROLLUP_SKILL + vf.sql) + " AS token_output, " +
-                usageSum("total_tokens", NON_ROLLUP_SKILL + vf.sql) + " AS token_total, " +
-                usageSum("request_count", NON_ROLLUP_SKILL + vf.sql) + " AS token_requests " +
+                usageSum("input_tokens", NON_ROLLUP_SKILL) + " AS token_input, " +
+                usageSum("cache_read_input_tokens", NON_ROLLUP_SKILL) + " AS token_cache_read, " +
+                usageSum("cache_creation_input_tokens", NON_ROLLUP_SKILL) + " AS token_cache_write, " +
+                usageSum("output_tokens", NON_ROLLUP_SKILL) + " AS token_output, " +
+                usageSum("total_tokens", NON_ROLLUP_SKILL) + " AS token_total, " +
+                usageSum("request_count", NON_ROLLUP_SKILL) + " AS token_requests " +
                 "FROM observation_session sess " +
                 "JOIN observation_client c ON c.id=sess.client_row_id " +
                 "JOIN observation_turn t ON t.session_id=sess.id " +
@@ -942,7 +1037,12 @@ public class ObservationRepository {
         }
         sessionSql += " GROUP BY sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, sess.started_at, sess.ended_at " +
                 "ORDER BY sess.started_at DESC NULLS LAST, sess.id DESC LIMIT 100";
-        List<Map<String, Object>> sessions = jdbc.queryForList(sessionSql, args.toArray());
+        List<Map<String, Object>> sessions;
+        try {
+            sessions = jdbc.queryForList(sessionSql, args.toArray());
+        } catch (RuntimeException ignored) {
+            sessions = new ArrayList<Map<String, Object>>();
+        }
         for (Map<String, Object> session : sessions) {
             long total = longOf(session.get("token_total"));
             long input = longOf(session.get("token_input"));
@@ -982,8 +1082,15 @@ public class ObservationRepository {
             selectedId = id instanceof Number ? ((Number) id).longValue() : Long.valueOf(String.valueOf(id));
         }
         result.put("selectedSessionId", selectedId);
-        // Always load the full session chain so the detail page keeps complete turn text.
-        result.put("selectedSession", selectedId == null ? null : sessionChain(selectedId, null));
+        Map<String, Object> selectedSession = null;
+        if (selectedId != null) {
+            try {
+                selectedSession = sessionChain(selectedId, null);
+            } catch (RuntimeException ignored) {
+                selectedSession = null;
+            }
+        }
+        result.put("selectedSession", selectedSession);
         return result;
     }
 
@@ -996,69 +1103,52 @@ public class ObservationRepository {
     }
 
     /**
-     * Version dropdown entries for one skill: published skill_version rows +
-     * DISTINCT skill_version_digest observed on observation_step.
-     * Each item: {digest, label, source, callCount}. Null-digest observations surface as digest="unknown".
+     * Version dropdown entries for one skill: published skill_version labels +
+     * DISTINCT observation_step.skill_version_label.
+     * Each item: {label, source, callCount}. Digest is not used for observation identity.
      */
     public List<Map<String, Object>> skillVersions(String slug) {
-        Map<String, Map<String, Object>> byDigest = new LinkedHashMap<String, Map<String, Object>>();
+        Map<String, Map<String, Object>> byLabel = new LinkedHashMap<String, Map<String, Object>>();
         List<Map<String, Object>> observed = jdbc.queryForList(
-                "SELECT TRIM(st.skill_version_digest) AS digest, " +
-                        "MAX(st.skill_version_label) AS label, MAX(st.skill_version_source) AS source, " +
+                "SELECT TRIM(st.skill_version_label) AS label, MAX(st.skill_version_source) AS source, " +
                         "COUNT(*) AS call_count " +
                         "FROM observation_step st " +
-                        "WHERE st.skill_slug=? AND st.skill_version_digest IS NOT NULL AND TRIM(st.skill_version_digest) <> '' " +
-                        "GROUP BY TRIM(st.skill_version_digest) " +
+                        "WHERE st.skill_slug=? AND st.type='skill' " +
+                        "AND st.skill_version_label IS NOT NULL AND TRIM(st.skill_version_label) <> '' " +
+                        "GROUP BY TRIM(st.skill_version_label) " +
                         "ORDER BY call_count DESC",
                 slug);
         for (Map<String, Object> row : observed) {
-            String digest = row.get("digest") == null ? null : String.valueOf(row.get("digest")).trim().toLowerCase(Locale.ROOT);
-            if (digest == null || digest.isEmpty()) continue;
+            String label = row.get("label") == null ? null : String.valueOf(row.get("label")).trim();
+            if (label == null || label.isEmpty()) continue;
             Map<String, Object> item = new LinkedHashMap<String, Object>();
-            item.put("digest", digest);
-            item.put("label", row.get("label") == null ? null : String.valueOf(row.get("label")));
+            item.put("label", label);
             item.put("source", row.get("source") == null ? "observed" : String.valueOf(row.get("source")));
             item.put("callCount", Integer.valueOf(intOf(row.get("call_count"))));
-            byDigest.put(digest, item);
+            byLabel.put(label.toLowerCase(Locale.ROOT), item);
         }
 
         List<Map<String, Object>> platform = jdbc.queryForList("SELECT id FROM skill WHERE slug=?", slug);
         if (!platform.isEmpty()) {
             Object skillId = platform.get(0).get("id");
             List<Map<String, Object>> published = jdbc.queryForList(
-                    "SELECT TRIM(version_digest) AS digest, version_label AS label FROM skill_version WHERE skill_id=? " +
+                    "SELECT version_label AS label FROM skill_version WHERE skill_id=? " +
                             "ORDER BY created_at DESC, id DESC", skillId);
             for (Map<String, Object> row : published) {
-                String digest = row.get("digest") == null ? null : String.valueOf(row.get("digest")).trim().toLowerCase(Locale.ROOT);
-                if (digest == null || digest.isEmpty()) continue;
-                Map<String, Object> existing = byDigest.get(digest);
+                String label = row.get("label") == null ? null : String.valueOf(row.get("label")).trim();
+                if (label == null || label.isEmpty()) continue;
+                String key = label.toLowerCase(Locale.ROOT);
+                Map<String, Object> existing = byLabel.get(key);
                 if (existing == null) {
                     Map<String, Object> item = new LinkedHashMap<String, Object>();
-                    item.put("digest", digest);
-                    item.put("label", row.get("label") == null ? null : String.valueOf(row.get("label")));
+                    item.put("label", label);
                     item.put("source", null);
                     item.put("callCount", Integer.valueOf(0));
-                    byDigest.put(digest, item);
-                } else if (existing.get("label") == null && row.get("label") != null) {
-                    existing.put("label", String.valueOf(row.get("label")));
+                    byLabel.put(key, item);
                 }
             }
         }
-
-        Integer unknownCount = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM observation_step st WHERE st.skill_slug=? AND st.type='skill' " +
-                        "AND (st.skill_version_digest IS NULL OR TRIM(st.skill_version_digest)='')",
-                Integer.class, slug);
-        List<Map<String, Object>> versions = new ArrayList<Map<String, Object>>(byDigest.values());
-        if (unknownCount != null && unknownCount.intValue() > 0) {
-            Map<String, Object> unknown = new LinkedHashMap<String, Object>();
-            unknown.put("digest", "unknown");
-            unknown.put("label", "unknown");
-            unknown.put("source", null);
-            unknown.put("callCount", Integer.valueOf(unknownCount.intValue()));
-            versions.add(unknown);
-        }
-        return versions;
+        return new ArrayList<Map<String, Object>>(byLabel.values());
     }
 
     private static final int SESSION_CHAIN_MAX_TURNS = 80;

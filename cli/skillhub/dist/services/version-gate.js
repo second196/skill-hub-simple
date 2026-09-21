@@ -1,6 +1,6 @@
 import { apiRequest } from '../clients/api-client.js';
 import { PackageValidationError } from '../shared/errors.js';
-import { VERSION_BUMP_REQUIRED_MESSAGE, VERSION_DIGEST_CONFLICT_MESSAGE, VERSION_GATE_ERROR_CODES } from '../shared/constants.js';
+import { VERSION_BUMP_REQUIRED_MESSAGE, VERSION_DIGEST_CONFLICT_MESSAGE, VERSION_GATE_ERROR_CODES, versionRequiredExample } from '../shared/constants.js';
 import { compareSemver, latestFormalVersion, normalizeVersionLabel, parseSemver } from './semver.js';
 /**
  * VERSION_BUMP_REQUIRED / VERSION_DIGEST_CONFLICT gate — run before upload POST.
@@ -22,7 +22,7 @@ export async function assertVersionBumpRequired(input) {
     const localVersion = normalizeVersionLabel(input.metadata.version);
     if (localVersion === null) {
         // prepareSkillPackage should have rejected this already; fail closed.
-        throw new PackageValidationError('SKILL.md 缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, { version: input.metadata.version });
+        throw new PackageValidationError('SKILL.md 缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, { version: input.metadata.version, ...versionRequiredExample({ ...input.metadata, packageKind: 'skill-md' }) });
     }
     let snapshot;
     try {
@@ -140,7 +140,7 @@ export function slugifySkillName(name) {
 /** Exported for tests: validate a label the same way the package service does. */
 export function assertSemverLabel(version) {
     if (parseSemver(version) === null) {
-        throw new PackageValidationError('SKILL.md 缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, { version });
+        throw new PackageValidationError('SKILL.md 缺少有效的语义化版本号（version）', VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED, { version, ...versionRequiredExample({ packageKind: 'skill-md' }) });
     }
     return normalizeVersionLabel(version);
 }

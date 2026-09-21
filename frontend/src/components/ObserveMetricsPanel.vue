@@ -92,7 +92,7 @@ type ObserveDetailLike = {
   trend?: Array<{ day: string; count: number; tokens?: number; usage?: Partial<SkillTokenUsage> }>
   clients?: Array<{ client_id: string; hostname?: string; os?: string; session_count?: number }>
   sessions?: ObserveSessionLike[]
-  versions?: Array<{ digest?: string; label?: string; source?: string; callCount?: number }>
+  versions?: Array<{ label?: string; source?: string; callCount?: number }>
   selectedSession?: ObserveChainLike | null
 }
 
@@ -374,14 +374,18 @@ const versionSelectOptions = computed(() => {
   const list = props.detail?.versions || []
   return [
     { value: 'all', label: '全部版本', meta: '' },
-    { value: 'unknown', label: '未标注版本', meta: '' },
     ...list
-      .filter((item) => item.digest)
-      .map((item) => ({
-        value: String(item.digest),
-        label: item.label ? `v${item.label}` : String(item.digest || '').slice(0, 8),
-        meta: item.source === 'inferred' ? '推断' : item.callCount != null ? `${item.callCount} 次` : ''
-      }))
+      .map((item) => {
+        const raw = String(item.label || '').trim()
+        if (!raw) return null
+        const value = raw.replace(/^v/i, '')
+        return {
+          value,
+          label: value.startsWith('v') ? value : `v${value}`,
+          meta: item.callCount != null ? `${item.callCount} 次` : ''
+        }
+      })
+      .filter((item): item is { value: string; label: string; meta: string } => item !== null)
   ]
 })
 

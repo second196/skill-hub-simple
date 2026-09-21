@@ -3,7 +3,8 @@ import { PackageValidationError } from '../shared/errors.js'
 import {
   VERSION_BUMP_REQUIRED_MESSAGE,
   VERSION_DIGEST_CONFLICT_MESSAGE,
-  VERSION_GATE_ERROR_CODES
+  VERSION_GATE_ERROR_CODES,
+  versionRequiredExample
 } from '../shared/constants.js'
 import type { SkillPackageMetadata } from '../shared/types.js'
 import {
@@ -60,7 +61,7 @@ export async function assertVersionBumpRequired(input: VersionBumpCheckInput): P
     throw new PackageValidationError(
       'SKILL.md 缺少有效的语义化版本号（version）',
       VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED,
-      { version: input.metadata.version }
+      { version: input.metadata.version, ...versionRequiredExample({ ...input.metadata, packageKind: 'skill-md' }) }
     )
   }
 
@@ -205,7 +206,7 @@ export function assertSemverLabel(version: string): string {
     throw new PackageValidationError(
       'SKILL.md 缺少有效的语义化版本号（version）',
       VERSION_GATE_ERROR_CODES.VERSION_SEMVER_REQUIRED,
-      { version }
+      { version, ...versionRequiredExample({ packageKind: 'skill-md' }) }
     )
   }
   return normalizeVersionLabel(version) as string
