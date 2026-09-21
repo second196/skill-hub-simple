@@ -224,8 +224,8 @@ skillhub prepare ./my-skill --json
 上传包要求：
 
 - **`version` 必须写在 Skill 包内**（单包：根 `SKILL.md` frontmatter；复合包：包根 `package.json` / `.codex-plugin/plugin.json`）。CLI **不注入**版本，也**没有** `--skill-version` 上传参数。平台用 SemVer `version_label` 区分版本，**没有 digest**。
+- **分类必须先读 skill 内容再判定**，并写入包内 `category`；禁止未读内容默认「其他」。优先级：包内 category > 平台已有 skill 分类 > CLI `--category` > `其他`。
 - 同 skill 同 version 再上传会被拒绝（`VERSION_EXISTS`），错误会给出 `suggestedNextVersion`。
-- 分类优先级：包内 `category` > 平台已有 skill 分类 > CLI `--category` > `其他`。
 - 有根 `SKILL.md` 时，整个目录或 ZIP 会作为一个完整 Skill 上传，嵌套的子 Skill 和其他资源会原样保留。
 - 没有根目录 `SKILL.md` 但包含多个嵌套 `SKILL.md` 时，识别为复合 Skill；**不会自动生成根 `SKILL.md`**。已有 `README.md` 则保留，缺失时仅在上传包内生成 README 供平台概览展示。
 - 源目录元数据不完整时：创建临时目录 → 复制 skill → 补全包内 version/category → **完整覆盖回源目录** → 删除临时目录 → 再 `skillhub upload`。

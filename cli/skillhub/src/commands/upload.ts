@@ -228,7 +228,16 @@ export interface CheckOptions {
 
 export async function checkCommand(options: CheckOptions): Promise<string> {
   const inspection = await inspectSkillPackage(options.inputPath)
-  if (options.json) return JSON.stringify(inspection)
+  const category = inspection.metadata?.category
+  if (options.json) {
+    return JSON.stringify({
+      ...inspection,
+      categoryDeclaredInPackage: Boolean(category),
+      categoryHint: category
+        ? `包内 category=${category}`
+        : '包内未声明 category：上传前请先读 skill 内容判定分类并写入包内；禁止未读内容默认「其他」'
+    })
+  }
   const lines = [
     `检查：${options.inputPath}`,
     `类型：${inspection.packageKind}`,
@@ -237,7 +246,10 @@ export async function checkCommand(options: CheckOptions): Promise<string> {
   if (inspection.metadata) {
     lines.push(`name: ${inspection.metadata.name}`)
     lines.push(`version: ${inspection.metadata.version}`)
-    lines.push(`category: ${inspection.metadata.category || '(未声明)'}`)
+    lines.push(`category: ${category || '(未声明)'}`)
+    if (!category) {
+      lines.push('- 提示：包内未声明 category。请读 skill 内容判定分类后写入包内，再 upload。')
+    }
   }
   for (const message of inspection.messages) lines.push(`- ${message}`)
   return lines.join('\n')
