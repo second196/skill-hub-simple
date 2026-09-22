@@ -274,7 +274,7 @@ test('attributes project skill file loads, slash commands, and multi-skill sessi
         ]);
         assert.ok(sessions.length >= 4);
         assert.ok(sessions.some((session) => session.sessionId === 'codex-file-load' && session.turns.some((turn) => turn.steps.some((step) => step.skill_slug === 'using-product-development'))));
-        // Platform-only catalog: unlisted composite children roll up to parent; local-only skills drop.
+        // Platform-only catalog: unlisted composite children roll up to parent; local-only skills keep their identity.
         const platformOnly = annotateSessions(buildTimeline(events), [
             { slug: 'using-product-development', name: 'using-product-development' },
             { slug: 'superpowers', name: 'superpowers' },
@@ -288,10 +288,18 @@ test('attributes project skill file loads, slash commands, and multi-skill sessi
         assert.ok(fileLoad.has('using-product-development'));
         assert.ok(fileLoad.has('superpowers'));
         assert.ok(fileLoad.has('ui-ux-pro-max'));
-        assert.ok(!fileLoad.has('brainstorming'), 'unlisted child should not keep its own slug');
+        assert.ok(!fileLoad.has('brainstorming'), 'unlisted child rolls up to parent slug');
         const slash = uploadSlugs('codex-slash');
         assert.ok(slash.has('using-product-development'));
         assert.ok(!slash.has('sop-requirement'), 'unlisted sop child rolls to UPD only');
+        const noPlatform = annotateSessions(buildTimeline(events), []);
+        const localSlugs = new Set(noPlatform
+            .flatMap((session) => session.turns.flatMap((turn) => turn.steps.map((step) => step.skill_slug)))
+            .filter(Boolean));
+        assert.ok(localSlugs.has('using-product-development'), 'local identity kept without platform catalog');
+        assert.ok(localSlugs.has('brainstorming'), 'composite child keeps local slug when parent is not on platform');
+        assert.ok(localSlugs.has('ui-ux-pro-max'));
+        assert.ok(localSlugs.has('sop-requirement'));
     }
     finally {
         restoreEnv('SKILLHUB_CLAUDE_PROJECTS', previous.claude);
@@ -315,6 +323,58 @@ test('matches slash commands and composite parents without session scan', () => 
     const child = matchSkillUsage([], { command: 'Get-Content -Raw .agents/skills/superpowers/skills/using-superpowers/SKILL.md' });
     assert.equal(child?.slug, 'using-superpowers');
     assert.deepEqual(child?.parents, ['superpowers']);
+});
+test('resolves composite package version from Codex session cwd', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'skillhub-codex-cwd-'));
+    const previous = {
+        codex: process.env.SKILLHUB_CODEX_SESSIONS,
+        observability: process.env.SKILLHUB_OBSERVABILITY_DIR,
+        projectRoots: process.env.SKILLHUB_PROJECT_SKILL_ROOTS
+    };
+    try {
+        const project = join(root, 'kms-2');
+        const skillRoot = join(project, '.agents', 'skills', 'using-product-development');
+        const childRoot = join(skillRoot, 'skills', 'sop-implement');
+        const codexRoot = join(root, 'codex');
+        await mkdir(childRoot, { recursive: true });
+        await mkdir(join(codexRoot, '2026', '09', '22'), { recursive: true });
+        await writeFile(join(skillRoot, 'package.json'), JSON.stringify({
+            name: 'using-product-development',
+            version: '1.0.1'
+        }), 'utf8');
+        await writeFile(join(childRoot, 'SKILL.md'), '---\nname: sop-implement\n---\n# implement\n', 'utf8');
+        await writeFile(join(codexRoot, '2026', '09', '22', 'rollout-cwd.jsonl'), [
+            JSON.stringify({
+                timestamp: '2026-09-22T04:00:00.000Z',
+                type: 'session_meta',
+                payload: { id: 'codex-cwd', cwd: project }
+            }),
+            JSON.stringify({
+                timestamp: '2026-09-22T04:00:01.000Z',
+                type: 'response_item',
+                payload: {
+                    type: 'function_call',
+                    name: 'shell_command',
+                    call_id: 'c1',
+                    arguments: JSON.stringify({ command: 'Get-Content .agents/skills/using-product-development/skills/sop-implement/SKILL.md' })
+                }
+            })
+        ].join('\n') + '\n', 'utf8');
+        process.env.SKILLHUB_CODEX_SESSIONS = codexRoot;
+        process.env.SKILLHUB_OBSERVABILITY_DIR = join(root, 'obs');
+        delete process.env.SKILLHUB_PROJECT_SKILL_ROOTS;
+        const events = await scanAll({ sessionId: 'codex-cwd' });
+        const skillEvents = events.filter((event) => event.type === 'skill');
+        assert.ok(skillEvents.some((event) => event.skill_slug === 'sop-implement' && event.skill_version_label === '1.0.1'));
+        assert.ok(skillEvents.some((event) => event.skill_slug === 'using-product-development' && event.skill_version_label === '1.0.1'));
+        assert.ok(skillEvents.every((event) => event.cwd === project));
+    }
+    finally {
+        restoreEnv('SKILLHUB_CODEX_SESSIONS', previous.codex);
+        restoreEnv('SKILLHUB_OBSERVABILITY_DIR', previous.observability);
+        restoreEnv('SKILLHUB_PROJECT_SKILL_ROOTS', previous.projectRoots);
+        await rm(root, { recursive: true, force: true });
+    }
 });
 test('does not match neighboring session ids by substring', () => {
     assert.equal(sessionMatches('abc', 'abc-2', '/tmp/abc-2.jsonl', 'codex'), false);

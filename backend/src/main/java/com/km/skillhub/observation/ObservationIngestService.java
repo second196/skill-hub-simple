@@ -40,6 +40,7 @@ public class ObservationIngestService {
         if (isBlank(batchId)) batchId = java.util.UUID.randomUUID().toString();
 
         Map<String, String> platform = repository.platformSkills();
+        Map<String, java.util.Set<String>> publishedVersions = repository.publishedVersionsBySlug();
         Map<String, String> nameToSlug = new HashMap<String, String>();
         for (Map.Entry<String, String> entry : platform.entrySet()) {
             nameToSlug.put(normalize(entry.getKey()), entry.getKey());
@@ -59,9 +60,7 @@ public class ObservationIngestService {
                 skipped += 1;
                 continue;
             }
-            // Contract: discard the whole session if any skill step lacks a SemVer version label.
-            // Observation skill identity is version_label only — content digest is ignored.
-            if (sessionHasUnversionedSkill(session)) {
+            if (!sessionHasPublishedPlatformSkill(session, platform, publishedVersions, nameToSlug)) {
                 skipped += 1;
                 continue;
             }
@@ -149,6 +148,15 @@ public class ObservationIngestService {
                     } else {
                         versionLabel = null;
                     }
+                    if ("skill".equals(type)) {
+                        // Keep local/unpublished identity and any observed label; platform rows are annotation-only.
+                        if (versionLabel != null) {
+                            String normalized = com.km.skillhub.skill.SkillVersions.normalizeVersionLabel(versionLabel);
+                            versionLabel = normalized;
+                        }
+                    } else {
+                        versionLabel = null;
+                    }
                     String versionSource = "skill".equals(type) && versionLabel != null ? "observed" : null;
                     // Version identity is skill_version_label only — digest column removed.
                     repository.upsertStep(turnId, stepId, seq, type, ts, slug, payloadJson,
@@ -182,15 +190,33 @@ public class ObservationIngestService {
         return text(data, keys);
     }
 
-    /** Whole-session discard when any skill step lacks SemVer version label. */
-    private boolean sessionHasUnversionedSkill(Map<String, Object> session) {
+    /**
+     * Upload qualification: at least one invoked skill must resolve to a platform skill.
+     * Once qualified, every step in the session is retained, including local-only skills.
+     */
+    private boolean sessionHasPublishedPlatformSkill(
+            Map<String, Object> session,
+            Map<String, String> platform,
+            Map<String, java.util.Set<String>> publishedVersions,
+            Map<String, String> nameToSlug
+    ) {
+        String currentSlug = null;
         for (Object turnObj : asList(session.get("turns"))) {
             Map<String, Object> turn = asMap(turnObj);
             for (Object stepObj : asList(turn.get("steps"))) {
                 Map<String, Object> step = asMap(stepObj);
-                if (!"skill".equals(typeOf(step))) continue;
-                String label = extractVersionField(step, "skillVersionLabel", "skill_version_label", "versionLabel", "version_label");
-                if (!isValidSemVerLabel(label)) return true;
+                String type = typeOf(step);
+                String resolved = resolveSlug(step, platform, nameToSlug, currentSlug);
+                if (resolved != null) currentSlug = resolved;
+                if ("skill".equals(type) && resolved != null && platform.containsKey(resolved)) {
+                    String version = com.km.skillhub.skill.SkillVersions.normalizeVersionLabel(
+                            extractVersionField(step, "skillVersionLabel", "skill_version_label", "versionLabel", "version_label")
+                    );
+                    if (version != null && publishedVersions.getOrDefault(resolved, Collections.emptySet())
+                            .contains(version.toLowerCase(Locale.ROOT))) {
+                        return true;
+                    }
+                }
             }
         }
         return false;
@@ -216,8 +242,8 @@ public class ObservationIngestService {
             if (mapped != null) return mapped;
             String parent = parentPlatformSlug(slug, platform);
             if (parent != null) return parent;
-            // Explicit local skill identity: do not inherit the previous platform skill.
-            return null;
+            // Keep observed local identity; platform catalog is annotation-only.
+            return normalize(slug);
         }
         String name = text(step, "skillName", "skill_name", "name");
         Map<String, Object> payload = asMap(step.get("payload"));
@@ -228,10 +254,7 @@ public class ObservationIngestService {
             if (mapped != null) return mapped;
             String parent = parentPlatformSlug(name, platform);
             if (parent != null) return parent;
-            // Only ignore non-skill payload names (tool names); keep null for explicit skill_name.
-            if (step.containsKey("skillName") || step.containsKey("skill_name") || step.containsKey("skillSlug") || step.containsKey("skill_slug")) {
-                return null;
-            }
+            if (step.containsKey("skillName") || step.containsKey("skill_name") || step.containsKey("skillSlug") || step.containsKey("skill_slug")) return normalize(name);
         }
         if (!isBlank(fallback) && platform.containsKey(fallback)) return fallback;
         return null;

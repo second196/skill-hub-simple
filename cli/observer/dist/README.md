@@ -8,7 +8,7 @@
 
 - 单技能包：根 `SKILL.md` frontmatter `version`
 - 复合技能包：最近包根 `package.json` / `.codex-plugin/plugin.json` 的 `version`（子技能继承父包版本；子技能自身 `version` 优先）
-- 任一 skill 步无法解析出合法 SemVer 时，整会话不上传
+- 版本只用于标注；缺失或未在平台发布的 skill 步仍会全量上传
 
 ## 安装
 
@@ -87,8 +87,9 @@ skillhub-observer upload --service-url http://127.0.0.1:8080
 
 - 对话结束时自动入队；`drain` 负责 HTTP 和重试，hook 不发 HTTP
 - `upload` 全量扫描源 jsonl 后入队并 drain，作为对账兜底
-- 上传本机全部会话和回合，包含用户原文、助手回复、工具参数/结果和文档正文
-- 平台技能只用于标注，不再作为过滤条件；不生成摘要
+- 扫描本机全部会话；仅上传至少调用过一个平台 Skill 且版本为平台已发布版本的会话
+- 命中会话全量上传：包含用户原文、助手回复、工具参数/结果、文档正文，以及会话内其他本地/无版本/未发布 skill 步骤
+- 平台技能只用于标注/映射（能对上就写平台 slug，对不上保留本地 slug/name）；不生成摘要
 - 保留 `SKILL.md` / `*.md` / `*.mdx` / `*.txt` / `*.rst`，丢弃代码和二进制
 - 按 `(client_id, session_id, turn_index, step_id)` 幂等写入
 

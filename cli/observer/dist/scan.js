@@ -62,9 +62,23 @@ export async function scanSessionFile(clientName, filePath) {
 async function scanSources(clientId, sources, options) {
     const claudeFiles = sources.filter((item) => item.clientName === 'claude-code').map((item) => item.path);
     const codexFiles = sources.filter((item) => item.clientName === 'codex').map((item) => item.path);
-    const skills = await listInstalledSkills(await discoverProjectSkillRoots([...claudeFiles, ...codexFiles]));
-    const claude = await scanClaude(clientId, skills, claudeFiles, options);
-    const codex = await scanCodex(clientId, skills, codexFiles, options);
+    const claudeSkills = await listInstalledSkills(await discoverProjectSkillRoots(claudeFiles));
+    const claude = await scanClaude(clientId, claudeSkills, claudeFiles, options);
+    // Codex stores its workspace root in session_meta. Build one catalog per project so
+    // identical composite skill slugs can resolve to different package versions.
+    const codexGroups = new Map();
+    for (const file of codexFiles) {
+        const projectRoot = await peekCodexProjectRoot(file);
+        const key = projectRoot || '';
+        const group = codexGroups.get(key) || [];
+        group.push(file);
+        codexGroups.set(key, group);
+    }
+    const codex = [];
+    for (const [projectRoot, files] of codexGroups) {
+        const skills = await listInstalledSkills(await discoverProjectSkillRoots(projectRoot ? [projectRoot, ...files] : files));
+        codex.push(...await scanCodex(clientId, skills, files, options, projectRoot || undefined));
+    }
     return [...claude, ...codex];
 }
 export async function listSessionSources(options = {}) {
@@ -350,15 +364,18 @@ async function loadCodexThreadTitles() {
     }
     return map;
 }
-async function scanCodex(clientId, skills, files, _options) {
+async function scanCodex(clientId, skills, files, _options, projectRootHint) {
     const events = [];
     const threadTitles = await loadCodexThreadTitles();
     for (const file of files) {
         const entries = await readJsonl(file);
         let sessionId = '';
+        let projectRoot = projectRootHint || '';
         for (const entry of entries) {
             if (entry.type === 'session_meta') {
-                sessionId = String(asRecord(entry.payload).id || '');
+                const payload = asRecord(entry.payload);
+                sessionId = String(payload.id || '');
+                projectRoot = String(payload.cwd || projectRoot || '');
                 break;
             }
         }
@@ -540,6 +557,10 @@ async function scanCodex(clientId, skills, files, _options) {
             }
         }
         tracker.applyUsage();
+        if (projectRoot) {
+            for (const event of fileEvents)
+                event.cwd = projectRoot;
+        }
         events.push(...fileEvents);
     }
     return events;
@@ -573,6 +594,7 @@ function skillUsageEvents(input) {
         skillVersionLabel: version.versionLabel,
         payload: {
             name: input.usage.name,
+            path: input.usage.path,
             args: input.args,
             outcome: input.outcome,
             match: input.usage.match,
@@ -781,6 +803,17 @@ async function peekCodexSessionId(file) {
             const id = String(asRecord(entry.payload).id || '');
             if (id)
                 return id;
+        }
+    }
+    return '';
+}
+async function peekCodexProjectRoot(file) {
+    const lines = await peekJsonlLines(file, 12);
+    for (const entry of lines) {
+        if (entry.type === 'session_meta') {
+            const cwd = String(asRecord(entry.payload).cwd || '');
+            if (cwd)
+                return cwd;
         }
     }
     return '';

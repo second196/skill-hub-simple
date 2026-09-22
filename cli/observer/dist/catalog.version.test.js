@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { enrichSkillVersions, normalizeVersionLabel, parseSkillFile, resolvePackageVersionFromDir, resolveSkillVersion, versionLabelFromPackageContent, withCompositeParents } from './catalog.js';
-import { backfillSkillVersionLabel, dropUnversionedSkillSteps, sessionHasUnversionedSkill, skillStepVersionLabel, toIngestStep } from './ingest.js';
+import { enrichSkillVersions, discoverProjectSkillRoots, listInstalledSkills, normalizeVersionLabel, parseSkillFile, resolvePackageVersionFromDir, resolveSkillVersion, versionLabelFromPackageContent, withCompositeParents } from './catalog.js';
+import { platformIndex, resolvePlatformSlug } from './platform.js';
+import { annotateSessions, backfillSkillVersionLabel, sessionInvokesPlatformSkill, skillStepVersionLabel, toIngestStep } from './ingest.js';
 import { buildTimeline } from './timeline.js';
 test('parseSkillFile reads version label only (no content digest)', () => {
     const skill = parseSkillFile('/tmp/demo/SKILL.md', [
@@ -69,44 +70,94 @@ test('toIngestStep forwards version label only and strips digest fields', () => 
     assert.equal(payload.skillVersionDigest, undefined);
     assert.equal(payload.skill_version_digest, undefined);
 });
-test('sessionHasUnversionedSkill detects missing SemVer on skill steps', () => {
-    const versioned = buildTimeline([skillEvent({ skill_version_label: '1.0.0' })]);
-    assert.equal(sessionHasUnversionedSkill(versioned[0]), false);
-    const unversioned = buildTimeline([
-        skillEvent({ skill_version_label: undefined, payload: { name: 'demo-skill', skill_version_digest: 'a'.repeat(64) } })
-    ]);
-    assert.equal(sessionHasUnversionedSkill(unversioned[0]), true);
-    const digestOnly = buildTimeline([
-        skillEvent({ skill_version_label: undefined, payload: { name: 'demo-skill', skillVersionDigest: 'b'.repeat(64) } })
-    ]);
-    assert.equal(sessionHasUnversionedSkill(digestOnly[0]), true);
-});
-test('dropUnversionedSkillSteps drops only unversioned skill steps and keeps the session', () => {
-    const versionedSkill = skillEvent({ skill_slug: 'versioned-skill', skill_name: 'versioned-skill', skill_version_label: '2.0.0', payload: { name: 'versioned-skill' } });
-    const unversionedSkill = skillEvent({ skill_slug: 'bare-skill', skill_name: 'bare-skill', skill_version_label: undefined, payload: { name: 'bare-skill' } });
-    const toolStep = {
-        ...versionedSkill,
+test('annotateSessions keeps local skill identity when not on platform', () => {
+    const localSkill = skillEvent({
+        seq: 1,
+        skill_slug: 'my-local-skill',
+        skill_name: 'My Local Skill',
+        skill_version_label: undefined,
+        payload: { name: 'My Local Skill' }
+    });
+    const toolStep = skillEvent({
+        seq: 2,
         type: 'tool',
         skill_slug: undefined,
         skill_name: undefined,
         skill_version_label: undefined,
         payload: { name: 'Read', args: {}, result: '' }
-    };
-    const session = buildTimeline([unversionedSkill, toolStep, versionedSkill])[0];
-    const { session: filtered, droppedSkillSteps } = dropUnversionedSkillSteps(session);
-    assert.equal(droppedSkillSteps, 1);
-    assert.equal(filtered.turns.length, 1);
-    const types = filtered.turns[0].steps.map((step) => step.type);
-    assert.deepEqual(types, ['tool', 'skill']);
-    assert.equal(filtered.turns[0].steps[1].skill_version_label, '2.0.0');
-    assert.equal(sessionHasUnversionedSkill(filtered), false);
+    });
+    const unversionedPlatform = skillEvent({
+        seq: 3,
+        skill_slug: 'using-product-development',
+        skill_name: 'using-product-development',
+        skill_version_label: undefined,
+        payload: { name: 'using-product-development' }
+    });
+    const unpublishedVersion = skillEvent({
+        seq: 4,
+        skill_slug: 'using-product-development',
+        skill_name: 'using-product-development',
+        skill_version_label: '9.9.9',
+        payload: { name: 'using-product-development' }
+    });
+    const sessions = annotateSessions(buildTimeline([localSkill, toolStep, unversionedPlatform, unpublishedVersion]), [{ slug: 'using-product-development', name: 'using-product-development', versionLabels: ['1.0.0'] }]);
+    const steps = sessions[0].turns[0].steps;
+    assert.equal(steps.length, 4);
+    const local = steps.find((step) => step.skill_slug === 'my-local-skill');
+    assert.ok(local);
+    assert.equal(local.skill_name, 'My Local Skill');
+    const tool = steps.find((step) => step.type === 'tool');
+    assert.ok(tool);
+    assert.equal(tool.skill_slug, 'my-local-skill');
+    assert.equal(tool.skill_name, 'My Local Skill');
+    const kept = steps.filter((step) => step.skill_slug === 'using-product-development');
+    assert.equal(kept.length, 2);
+    assert.ok(kept.some((step) => step.skill_version_label === undefined));
+    assert.ok(kept.some((step) => step.skill_version_label === '9.9.9'));
 });
-test('dropUnversionedSkillSteps empties a session that only had unversioned skills', () => {
-    const unversionedSkill = skillEvent({ skill_version_label: undefined, payload: { name: 'demo-skill' } });
-    const session = buildTimeline([unversionedSkill])[0];
-    const { session: filtered, droppedSkillSteps } = dropUnversionedSkillSteps(session);
-    assert.equal(droppedSkillSteps, 1);
-    assert.equal(filtered.turns.length, 0);
+test('session upload qualification accepts platform skill and keeps local steps', () => {
+    const platform = [{ slug: 'using-product-development', name: 'using-product-development', versionLabels: ['1.0.0'] }];
+    const localOnly = skillEvent({
+        session_id: 'local-only',
+        skill_slug: 'local-only-skill',
+        skill_name: 'local-only-skill',
+        payload: { name: 'local-only-skill' }
+    });
+    const platformSession = skillEvent({
+        session_id: 'mixed',
+        seq: 1,
+        skill_slug: 'using-product-development',
+        skill_name: 'using-product-development',
+        skill_version_label: '1.0.0',
+        payload: { name: 'using-product-development' }
+    });
+    const localStep = skillEvent({
+        session_id: 'mixed',
+        seq: 2,
+        skill_slug: 'local-only-skill',
+        skill_name: 'local-only-skill',
+        payload: { name: 'local-only-skill' }
+    });
+    const annotated = annotateSessions(buildTimeline([localOnly, platformSession, localStep]), platform);
+    assert.equal(sessionInvokesPlatformSkill(annotated.find((session) => session.sessionId === 'local-only'), platform), false);
+    const mixed = annotated.find((session) => session.sessionId === 'mixed');
+    assert.equal(sessionInvokesPlatformSkill(mixed, platform), true);
+    assert.ok(mixed.turns[0].steps.some((step) => step.skill_slug === 'local-only-skill'));
+    const unversioned = annotateSessions(buildTimeline([
+        { ...platformSession, skill_version_label: undefined, payload: { name: 'using-product-development' } }
+    ]), platform);
+    assert.equal(sessionInvokesPlatformSkill(unversioned[0], platform), false);
+});
+test('resolvePlatformSlug maps platform and composite parents, leaves local-only undefined', () => {
+    const index = platformIndex([
+        { slug: 'using-product-development', name: 'using-product-development' },
+        { slug: 'superpowers', name: 'superpowers' }
+    ]);
+    assert.equal(resolvePlatformSlug(index, 'using-product-development'), 'using-product-development');
+    assert.equal(resolvePlatformSlug(index, 'sop-requirement'), 'using-product-development');
+    assert.equal(resolvePlatformSlug(index, 'brainstorming', undefined, undefined, '/x/.agents/skills/superpowers/skills/brainstorming/SKILL.md'), 'superpowers');
+    assert.equal(resolvePlatformSlug(index, 'brainstorming'), undefined);
+    assert.equal(resolvePlatformSlug(index, 'my-local-skill', 'My Local Skill'), undefined);
 });
 test('resolveSkillVersion matches by path then slug and returns label only', () => {
     const skills = [
@@ -217,9 +268,36 @@ test('backfillSkillVersionLabel fills from catalog and keeps existing label', ()
     const missing = skillEvent({ skill_slug: 'sop-setup', skill_name: 'sop-setup', skill_version_label: undefined });
     const filled = backfillSkillVersionLabel(missing, skills);
     assert.equal(filled.skill_version_label, '1.0.1');
-    assert.equal(sessionHasUnversionedSkill(buildTimeline([filled])[0]), false);
+    assert.equal(skillStepVersionLabel(filled), '1.0.1');
     const kept = skillEvent({ skill_slug: 'sop-setup', skill_version_label: '2.0.0' });
     assert.equal(backfillSkillVersionLabel(kept, skills).skill_version_label, '2.0.0');
+});
+test('event cwd discovers project composite package version during ingest', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'skillhub-ingest-cwd-'));
+    try {
+        const project = join(root, 'kms-1');
+        const skillRoot = join(project, '.agents', 'skills', 'using-product-development');
+        await mkdir(join(skillRoot, 'skills', 'sop-design'), { recursive: true });
+        await writeFile(join(skillRoot, 'package.json'), JSON.stringify({
+            name: 'using-product-development',
+            version: '1.0.0'
+        }), 'utf8');
+        await writeFile(join(skillRoot, 'skills', 'sop-design', 'SKILL.md'), '---\nname: sop-design\n---\n# design\n', 'utf8');
+        const roots = await discoverProjectSkillRoots([project]);
+        const skills = await listInstalledSkills(roots);
+        const event = skillEvent({
+            skill_slug: 'sop-design',
+            skill_name: 'sop-design',
+            skill_version_label: undefined,
+            cwd: project
+        });
+        const filled = backfillSkillVersionLabel(event, skills);
+        assert.equal(filled.skill_version_label, '1.0.0');
+        assert.equal(filled.payload.skill_version_label, '1.0.0');
+    }
+    finally {
+        await rm(root, { recursive: true, force: true });
+    }
 });
 async function readFileUtf8(path) {
     const { readFile } = await import('node:fs/promises');

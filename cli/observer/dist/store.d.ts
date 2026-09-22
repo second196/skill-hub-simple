@@ -1,4 +1,5 @@
 import type { ClientName, ObservationEvent, SpoolJob, UploadState } from './types.js';
+export declare const UPLOAD_CONTRACT_VERSION = 2;
 export declare function ensureStore(): Promise<void>;
 export declare function loadClientId(): Promise<string>;
 export declare function hostMeta(): {

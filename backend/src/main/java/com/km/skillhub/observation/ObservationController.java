@@ -112,12 +112,16 @@ public class ObservationController {
     }
 
     @GetMapping("/sessions/{id}")
-    public Map<String, Object> session(@PathVariable long id, @RequestParam(required = false) String skill) {
-        return repository.sessionChain(id, skill);
+    public Map<String, Object> session(@PathVariable long id,
+                                       @RequestParam(required = false) String skill,
+                                       @RequestParam(required = false) String version) {
+        return repository.sessionChain(id, skill, version);
     }
 
     @GetMapping("/sessions/{id}/chain")
-    public Map<String, Object> chain(@PathVariable long id, @RequestParam(required = false) String skill) {
-        return repository.sessionChain(id, skill);
+    public Map<String, Object> chain(@PathVariable long id,
+                                     @RequestParam(required = false) String skill,
+                                     @RequestParam(required = false) String version) {
+        return repository.sessionChain(id, skill, version);
     }
 }

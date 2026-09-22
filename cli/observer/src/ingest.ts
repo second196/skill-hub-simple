@@ -26,35 +26,6 @@ export function skillStepVersionLabel(step: ObservationEvent): string | undefine
   return normalizeVersionLabel(raw)
 }
 
-/** True when any skill step in the session lacks a SemVer version label. */
-export function sessionHasUnversionedSkill(session: TimelineSession): boolean {
-  for (const turn of session.turns) {
-    for (const step of turn.steps) {
-      if (step.type !== 'skill') continue
-      if (!skillStepVersionLabel(step)) return true
-    }
-  }
-  return false
-}
-
-/** Drop skill steps without SemVer version; keep non-skill steps and versioned skills. */
-export function dropUnversionedSkillSteps(session: TimelineSession): {
-  session: TimelineSession
-  droppedSkillSteps: number
-} {
-  let droppedSkillSteps = 0
-  const turns = session.turns.map((turn) => {
-    const steps = turn.steps.filter((step) => {
-      if (step.type !== 'skill') return true
-      if (skillStepVersionLabel(step)) return true
-      droppedSkillSteps += 1
-      return false
-    })
-    return { ...turn, steps }
-  }).filter((turn) => turn.steps.length > 0)
-  return { session: { ...session, turns }, droppedSkillSteps }
-}
-
 function asText(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
@@ -62,27 +33,63 @@ function asText(value: unknown): string | undefined {
 export interface IngestResult {
   message: string
   uploadedSessions: number
-  skippedUnversioned: number
+  skippedSessions: number
+  skippedByPlatform: number
 }
 
 export async function ingestEvents(serviceUrl: string, events: ObservationEvent[]): Promise<IngestResult> {
   const sessions = buildTimeline(events)
   if (!sessions.length) {
-    return { message: '没有可上传的会话观测数据', uploadedSessions: 0, skippedUnversioned: 0 }
+    return { message: '没有可上传的会话观测数据', uploadedSessions: 0, skippedSessions: 0, skippedByPlatform: 0 }
   }
   let platform: Awaited<ReturnType<typeof fetchPlatformSkills>> = []
+  let platformAvailable = false
   try {
     platform = await fetchPlatformSkills(serviceUrl)
+    platformAvailable = true
   } catch (error) {
     await logObserver(`platform catalog unavailable: ${error instanceof Error ? error.message : String(error)}`)
   }
   const installed = await loadInstalledSkillsForEvents(events)
-  return ingestSessions(serviceUrl, annotateSessions(sessions, platform, installed))
+  const annotated = annotateSessions(sessions, platform, installed)
+  // A session qualifies through at least one platform skill, but then uploads in full.
+  const platformCatalog = platformIndex(platform)
+  const uploadable = platformAvailable
+    ? annotated.filter((session) => sessionInvokesPlatformSkill(session, platform, platformCatalog))
+    : annotated
+  const skippedByPlatform = annotated.length - uploadable.length
+  if (!uploadable.length && skippedByPlatform > 0) {
+    const message = `没有可上传的会话：${skippedByPlatform} 个会话未调用平台已知 Skill`
+    await logObserver(message)
+    return { message, uploadedSessions: 0, skippedSessions: skippedByPlatform, skippedByPlatform }
+  }
+  const result = await ingestSessions(serviceUrl, uploadable)
+  return {
+    ...result,
+    skippedSessions: result.skippedSessions + skippedByPlatform,
+    skippedByPlatform
+  }
+}
+
+export function sessionInvokesPlatformSkill(
+  session: TimelineSession,
+  platform: Awaited<ReturnType<typeof fetchPlatformSkills>>,
+  index = platformIndex(platform)
+): boolean {
+  return session.turns.some((turn) => turn.steps.some((step) =>
+    step.type === 'skill' &&
+    Boolean(step.skill_slug) &&
+    index.slugs.has(step.skill_slug as string) &&
+    Boolean(
+      skillStepVersionLabel(step) &&
+      index.versionsBySlug.get(step.skill_slug as string)?.has(skillStepVersionLabel(step) as string)
+    )
+  ))
 }
 
 export async function ingestSessions(serviceUrl: string, sessions: TimelineSession[]): Promise<IngestResult> {
   if (!sessions.length) {
-    return { message: '没有可上传的会话观测数据', uploadedSessions: 0, skippedUnversioned: 0 }
+    return { message: '没有可上传的会话观测数据', uploadedSessions: 0, skippedSessions: 0, skippedByPlatform: 0 }
   }
   const clientId = await loadClientId()
   const meta = hostMeta()
@@ -92,7 +99,6 @@ export async function ingestSessions(serviceUrl: string, sessions: TimelineSessi
   let batchBytes = 0
   let sessionCount = 0
   let skippedSessions = 0
-  let droppedStepCount = 0
 
   const flush = async () => {
     if (!batch.length) return
@@ -109,19 +115,13 @@ export async function ingestSessions(serviceUrl: string, sessions: TimelineSessi
   }
 
   for (const session of sessions) {
-    // Contract: skill steps without SemVer version are dropped; the rest of the session is uploaded.
-    const { session: uploadable, droppedSkillSteps } = dropUnversionedSkillSteps(session)
-    if (droppedSkillSteps > 0) {
-      droppedStepCount += droppedSkillSteps
-      await logObserver(`dropped ${droppedSkillSteps} unversioned skill step(s): ${session.clientName}/${session.sessionId}`)
-    }
-    const stepCount = uploadable.turns.reduce((sum, turn) => sum + turn.steps.length, 0)
+    const stepCount = session.turns.reduce((sum, turn) => sum + turn.steps.length, 0)
     if (!stepCount) {
       skippedSessions += 1
-      await logObserver(`session skipped (no uploadable steps): ${session.clientName}/${session.sessionId}`)
+      await logObserver(`session skipped (no steps): ${session.clientName}/${session.sessionId}`)
       continue
     }
-    const payload = toIngestSession(uploadable)
+    const payload = toIngestSession(session)
     const encoded = Buffer.byteLength(JSON.stringify(payload))
     if (batch.length && batchBytes + encoded > MAX_BATCH_BYTES) {
       await flush()
@@ -134,16 +134,18 @@ export async function ingestSessions(serviceUrl: string, sessions: TimelineSessi
   if (!sessionCount) {
     return {
       message: skippedSessions > 0
-        ? `没有可上传的会话：${skippedSessions} 个会话在丢弃无版本 skill 后无剩余步骤${droppedStepCount ? `（已丢弃 ${droppedStepCount} 个无版本 skill 步骤）` : ''}`
+        ? `没有可上传的会话：${skippedSessions} 个会话没有任何步骤`
         : '没有可上传的会话观测数据',
       uploadedSessions: 0,
-      skippedUnversioned: skippedSessions
+      skippedSessions,
+      skippedByPlatform: 0
     }
   }
   return {
-    message: `已上传 ${sessionCount} 个会话（完整原文，不含摘要）${droppedStepCount ? `，丢弃 ${droppedStepCount} 个无版本 skill 步骤` : ''}${skippedSessions ? `，跳过 ${skippedSessions} 个无剩余步骤的会话` : ''}\n${summaries.join('\n')}`,
+    message: `已上传 ${sessionCount} 个会话（完整原文，含全部 skill 步，不含摘要）${skippedSessions ? `，跳过 ${skippedSessions} 个无步骤会话` : ''}\n${summaries.join('\n')}`,
     uploadedSessions: sessionCount,
-    skippedUnversioned: skippedSessions
+    skippedSessions,
+    skippedByPlatform: 0
   }
 }
 
@@ -186,25 +188,41 @@ function annotateSteps(
   installedSkills: InstalledSkill[]
 ): ObservationEvent[] {
   let currentSlug: string | undefined
+  let currentName: string | undefined
   const result: ObservationEvent[] = []
   for (const step of steps) {
     const stepName = step.skill_name || payloadName(step)
-    const resolved = resolvePlatformSlug(index, step.skill_slug, stepName)
+    const resolved = resolvePlatformSlug(index, step.skill_slug, stepName, undefined, payloadPath(step))
     let slug: string | undefined
+    let skillName: string | undefined
+
     if (step.type === 'user' || step.type === 'assistant') {
       slug = undefined
-    } else {
+      skillName = undefined
+    } else if (resolved) {
+      // Platform mapping (exact or composite parent rollup).
       slug = resolved
-      if (step.type === 'skill') {
-        if (resolved) currentSlug = resolved
-      } else if (!slug) {
-        slug = currentSlug
+      skillName = resolved === step.skill_slug
+        ? (step.skill_name || resolved)
+        : resolved
+      if (step.type === 'skill' || step.skill_slug || step.skill_name) {
+        currentSlug = slug
+        currentName = skillName
       }
-      if (resolved) currentSlug = resolved
+    } else if (step.type === 'skill' || step.skill_slug || step.skill_name) {
+      // Local-only skill: keep observed identity for full-session upload.
+      slug = step.skill_slug
+      skillName = step.skill_name || step.skill_slug
+      if (step.type === 'skill') {
+        currentSlug = slug
+        currentName = skillName
+      }
+    } else {
+      // tool / document without its own skill identity: inherit the active skill.
+      slug = currentSlug
+      skillName = currentName
     }
-    const skillName = slug && index.slugs.has(slug)
-      ? (slug === step.skill_slug ? step.skill_name || slug : slug)
-      : undefined
+
     const versioned = backfillSkillVersionLabel({
       ...step,
       skill_slug: slug,
@@ -231,6 +249,7 @@ async function loadInstalledSkillsForEvents(events: ObservationEvent[]): Promise
 function eventSeedPaths(events: ObservationEvent[]): string[] {
   const seeds = new Set<string>([process.cwd()])
   for (const event of events) {
+    if (event.cwd) seeds.add(event.cwd)
     const path = payloadPath(event)
     if (path) seeds.add(path)
   }
@@ -238,12 +257,12 @@ function eventSeedPaths(events: ObservationEvent[]): string[] {
 }
 
 function payloadPath(step: ObservationEvent): string | undefined {
-  const direct = step.payload.path ?? step.payload.sourcePath ?? step.payload.file
+  const direct = step.payload.path ?? step.payload.sourcePath ?? step.payload.file ?? step.payload.file_path
   if (typeof direct === 'string' && direct.trim()) return direct.trim()
   const nested = step.payload.args
   if (nested && typeof nested === 'object') {
     const record = nested as Record<string, unknown>
-    const nestedPath = record.path ?? record.file ?? record.sourcePath
+    const nestedPath = record.path ?? record.file ?? record.sourcePath ?? record.file_path ?? record.filePath
     if (typeof nestedPath === 'string' && nestedPath.trim()) return nestedPath.trim()
   }
   return undefined

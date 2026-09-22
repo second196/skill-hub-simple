@@ -371,8 +371,9 @@ Windows 配置文件：`%LOCALAPPDATA%\SkillHub\observability\config.json`
 `POST /api/observations/ingest` 接收完整观测内容，而不是摘要。
 
 - 无登录。数据按 `clientId` 区分来源，平台观测页对所有访问者可见。
-- 客户端对照 `/api/skills?includeOffline=true` 标注平台技能；服务端保存全部会话和回合，不再丢弃未匹配技能的内容。
-- 同一回合里，未带 slug 的工具/文档步骤归到最近一个平台技能。
+- 客户端对照 `/api/skills?includeOffline=true` 标注平台技能；skill 步全量上传，不因平台缺失/无版本/版本未发布丢弃。
+- 能对上平台就写平台 slug；对不上保留本地原始 `skill_slug` / `skill_name`。
+- 同一回合里，未带 slug 的工具/文档步骤归到最近一个 skill（含本地 skill）。
 - 保留 `SKILL.md` / `*.md` / `*.mdx` / `*.txt` / `*.rst` 正文，丢弃代码和二进制。
 - 幂等键是 `(clientId, sessionId, turnIndex, stepId)`。重复上传时保留更完整的 payload。
 - 请求体按约 8MB 分批；单个超大会话整包发送。

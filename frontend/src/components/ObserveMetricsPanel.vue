@@ -382,7 +382,7 @@ const versionSelectOptions = computed(() => {
         return {
           value,
           label: value.startsWith('v') ? value : `v${value}`,
-          meta: item.callCount != null ? `${item.callCount} 次` : ''
+          meta: ''
         }
       })
       .filter((item): item is { value: string; label: string; meta: string } => item !== null)

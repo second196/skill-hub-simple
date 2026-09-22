@@ -5,9 +5,11 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -17,7 +19,7 @@ class ObservationIngestServiceTest {
     @Test
     void rollsUpCompositeChildrenToPlatformParents() {
         List<String> slugs = new ArrayList<String>();
-        ObservationRepository repository = stubRepository(slugs, versionLists(), platformParentsOnly());
+        ObservationRepository repository = stubRepository(slugs, versionLists(), platformParentsOnly(), publishedAll("1.0.0"));
         ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
 
         Map<String, Object> body = bodyWithSteps(
@@ -29,12 +31,14 @@ class ObservationIngestServiceTest {
         );
 
         Map<String, Object> result = service.ingest(body);
+        // Local and unpublished identities are retained; platform parent mapping still applies.
         assertEquals(Integer.valueOf(5), result.get("stepCount"));
         assertEquals("using-product-development", slugs.get(0));
         assertEquals("using-product-development", slugs.get(1));
-        assertEquals(null, slugs.get(2));
+        assertEquals("brainstorming", slugs.get(2));
         assertEquals("superpowers", slugs.get(3));
-        assertEquals(null, slugs.get(4));
+        assertEquals("local-only-skill", slugs.get(4));
+        assertEquals(Integer.valueOf(0), result.get("skippedStepCount"));
     }
 
     @Test
@@ -42,7 +46,7 @@ class ObservationIngestServiceTest {
         List<String> slugs = new ArrayList<String>();
         Map<String, String> platform = platformParentsOnly();
         platform.put("brainstorming", "brainstorming");
-        ObservationRepository repository = stubRepository(slugs, versionLists(), platform);
+        ObservationRepository repository = stubRepository(slugs, versionLists(), platform, publishedAll("1.0.0"));
         ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
 
         Map<String, Object> body = bodyWithSteps(
@@ -60,7 +64,7 @@ class ObservationIngestServiceTest {
         List<String> slugs = new ArrayList<String>();
         Map<String, String> platform = new LinkedHashMap<String, String>();
         platform.put("using-product-development", "Using Product Development");
-        ObservationRepository repository = stubRepository(slugs, versionLists(), platform);
+        ObservationRepository repository = stubRepository(slugs, versionLists(), platform, publishedAll("2.1.0"));
         ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
 
         Map<String, Object> body = bodyWithSteps(
@@ -77,7 +81,13 @@ class ObservationIngestServiceTest {
         Map<String, List<String>> versions = versionLists();
         Map<String, String> platform = new LinkedHashMap<String, String>();
         platform.put("using-product-development", "using-product-development");
-        ObservationRepository repository = stubRepository(slugs, versions, platform);
+        Map<String, Set<String>> published = new LinkedHashMap<String, Set<String>>();
+        Set<String> labels = new HashSet<String>();
+        labels.add("1.2.0");
+        labels.add("1.3.0");
+        labels.add("2.0.0");
+        published.put("using-product-development", labels);
+        ObservationRepository repository = stubRepository(slugs, versions, platform, published);
         ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
 
         Map<String, Object> skillStep = step("skill", "using-product-development", "using-product-development", "1.2.0");
@@ -99,7 +109,7 @@ class ObservationIngestServiceTest {
         assertEquals("1.2.0", versions.get("label").get(0));
         assertEquals("observed", versions.get("source").get(0));
 
-        assertEquals("v1.3.0", versions.get("label").get(1));
+        assertEquals("1.3.0", versions.get("label").get(1));
         assertEquals("observed", versions.get("source").get(1));
 
         assertEquals("2.0.0", versions.get("label").get(2));
@@ -107,26 +117,61 @@ class ObservationIngestServiceTest {
     }
 
     @Test
-    void discardsWholeSessionWhenSkillLacksVersion() {
+    void keepsMismatchedAndUnversionedLocalSkillSteps() {
         List<String> slugs = new ArrayList<String>();
         Map<String, List<String>> versions = versionLists();
-        ObservationRepository repository = stubRepository(slugs, versions, platformParentsOnly());
+        ObservationRepository repository = stubRepository(slugs, versions, platformParentsOnly(), publishedAll("1.0.0"));
         ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
 
+        Map<String, Object> user = step("user", null, null, null);
         Map<String, Object> versioned = step("skill", "using-product-development", "using-product-development", "1.0.0");
         Map<String, Object> unversioned = step("skill", "superpowers", "superpowers", null);
+        Map<String, Object> mismatched = step("skill", "superpowers", "superpowers", "6.0.3");
 
-        Map<String, Object> result = service.ingest(bodyWithSteps(versioned, unversioned));
-        assertEquals(Integer.valueOf(0), result.get("stepCount"));
-        assertEquals(Integer.valueOf(0), result.get("sessionCount"));
-        assertTrue(slugs.isEmpty());
+        Map<String, Object> result = service.ingest(bodyWithSteps(user, versioned, unversioned, mismatched));
+        assertEquals(Integer.valueOf(4), result.get("stepCount"));
+        assertEquals(Integer.valueOf(1), result.get("sessionCount"));
+        assertEquals(Integer.valueOf(0), result.get("skippedStepCount"));
+        List<String> skillSlugs = new ArrayList<String>();
+        for (String slug : slugs) {
+            if (slug != null) skillSlugs.add(slug);
+        }
+        assertEquals(3, skillSlugs.size());
+        assertEquals("using-product-development", skillSlugs.get(0));
+        assertEquals("superpowers", skillSlugs.get(1));
+        assertEquals("superpowers", skillSlugs.get(2));
+    }
+
+    @Test
+    void allowsMultiplePublishedVersions() {
+        List<String> slugs = new ArrayList<String>();
+        Map<String, List<String>> versions = versionLists();
+        Map<String, String> platform = new LinkedHashMap<String, String>();
+        platform.put("using-product-development", "using-product-development");
+        Map<String, Set<String>> published = new LinkedHashMap<String, Set<String>>();
+        Set<String> labels = new HashSet<String>();
+        labels.add("1.0.0");
+        labels.add("1.0.1");
+        published.put("using-product-development", labels);
+        ObservationRepository repository = stubRepository(slugs, versions, platform, published);
+        ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
+
+        Map<String, Object> result = service.ingest(bodyWithSteps(
+                step("skill", "using-product-development", "using-product-development", "1.0.0"),
+                step("skill", "using-product-development", "using-product-development", "v1.0.1"),
+                step("skill", "using-product-development", "using-product-development", "9.9.9")
+        ));
+        assertEquals(Integer.valueOf(3), result.get("stepCount"));
+        assertEquals("1.0.0", versions.get("label").get(0));
+        assertEquals("1.0.1", versions.get("label").get(1));
+        assertEquals("9.9.9", versions.get("label").get(2));
     }
 
     @Test
     void acceptsSessionWhenAllSkillStepsHaveSemVer() {
         List<String> slugs = new ArrayList<String>();
         Map<String, List<String>> versions = versionLists();
-        ObservationRepository repository = stubRepository(slugs, versions, platformParentsOnly());
+        ObservationRepository repository = stubRepository(slugs, versions, platformParentsOnly(), publishedAll("1.0.0"));
         ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
 
         Map<String, Object> result = service.ingest(bodyWithSteps(
@@ -135,6 +180,41 @@ class ObservationIngestServiceTest {
         ));
         assertEquals(Integer.valueOf(2), result.get("stepCount"));
         assertEquals(Integer.valueOf(1), result.get("sessionCount"));
+    }
+
+    @Test
+    void skipsSessionWithoutPlatformSkill() {
+        List<String> slugs = new ArrayList<String>();
+        Map<String, List<String>> versions = versionLists();
+        ObservationRepository repository = stubRepository(slugs, versions, platformParentsOnly(), publishedAll("1.0.0"));
+        ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
+
+        Map<String, Object> result = service.ingest(bodyWithSteps(
+                step("skill", "local-only-skill", "local-only-skill", "v2.3.4")
+        ));
+        assertEquals(Integer.valueOf(0), result.get("stepCount"));
+        assertEquals(Integer.valueOf(0), result.get("sessionCount"));
+        assertEquals(Integer.valueOf(1), result.get("skippedStepCount"));
+        assertTrue(slugs.isEmpty());
+    }
+
+    @Test
+    void skipsPlatformSkillWhenVersionIsMissingOrUnpublished() {
+        List<String> slugs = new ArrayList<String>();
+        Map<String, List<String>> versions = versionLists();
+        ObservationRepository repository = stubRepository(slugs, versions, platformParentsOnly(), publishedAll("1.0.0"));
+        ObservationIngestService service = new ObservationIngestService(repository, new ObjectMapper());
+
+        Map<String, Object> unversioned = service.ingest(bodyWithSteps(
+                step("skill", "using-product-development", "using-product-development", null)
+        ));
+        assertEquals(Integer.valueOf(0), unversioned.get("sessionCount"));
+
+        Map<String, Object> unpublished = service.ingest(bodyWithSteps(
+                step("skill", "using-product-development", "using-product-development", "9.9.9")
+        ));
+        assertEquals(Integer.valueOf(0), unpublished.get("sessionCount"));
+        assertTrue(slugs.isEmpty());
     }
 
     private Map<String, List<String>> versionLists() {
@@ -152,15 +232,31 @@ class ObservationIngestServiceTest {
         return map;
     }
 
+    private Map<String, Set<String>> publishedAll(String... labels) {
+        Map<String, Set<String>> map = new LinkedHashMap<String, Set<String>>();
+        for (String slug : new String[] {"using-product-development", "superpowers", "ui-ux-pro-max", "brainstorming"}) {
+            Set<String> set = new HashSet<String>();
+            Collections.addAll(set, labels);
+            map.put(slug, set);
+        }
+        return map;
+    }
+
     private ObservationRepository stubRepository(final List<String> slugs,
                                                  final Map<String, List<String>> versions,
-                                                 final Map<String, String> platform) {
+                                                 final Map<String, String> platform,
+                                                 final Map<String, Set<String>> publishedVersions) {
         final List<String> versionLabels = versions.get("label");
         final List<String> versionSources = versions.get("source");
         return new ObservationRepository(null, new ObjectMapper()) {
             @Override
             public Map<String, String> platformSkills() {
                 return platform;
+            }
+
+            @Override
+            public Map<String, Set<String>> publishedVersionsBySlug() {
+                return publishedVersions;
             }
 
             @Override

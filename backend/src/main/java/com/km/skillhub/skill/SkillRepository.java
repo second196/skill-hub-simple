@@ -34,7 +34,21 @@ public class SkillRepository {
         if (query != null && !query.trim().isEmpty()) { sql += " AND (LOWER(s.name) LIKE ? OR LOWER(s.description) LIKE ? OR LOWER(s.slug) LIKE ?)"; String q = "%" + query.trim().toLowerCase() + "%"; args.add(q); args.add(q); args.add(q); }
         if (category != null && !category.trim().isEmpty()) { sql += " AND s.category=?"; args.add(category.trim()); }
         sql += " ORDER BY s.updated_at DESC,s.id DESC";
-        return jdbc.queryForList(sql, args.toArray());
+        List<Map<String, Object>> rows = jdbc.queryForList(sql, args.toArray());
+        for (Map<String, Object> row : rows) {
+            Object id = row.get("id");
+            List<String> labels = jdbc.queryForList(
+                    "SELECT version_label FROM skill_version WHERE skill_id=? ORDER BY created_at DESC,id DESC",
+                    String.class, id);
+            List<String> normalized = new java.util.ArrayList<String>();
+            for (String label : labels) {
+                String value = SkillVersions.normalizeVersionLabel(label);
+                if (value != null) normalized.add(value);
+            }
+            row.put("version_labels", normalized);
+            row.put("versionLabels", normalized);
+        }
+        return rows;
     }
 
     public List<String> categories() {

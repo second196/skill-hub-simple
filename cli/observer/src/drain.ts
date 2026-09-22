@@ -14,6 +14,7 @@ import {
   loadState,
   readSessionEvents,
   readSpoolJob,
+  UPLOAD_CONTRACT_VERSION,
   writeSpoolJob
 } from './store.js'
 import type { ObservationEvent, SpoolJob } from './types.js'
@@ -58,8 +59,8 @@ export async function drainQueue(options: { serviceUrl?: string; reconcile?: boo
           continue
         }
         const ingestResult = await ingestEvents(serviceUrl, prepared.events)
-        if (ingestResult.uploadedSessions === 0 && ingestResult.skippedUnversioned > 0) {
-          // Do not ACK: keep the job so a later version fix + reconcile can still upload.
+        if (ingestResult.uploadedSessions === 0 && ingestResult.skippedByPlatform === 0) {
+          // Do not ACK: keep the job so a later reconcile can still upload.
           throw new Error(ingestResult.message)
         }
         const ack = await ackSession(prepared.job)
@@ -90,6 +91,7 @@ async function reconcileSources(sources: SessionSource[]): Promise<void> {
     const ack = state.sessions[`${source.clientName}:${source.sessionId}`]
     const sourceHash = await hashFile(source.path)
     const changed = !ack
+      || ack.uploadContractVersion !== UPLOAD_CONTRACT_VERSION
       || (ack.sourceHash || ack.contentHash) !== sourceHash
       || ack.sourceMtimeMs < source.mtimeMs
       || (ack.eventCount || 0) === 0

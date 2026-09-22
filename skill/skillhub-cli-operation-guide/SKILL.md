@@ -50,7 +50,7 @@ npx @second196/skillhub-cli --help
 | 分类优先级 | 包内 category > 平台已有 > CLI `--category` > `其他` |
 | **write-back** | temp 补全后 **必须** `prepare --complete-from` 覆盖回源目录并删除 temp |
 | **发布成功** | 平台核验 + **源目录** `verify-source` 双通过；temp-only 成功 **无效** |
-| 观测 | 包内无 version 不能上传；无版本历史观测不上传 |
+| 观测 | 版本只用于标注；会话与 skill 步全量上传，不因平台缺失/无版本丢弃 |
 
 ## 2.1 分类判定（上传前必做）
 

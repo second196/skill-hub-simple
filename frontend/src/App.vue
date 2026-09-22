@@ -1357,7 +1357,7 @@ async function copyInstallationPrompt() {
 const featuredSkillCards = computed(() => featuredSkills.value)
 
 watch(
-  () => [route.path, route.query.q, route.query.category, route.query.status, route.query.includeOffline, route.query.sort, route.query.source, route.query.client, route.query.session],
+  () => [route.path, route.query.q, route.query.category, route.query.status, route.query.includeOffline, route.query.sort, route.query.source, route.query.client, route.query.session, route.query.version],
   async () => {
     if (isDiscoverDetail.value) {
       await loadDiscoveryDetail()

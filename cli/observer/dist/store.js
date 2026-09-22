@@ -11,6 +11,7 @@ import { sanitizePayload } from './payload.js';
 import { truncateText } from './documents.js';
 import { binDir, clientPath, eventsPath, lockDir, logsDir, observabilityDir, sessionFilePath, sessionsDir, spoolDir, spoolJobPath, spoolTmpDir, statePath } from './paths.js';
 const MAX_FIELD_CHARS = 256 * 1024;
+export const UPLOAD_CONTRACT_VERSION = 2;
 export async function ensureStore() {
     await mkdir(observabilityDir(), { recursive: true });
     await mkdir(sessionsDir(), { recursive: true });
@@ -180,6 +181,7 @@ export async function ackSession(job, uploadedAt = new Date().toISOString()) {
                 eventCount: job.eventCount || 0,
                 sourceMtimeMs: job.sourceMtimeMs || 0,
                 ended: job.ended,
+                uploadContractVersion: UPLOAD_CONTRACT_VERSION,
                 uploadedAt
             };
             await saveState(state);

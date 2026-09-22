@@ -243,7 +243,7 @@ export async function discoverProjectSkillRoots(seedPaths: string[]): Promise<st
   const roots = new Set<string>()
   for (const seed of seedPaths) {
     if (!seed) continue
-    let dir = dirname(seed.replace(/[\\/]+$/, ''))
+    let dir = normalizeRoot(seed)
     for (let i = 0; i < 8; i += 1) {
       const candidate = join(dir, '.agents', 'skills')
       roots.add(candidate)
@@ -273,17 +273,20 @@ function matchSkillFilePath(text: string): SkillUsage | undefined {
     const first = slugify(match[2] || '')
     const nested = match[3] ? slugify(match[3]) : ''
     if (!first) continue
-    if (nested && first === SUPERPOWERS_SLUG) {
+    // Composite children (.../skills/<child>/...) attribute to the child, then roll up to parent.
+    if (nested && (first === SUPERPOWERS_SLUG || first === UPD_SLUG || KNOWN_COMPOSITE_PARENTS.has(first))) {
       return {
         slug: nested,
         name: nested,
-        parents: [SUPERPOWERS_SLUG],
+        path: fullPath,
+        parents: [...new Set([first, ...parentSlugsFor(nested, fullPath)])],
         match: 'file'
       }
     }
     return {
       slug: first,
       name: first,
+      path: fullPath,
       parents: parentSlugsFor(first, fullPath),
       match: 'file'
     }
@@ -299,10 +302,10 @@ function matchSkillDirectoryPath(text: string): SkillUsage | undefined {
   const first = slugify(match[2] || '')
   const nested = match[3] ? slugify(match[3]) : ''
   if (!first) return undefined
-  if (nested && first === SUPERPOWERS_SLUG) {
-    return { slug: nested, name: nested, parents: [SUPERPOWERS_SLUG], match: 'path' }
+  if (nested && (first === SUPERPOWERS_SLUG || first === UPD_SLUG || KNOWN_COMPOSITE_PARENTS.has(first))) {
+    return { slug: nested, name: nested, path: match[1], parents: [...new Set([first, ...parentSlugsFor(nested)])], match: 'path' }
   }
-  return { slug: first, name: first, parents: parentSlugsFor(first), match: 'path' }
+  return { slug: first, name: first, path: match[1], parents: parentSlugsFor(first), match: 'path' }
 }
 
 function matchNamedSkillToken(text: string): SkillUsage | undefined {

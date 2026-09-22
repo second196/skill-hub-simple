@@ -1,21 +1,16 @@
-import { fetchPlatformSkills } from './platform.js';
+import { fetchPlatformSkills, type PlatformIndex } from './platform.js';
 import { type TimelineSession } from './timeline.js';
 import type { InstalledSkill, ObservationEvent } from './types.js';
 /** SemVer label from step/payload, if any. Digest is intentionally ignored. */
 export declare function skillStepVersionLabel(step: ObservationEvent): string | undefined;
-/** True when any skill step in the session lacks a SemVer version label. */
-export declare function sessionHasUnversionedSkill(session: TimelineSession): boolean;
-/** Drop skill steps without SemVer version; keep non-skill steps and versioned skills. */
-export declare function dropUnversionedSkillSteps(session: TimelineSession): {
-    session: TimelineSession;
-    droppedSkillSteps: number;
-};
 export interface IngestResult {
     message: string;
     uploadedSessions: number;
-    skippedUnversioned: number;
+    skippedSessions: number;
+    skippedByPlatform: number;
 }
 export declare function ingestEvents(serviceUrl: string, events: ObservationEvent[]): Promise<IngestResult>;
+export declare function sessionInvokesPlatformSkill(session: TimelineSession, platform: Awaited<ReturnType<typeof fetchPlatformSkills>>, index?: PlatformIndex): boolean;
 export declare function ingestSessions(serviceUrl: string, sessions: TimelineSession[]): Promise<IngestResult>;
 export declare function annotateSessions(sessions: TimelineSession[], platform: Awaited<ReturnType<typeof fetchPlatformSkills>>, installedSkills?: InstalledSkill[]): TimelineSession[];
 /** Backfill skill_version_label from installed catalog (SKILL.md or package.json). */

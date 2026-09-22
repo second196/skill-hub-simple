@@ -22,6 +22,8 @@ export interface ObservationEvent {
     client_id: string;
     client_name: ClientName;
     session_id: string;
+    /** Workspace root captured from the agent session, when available. */
+    cwd?: string;
     /** Real client session title (Claude ai-title / Codex thread_name) when known. */
     session_title?: string;
     turn_index: number;
@@ -66,6 +68,8 @@ export interface PlatformSkill {
     category?: string;
     description?: string;
     status?: string;
+    /** Published SemVer labels on the platform (normalized, no leading v). */
+    versionLabels?: string[];
 }
 export interface ObserverConfig {
     serviceUrl: string;
@@ -83,6 +87,8 @@ export interface SessionAck {
     eventCount: number;
     sourceMtimeMs: number;
     ended: boolean;
+    /** Bump to force one reconcile re-upload after an upload-contract change. */
+    uploadContractVersion?: number;
     uploadedAt: string;
 }
 export interface UploadState {
