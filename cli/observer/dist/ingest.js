@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fetchPlatformSkills, platformIndex, resolvePlatformSlug } from './platform.js';
-import { normalizeVersionLabel } from './catalog.js';
+import { discoverProjectSkillRoots, listInstalledSkills, normalizeVersionLabel, resolveSkillVersion } from './catalog.js';
 import { hostMeta, loadClientId } from './store.js';
 import { buildTimeline } from './timeline.js';
 import { sanitizePayload } from './payload.js';
@@ -33,8 +33,9 @@ function asText(value) {
 }
 export async function ingestEvents(serviceUrl, events) {
     const sessions = buildTimeline(events);
-    if (!sessions.length)
-        return '没有可上传的会话观测数据';
+    if (!sessions.length) {
+        return { message: '没有可上传的会话观测数据', uploadedSessions: 0, skippedUnversioned: 0 };
+    }
     let platform = [];
     try {
         platform = await fetchPlatformSkills(serviceUrl);
@@ -42,11 +43,13 @@ export async function ingestEvents(serviceUrl, events) {
     catch (error) {
         await logObserver(`platform catalog unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
-    return ingestSessions(serviceUrl, annotateSessions(sessions, platform));
+    const installed = await loadInstalledSkillsForEvents(events);
+    return ingestSessions(serviceUrl, annotateSessions(sessions, platform, installed));
 }
 export async function ingestSessions(serviceUrl, sessions) {
-    if (!sessions.length)
-        return '没有可上传的会话观测数据';
+    if (!sessions.length) {
+        return { message: '没有可上传的会话观测数据', uploadedSessions: 0, skippedUnversioned: 0 };
+    }
     const clientId = await loadClientId();
     const meta = hostMeta();
     const base = serviceUrl.replace(/\/+$/, '');
@@ -87,23 +90,50 @@ export async function ingestSessions(serviceUrl, sessions) {
     }
     await flush();
     if (!sessionCount) {
-        return skippedSessions > 0
-            ? `没有可上传的会话：${skippedSessions} 个会话因 skill 缺少版本号被丢弃（观测仅上传带 SemVer 版本的 skill 数据）`
-            : '没有可上传的会话观测数据';
+        return {
+            message: skippedSessions > 0
+                ? `没有可上传的会话：${skippedSessions} 个会话因 skill 缺少版本号被丢弃（观测仅上传带 SemVer 版本的 skill 数据）`
+                : '没有可上传的会话观测数据',
+            uploadedSessions: 0,
+            skippedUnversioned: skippedSessions
+        };
     }
-    return `已上传 ${sessionCount} 个会话（完整原文，不含摘要）${skippedSessions ? `，跳过 ${skippedSessions} 个无版本 skill 会话` : ''}\n${summaries.join('\n')}`;
+    return {
+        message: `已上传 ${sessionCount} 个会话（完整原文，不含摘要）${skippedSessions ? `，跳过 ${skippedSessions} 个无版本 skill 会话` : ''}\n${summaries.join('\n')}`,
+        uploadedSessions: sessionCount,
+        skippedUnversioned: skippedSessions
+    };
 }
-export function annotateSessions(sessions, platform) {
+export function annotateSessions(sessions, platform, installedSkills = []) {
     const index = platformIndex(platform);
     return sessions.map((session) => ({
         ...session,
         turns: session.turns.map((turn) => ({
             ...turn,
-            steps: annotateSteps(turn.steps, index)
+            steps: annotateSteps(turn.steps, index, installedSkills)
         }))
     }));
 }
-function annotateSteps(steps, index) {
+/** Backfill skill_version_label from installed catalog (SKILL.md or package.json). */
+export function backfillSkillVersionLabel(step, skills) {
+    if (step.type !== 'skill' || skillStepVersionLabel(step))
+        return step;
+    const resolved = resolveSkillVersion(skills, {
+        slug: step.skill_slug,
+        path: payloadPath(step)
+    });
+    if (!resolved.versionLabel)
+        return step;
+    return {
+        ...step,
+        skill_version_label: resolved.versionLabel,
+        payload: {
+            ...step.payload,
+            skill_version_label: resolved.versionLabel
+        }
+    };
+}
+function annotateSteps(steps, index, installedSkills) {
     let currentSlug;
     const result = [];
     for (const step of steps) {
@@ -128,14 +158,49 @@ function annotateSteps(steps, index) {
         const skillName = slug && index.slugs.has(slug)
             ? (slug === step.skill_slug ? step.skill_name || slug : slug)
             : undefined;
-        result.push({
+        const versioned = backfillSkillVersionLabel({
             ...step,
             skill_slug: slug,
-            skill_name: skillName,
-            payload: sanitizePayload(step.payload)
+            skill_name: skillName
+        }, installedSkills);
+        result.push({
+            ...versioned,
+            payload: sanitizePayload(versioned.payload)
         });
     }
     return result;
+}
+async function loadInstalledSkillsForEvents(events) {
+    try {
+        const seeds = eventSeedPaths(events);
+        return await listInstalledSkills(await discoverProjectSkillRoots(seeds));
+    }
+    catch (error) {
+        await logObserver(`installed skill catalog unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        return [];
+    }
+}
+function eventSeedPaths(events) {
+    const seeds = new Set([process.cwd()]);
+    for (const event of events) {
+        const path = payloadPath(event);
+        if (path)
+            seeds.add(path);
+    }
+    return [...seeds];
+}
+function payloadPath(step) {
+    const direct = step.payload.path ?? step.payload.sourcePath ?? step.payload.file;
+    if (typeof direct === 'string' && direct.trim())
+        return direct.trim();
+    const nested = step.payload.args;
+    if (nested && typeof nested === 'object') {
+        const record = nested;
+        const nestedPath = record.path ?? record.file ?? record.sourcePath;
+        if (typeof nestedPath === 'string' && nestedPath.trim())
+            return nestedPath.trim();
+    }
+    return undefined;
 }
 function toIngestSession(session) {
     return {

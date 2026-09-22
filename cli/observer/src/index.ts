@@ -119,7 +119,7 @@ cli.command('hook', '内部 hook 入口，不要手动调用')
   })
 
 cli.help()
-cli.version('0.2.0')
+cli.version('0.4.0')
 cli.parse()
 
 function resolveInstallUrl(serviceUrl: unknown, host?: string, port?: number): string {

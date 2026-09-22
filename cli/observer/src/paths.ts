@@ -81,6 +81,10 @@ export function drainCmdPath(): string {
   return join(binDir(), 'drain.cmd')
 }
 
+export function hookCmdPath(): string {
+  return join(binDir(), platform() === 'win32' ? 'hook.cmd' : 'hook.sh')
+}
+
 export function drainVbsPath(): string {
   return join(binDir(), 'drain-hidden.vbs')
 }

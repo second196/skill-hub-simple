@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { fetchPlatformSkills, platformIndex, resolvePlatformSlug, type PlatformIndex } from './platform.js'
-import { normalizeVersionLabel } from './catalog.js'
+import {
+  discoverProjectSkillRoots,
+  listInstalledSkills,
+  normalizeVersionLabel,
+  resolveSkillVersion
+} from './catalog.js'
 import { hostMeta, loadClientId } from './store.js'
 import { buildTimeline, type TimelineSession } from './timeline.js'
 import { sanitizePayload } from './payload.js'
 import { ingestSessionKey } from './identity.js'
 import { logObserver } from './log.js'
-import type { ObservationEvent } from './types.js'
+import type { InstalledSkill, ObservationEvent } from './types.js'
 
 const MAX_BATCH_BYTES = 8 * 1024 * 1024
 
@@ -36,20 +41,31 @@ function asText(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
-export async function ingestEvents(serviceUrl: string, events: ObservationEvent[]): Promise<string> {
+export interface IngestResult {
+  message: string
+  uploadedSessions: number
+  skippedUnversioned: number
+}
+
+export async function ingestEvents(serviceUrl: string, events: ObservationEvent[]): Promise<IngestResult> {
   const sessions = buildTimeline(events)
-  if (!sessions.length) return '没有可上传的会话观测数据'
+  if (!sessions.length) {
+    return { message: '没有可上传的会话观测数据', uploadedSessions: 0, skippedUnversioned: 0 }
+  }
   let platform: Awaited<ReturnType<typeof fetchPlatformSkills>> = []
   try {
     platform = await fetchPlatformSkills(serviceUrl)
   } catch (error) {
     await logObserver(`platform catalog unavailable: ${error instanceof Error ? error.message : String(error)}`)
   }
-  return ingestSessions(serviceUrl, annotateSessions(sessions, platform))
+  const installed = await loadInstalledSkillsForEvents(events)
+  return ingestSessions(serviceUrl, annotateSessions(sessions, platform, installed))
 }
 
-export async function ingestSessions(serviceUrl: string, sessions: TimelineSession[]): Promise<string> {
-  if (!sessions.length) return '没有可上传的会话观测数据'
+export async function ingestSessions(serviceUrl: string, sessions: TimelineSession[]): Promise<IngestResult> {
+  if (!sessions.length) {
+    return { message: '没有可上传的会话观测数据', uploadedSessions: 0, skippedUnversioned: 0 }
+  }
   const clientId = await loadClientId()
   const meta = hostMeta()
   const base = serviceUrl.replace(/\/+$/, '')
@@ -91,25 +107,59 @@ export async function ingestSessions(serviceUrl: string, sessions: TimelineSessi
   }
   await flush()
   if (!sessionCount) {
-    return skippedSessions > 0
-      ? `没有可上传的会话：${skippedSessions} 个会话因 skill 缺少版本号被丢弃（观测仅上传带 SemVer 版本的 skill 数据）`
-      : '没有可上传的会话观测数据'
+    return {
+      message: skippedSessions > 0
+        ? `没有可上传的会话：${skippedSessions} 个会话因 skill 缺少版本号被丢弃（观测仅上传带 SemVer 版本的 skill 数据）`
+        : '没有可上传的会话观测数据',
+      uploadedSessions: 0,
+      skippedUnversioned: skippedSessions
+    }
   }
-  return `已上传 ${sessionCount} 个会话（完整原文，不含摘要）${skippedSessions ? `，跳过 ${skippedSessions} 个无版本 skill 会话` : ''}\n${summaries.join('\n')}`
+  return {
+    message: `已上传 ${sessionCount} 个会话（完整原文，不含摘要）${skippedSessions ? `，跳过 ${skippedSessions} 个无版本 skill 会话` : ''}\n${summaries.join('\n')}`,
+    uploadedSessions: sessionCount,
+    skippedUnversioned: skippedSessions
+  }
 }
 
-export function annotateSessions(sessions: TimelineSession[], platform: Awaited<ReturnType<typeof fetchPlatformSkills>>): TimelineSession[] {
+export function annotateSessions(
+  sessions: TimelineSession[],
+  platform: Awaited<ReturnType<typeof fetchPlatformSkills>>,
+  installedSkills: InstalledSkill[] = []
+): TimelineSession[] {
   const index = platformIndex(platform)
   return sessions.map((session) => ({
     ...session,
     turns: session.turns.map((turn) => ({
       ...turn,
-      steps: annotateSteps(turn.steps, index)
+      steps: annotateSteps(turn.steps, index, installedSkills)
     }))
   }))
 }
 
-function annotateSteps(steps: ObservationEvent[], index: PlatformIndex): ObservationEvent[] {
+/** Backfill skill_version_label from installed catalog (SKILL.md or package.json). */
+export function backfillSkillVersionLabel(step: ObservationEvent, skills: InstalledSkill[]): ObservationEvent {
+  if (step.type !== 'skill' || skillStepVersionLabel(step)) return step
+  const resolved = resolveSkillVersion(skills, {
+    slug: step.skill_slug,
+    path: payloadPath(step)
+  })
+  if (!resolved.versionLabel) return step
+  return {
+    ...step,
+    skill_version_label: resolved.versionLabel,
+    payload: {
+      ...step.payload,
+      skill_version_label: resolved.versionLabel
+    }
+  }
+}
+
+function annotateSteps(
+  steps: ObservationEvent[],
+  index: PlatformIndex,
+  installedSkills: InstalledSkill[]
+): ObservationEvent[] {
   let currentSlug: string | undefined
   const result: ObservationEvent[] = []
   for (const step of steps) {
@@ -130,14 +180,48 @@ function annotateSteps(steps: ObservationEvent[], index: PlatformIndex): Observa
     const skillName = slug && index.slugs.has(slug)
       ? (slug === step.skill_slug ? step.skill_name || slug : slug)
       : undefined
-    result.push({
+    const versioned = backfillSkillVersionLabel({
       ...step,
       skill_slug: slug,
-      skill_name: skillName,
-      payload: sanitizePayload(step.payload)
+      skill_name: skillName
+    }, installedSkills)
+    result.push({
+      ...versioned,
+      payload: sanitizePayload(versioned.payload)
     })
   }
   return result
+}
+
+async function loadInstalledSkillsForEvents(events: ObservationEvent[]): Promise<InstalledSkill[]> {
+  try {
+    const seeds = eventSeedPaths(events)
+    return await listInstalledSkills(await discoverProjectSkillRoots(seeds))
+  } catch (error) {
+    await logObserver(`installed skill catalog unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    return []
+  }
+}
+
+function eventSeedPaths(events: ObservationEvent[]): string[] {
+  const seeds = new Set<string>([process.cwd()])
+  for (const event of events) {
+    const path = payloadPath(event)
+    if (path) seeds.add(path)
+  }
+  return [...seeds]
+}
+
+function payloadPath(step: ObservationEvent): string | undefined {
+  const direct = step.payload.path ?? step.payload.sourcePath ?? step.payload.file
+  if (typeof direct === 'string' && direct.trim()) return direct.trim()
+  const nested = step.payload.args
+  if (nested && typeof nested === 'object') {
+    const record = nested as Record<string, unknown>
+    const nestedPath = record.path ?? record.file ?? record.sourcePath
+    if (typeof nestedPath === 'string' && nestedPath.trim()) return nestedPath.trim()
+  }
+  return undefined
 }
 
 function toIngestSession(session: TimelineSession) {

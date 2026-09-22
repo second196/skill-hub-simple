@@ -4,6 +4,12 @@
 
 本包与 `@second196/skillhub-cli` 独立，不提供技能上传、查询、安装或删除命令。
 
+观测版本身份是包内 SemVer `version_label`（无 digest）：
+
+- 单技能包：根 `SKILL.md` frontmatter `version`
+- 复合技能包：最近包根 `package.json` / `.codex-plugin/plugin.json` 的 `version`（子技能继承父包版本；子技能自身 `version` 优先）
+- 任一 skill 步无法解析出合法 SemVer 时，整会话不上传
+
 ## 安装
 
 ```bash

@@ -45,7 +45,11 @@ export interface InstalledSkill {
   path: string
   parentSlug?: string
   source?: 'global' | 'project'
-  /** SemVer label from SKILL.md frontmatter (`version`), leading `v` stripped. */
+  /**
+   * SemVer version_label, leading `v` stripped.
+   * Single package: SKILL.md frontmatter `version`.
+   * Composite package: nearest package.json / .codex-plugin/plugin.json `version`.
+   */
   versionLabel?: string
 }
 

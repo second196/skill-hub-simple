@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { listInstalledSkills, matchSlashSkillCommands, matchSkillUsage, parentSlugsFor, resolveSkillVersion, slugify } from './catalog.js';
+import { discoverProjectSkillRoots, listInstalledSkills, matchSlashSkillCommands, matchSkillUsage, parentSlugsFor, resolveSkillVersion, slugify } from './catalog.js';
 import { extractPaths, isDocumentPath, readDocument } from './documents.js';
 import { sanitizePayload, sanitizeText } from './payload.js';
 import { spawnDrain } from './drain.js';
@@ -84,12 +84,12 @@ async function withTimeout(promise, ms) {
 }
 async function eventsFromHook(phase, clientName, payload) {
     const clientId = await loadClientId();
-    const skills = await listInstalledSkills();
     const sessionId = String(payload.session_id || payload.sessionId || 'unknown');
     const ts = new Date().toISOString();
     const toolName = String(payload.tool_name || payload.toolName || '');
     const input = payload.tool_input || payload.toolInput || payload.toolArgs || {};
     const response = payload.tool_response || payload.toolResponse || payload.toolResult;
+    const skills = await listInstalledSkills(await discoverProjectSkillRoots([process.cwd(), ...extractPaths(input), ...extractPaths(payload)]));
     const explicit = toolName === 'Skill'
         ? usageFromExplicit(String(record(input).skill || record(input).name || ''))
         : undefined;

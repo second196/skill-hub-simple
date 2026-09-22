@@ -57,12 +57,16 @@ export async function drainQueue(options: { serviceUrl?: string; reconcile?: boo
           failed += 1
           continue
         }
-        await ingestEvents(serviceUrl, prepared.events)
+        const ingestResult = await ingestEvents(serviceUrl, prepared.events)
+        if (ingestResult.uploadedSessions === 0 && ingestResult.skippedUnversioned > 0) {
+          // Do not ACK: keep the job so a later version fix + reconcile can still upload.
+          throw new Error(ingestResult.message)
+        }
         const ack = await ackSession(prepared.job)
         if (ack.deleted) {
-          await logObserver(`drain uploaded ${job.clientName} ${job.sessionId} events=${prepared.events.length} version=${prepared.job.version}`)
+          await logObserver(`drain uploaded ${job.clientName} ${job.sessionId} events=${prepared.events.length} version=${prepared.job.version} sessions=${ingestResult.uploadedSessions}`)
         } else {
-          await logObserver(`drain uploaded ${job.clientName} ${job.sessionId} events=${prepared.events.length} version=${prepared.job.version} ackSkipped=${ack.reason || 'unknown'}`)
+          await logObserver(`drain uploaded ${job.clientName} ${job.sessionId} events=${prepared.events.length} version=${prepared.job.version} sessions=${ingestResult.uploadedSessions} ackSkipped=${ack.reason || 'unknown'}`)
         }
         uploaded += 1
       } catch (error) {

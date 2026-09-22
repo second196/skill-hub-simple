@@ -100,7 +100,7 @@ cli.command('hook', '内部 hook 入口，不要手动调用')
     await runHook(String(options.phase || ''), String(options.provider || ''));
 });
 cli.help();
-cli.version('0.2.0');
+cli.version('0.4.0');
 cli.parse();
 function resolveInstallUrl(serviceUrl, host, port) {
     const raw = normalizeServiceUrl(String(serviceUrl || ''));

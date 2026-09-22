@@ -64,6 +64,9 @@ export function binDir() {
 export function drainCmdPath() {
     return join(binDir(), 'drain.cmd');
 }
+export function hookCmdPath() {
+    return join(binDir(), platform() === 'win32' ? 'hook.cmd' : 'hook.sh');
+}
 export function drainVbsPath() {
     return join(binDir(), 'drain-hidden.vbs');
 }

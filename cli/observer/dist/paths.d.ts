@@ -16,6 +16,7 @@ export declare function logsDir(): string;
 export declare function logPath(): string;
 export declare function binDir(): string;
 export declare function drainCmdPath(): string;
+export declare function hookCmdPath(): string;
 export declare function drainVbsPath(): string;
 export declare function observerNodePath(): string;
 export declare function observerScriptPath(): string;

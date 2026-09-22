@@ -3,6 +3,9 @@ import { homedir, platform } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { InstalledSkill, SkillUsage } from './types.js'
 
+/** How many parent dirs to walk when looking for a composite package root. */
+const PACKAGE_ROOT_MAX_DEPTH = 6
+
 /** Full SemVer, optional prerelease/build. Leading `v` is stripped before matching. */
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
@@ -39,7 +42,7 @@ export async function listInstalledSkills(extraRoots: string[] = []): Promise<In
       found.push(parsed)
     }
   }
-  return withCompositeParents(found)
+  return enrichSkillVersions(await withCompositeParents(found))
 }
 
 export function parseSkillFile(path: string, content: string): InstalledSkill | undefined {
@@ -49,10 +52,70 @@ export function parseSkillFile(path: string, content: string): InstalledSkill | 
   const parentSlug = primaryParentSlug(slug, path)
   const source = isProjectSkillPath(path) ? 'project' : 'global'
   // Observation identity is SemVer label only — content digest is not used.
+  // Single packages declare version in SKILL.md; composite packages inherit from package root later.
   const versionLabel = normalizeVersionLabel(frontmatterField(content, ['version']))
   const base: InstalledSkill = { slug, name, path, source }
   if (versionLabel) base.versionLabel = versionLabel
   return parentSlug ? { ...base, parentSlug } : base
+}
+
+/** Parse SemVer version from package.json / plugin.json content (UTF-8 BOM tolerated). */
+export function versionLabelFromPackageContent(content: string): string | undefined {
+  try {
+    const data = JSON.parse(content.replace(/^﻿/, '')) as { version?: unknown }
+    return normalizeVersionLabel(typeof data.version === 'string' ? data.version : undefined)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Resolve composite package version from the nearest package root.
+ * A package root is a dir containing package.json or .codex-plugin/plugin.json.
+ * Nearest root wins even when its version is missing/non-SemVer (do not walk further).
+ */
+export async function resolvePackageVersionFromDir(startDir: string): Promise<string | undefined> {
+  let dir = normalizeRoot(startDir)
+  for (let i = 0; i <= PACKAGE_ROOT_MAX_DEPTH; i += 1) {
+    const packageJson = join(dir, 'package.json')
+    const pluginJson = join(dir, '.codex-plugin', 'plugin.json')
+    const packageContent = await readFile(packageJson, 'utf8').catch(() => '')
+    const pluginContent = await readFile(pluginJson, 'utf8').catch(() => '')
+    if (packageContent || pluginContent) {
+      return versionLabelFromPackageContent(packageContent)
+        ?? (pluginContent ? versionLabelFromPackageContent(pluginContent) : undefined)
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return undefined
+}
+
+export async function resolvePackageVersionFromSkillPath(skillPath: string): Promise<string | undefined> {
+  return resolvePackageVersionFromDir(dirname(skillPath))
+}
+
+/**
+ * Fill missing versionLabel from the nearest composite package root
+ * (package.json / .codex-plugin/plugin.json). Own SKILL.md version always wins.
+ */
+export async function enrichSkillVersions(skills: InstalledSkill[]): Promise<InstalledSkill[]> {
+  const cache = new Map<string, string | undefined>()
+  const result: InstalledSkill[] = []
+  for (const skill of skills) {
+    if (skill.versionLabel) {
+      result.push(skill)
+      continue
+    }
+    const dir = dirname(skill.path)
+    if (!cache.has(dir)) {
+      cache.set(dir, await resolvePackageVersionFromDir(dir))
+    }
+    const packageLabel = cache.get(dir)
+    result.push(packageLabel ? { ...skill, versionLabel: packageLabel } : skill)
+  }
+  return result
 }
 
 export function normalizeVersionLabel(raw: string | undefined): string | undefined {
@@ -80,12 +143,14 @@ export function withCompositeParents(skills: InstalledSkill[]): InstalledSkill[]
   for (const skill of skills) {
     for (const parentSlug of parentSlugsFor(skill.slug, skill.path)) {
       if (bySlug.has(parentSlug)) continue
+      const parentPath = parentPathFor(skill.path, parentSlug)
       const parent: InstalledSkill = {
         slug: parentSlug,
         name: parentSlug,
-        path: parentPathFor(skill.path, parentSlug),
+        path: parentPath,
         source: isProjectSkillPath(skill.path) ? 'project' : 'global'
       }
+      // Composite parent has no root SKILL.md; inherit package.json version via enrichSkillVersions.
       bySlug.set(parentSlug, parent)
     }
   }
