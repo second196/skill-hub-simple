@@ -28,6 +28,22 @@ export function sessionHasUnversionedSkill(session) {
     }
     return false;
 }
+/** Drop skill steps without SemVer version; keep non-skill steps and versioned skills. */
+export function dropUnversionedSkillSteps(session) {
+    let droppedSkillSteps = 0;
+    const turns = session.turns.map((turn) => {
+        const steps = turn.steps.filter((step) => {
+            if (step.type !== 'skill')
+                return true;
+            if (skillStepVersionLabel(step))
+                return true;
+            droppedSkillSteps += 1;
+            return false;
+        });
+        return { ...turn, steps };
+    }).filter((turn) => turn.steps.length > 0);
+    return { session: { ...session, turns }, droppedSkillSteps };
+}
 function asText(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
@@ -58,6 +74,7 @@ export async function ingestSessions(serviceUrl, sessions) {
     let batchBytes = 0;
     let sessionCount = 0;
     let skippedSessions = 0;
+    let droppedStepCount = 0;
     const flush = async () => {
         if (!batch.length)
             return;
@@ -73,13 +90,19 @@ export async function ingestSessions(serviceUrl, sessions) {
         batchBytes = 0;
     };
     for (const session of sessions) {
-        // Contract: sessions containing any skill without SemVer version are not uploaded.
-        if (sessionHasUnversionedSkill(session)) {
+        // Contract: skill steps without SemVer version are dropped; the rest of the session is uploaded.
+        const { session: uploadable, droppedSkillSteps } = dropUnversionedSkillSteps(session);
+        if (droppedSkillSteps > 0) {
+            droppedStepCount += droppedSkillSteps;
+            await logObserver(`dropped ${droppedSkillSteps} unversioned skill step(s): ${session.clientName}/${session.sessionId}`);
+        }
+        const stepCount = uploadable.turns.reduce((sum, turn) => sum + turn.steps.length, 0);
+        if (!stepCount) {
             skippedSessions += 1;
-            await logObserver(`session skipped (unversioned skill): ${session.clientName}/${session.sessionId}`);
+            await logObserver(`session skipped (no uploadable steps): ${session.clientName}/${session.sessionId}`);
             continue;
         }
-        const payload = toIngestSession(session);
+        const payload = toIngestSession(uploadable);
         const encoded = Buffer.byteLength(JSON.stringify(payload));
         if (batch.length && batchBytes + encoded > MAX_BATCH_BYTES) {
             await flush();
@@ -92,14 +115,14 @@ export async function ingestSessions(serviceUrl, sessions) {
     if (!sessionCount) {
         return {
             message: skippedSessions > 0
-                ? `没有可上传的会话：${skippedSessions} 个会话因 skill 缺少版本号被丢弃（观测仅上传带 SemVer 版本的 skill 数据）`
+                ? `没有可上传的会话：${skippedSessions} 个会话在丢弃无版本 skill 后无剩余步骤${droppedStepCount ? `（已丢弃 ${droppedStepCount} 个无版本 skill 步骤）` : ''}`
                 : '没有可上传的会话观测数据',
             uploadedSessions: 0,
             skippedUnversioned: skippedSessions
         };
     }
     return {
-        message: `已上传 ${sessionCount} 个会话（完整原文，不含摘要）${skippedSessions ? `，跳过 ${skippedSessions} 个无版本 skill 会话` : ''}\n${summaries.join('\n')}`,
+        message: `已上传 ${sessionCount} 个会话（完整原文，不含摘要）${droppedStepCount ? `，丢弃 ${droppedStepCount} 个无版本 skill 步骤` : ''}${skippedSessions ? `，跳过 ${skippedSessions} 个无剩余步骤的会话` : ''}\n${summaries.join('\n')}`,
         uploadedSessions: sessionCount,
         skippedUnversioned: skippedSessions
     };

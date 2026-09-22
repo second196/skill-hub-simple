@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { enrichSkillVersions, normalizeVersionLabel, parseSkillFile, resolvePackageVersionFromDir, resolveSkillVersion, versionLabelFromPackageContent, withCompositeParents } from './catalog.js';
-import { backfillSkillVersionLabel, sessionHasUnversionedSkill, skillStepVersionLabel, toIngestStep } from './ingest.js';
+import { backfillSkillVersionLabel, dropUnversionedSkillSteps, sessionHasUnversionedSkill, skillStepVersionLabel, toIngestStep } from './ingest.js';
 import { buildTimeline } from './timeline.js';
 test('parseSkillFile reads version label only (no content digest)', () => {
     const skill = parseSkillFile('/tmp/demo/SKILL.md', [
@@ -69,7 +69,7 @@ test('toIngestStep forwards version label only and strips digest fields', () => 
     assert.equal(payload.skillVersionDigest, undefined);
     assert.equal(payload.skill_version_digest, undefined);
 });
-test('sessionHasUnversionedSkill discards sessions with unversioned skill steps', () => {
+test('sessionHasUnversionedSkill detects missing SemVer on skill steps', () => {
     const versioned = buildTimeline([skillEvent({ skill_version_label: '1.0.0' })]);
     assert.equal(sessionHasUnversionedSkill(versioned[0]), false);
     const unversioned = buildTimeline([
@@ -80,6 +80,33 @@ test('sessionHasUnversionedSkill discards sessions with unversioned skill steps'
         skillEvent({ skill_version_label: undefined, payload: { name: 'demo-skill', skillVersionDigest: 'b'.repeat(64) } })
     ]);
     assert.equal(sessionHasUnversionedSkill(digestOnly[0]), true);
+});
+test('dropUnversionedSkillSteps drops only unversioned skill steps and keeps the session', () => {
+    const versionedSkill = skillEvent({ skill_slug: 'versioned-skill', skill_name: 'versioned-skill', skill_version_label: '2.0.0', payload: { name: 'versioned-skill' } });
+    const unversionedSkill = skillEvent({ skill_slug: 'bare-skill', skill_name: 'bare-skill', skill_version_label: undefined, payload: { name: 'bare-skill' } });
+    const toolStep = {
+        ...versionedSkill,
+        type: 'tool',
+        skill_slug: undefined,
+        skill_name: undefined,
+        skill_version_label: undefined,
+        payload: { name: 'Read', args: {}, result: '' }
+    };
+    const session = buildTimeline([unversionedSkill, toolStep, versionedSkill])[0];
+    const { session: filtered, droppedSkillSteps } = dropUnversionedSkillSteps(session);
+    assert.equal(droppedSkillSteps, 1);
+    assert.equal(filtered.turns.length, 1);
+    const types = filtered.turns[0].steps.map((step) => step.type);
+    assert.deepEqual(types, ['tool', 'skill']);
+    assert.equal(filtered.turns[0].steps[1].skill_version_label, '2.0.0');
+    assert.equal(sessionHasUnversionedSkill(filtered), false);
+});
+test('dropUnversionedSkillSteps empties a session that only had unversioned skills', () => {
+    const unversionedSkill = skillEvent({ skill_version_label: undefined, payload: { name: 'demo-skill' } });
+    const session = buildTimeline([unversionedSkill])[0];
+    const { session: filtered, droppedSkillSteps } = dropUnversionedSkillSteps(session);
+    assert.equal(droppedSkillSteps, 1);
+    assert.equal(filtered.turns.length, 0);
 });
 test('resolveSkillVersion matches by path then slug and returns label only', () => {
     const skills = [

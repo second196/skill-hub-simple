@@ -5,6 +5,11 @@ import type { InstalledSkill, ObservationEvent } from './types.js';
 export declare function skillStepVersionLabel(step: ObservationEvent): string | undefined;
 /** True when any skill step in the session lacks a SemVer version label. */
 export declare function sessionHasUnversionedSkill(session: TimelineSession): boolean;
+/** Drop skill steps without SemVer version; keep non-skill steps and versioned skills. */
+export declare function dropUnversionedSkillSteps(session: TimelineSession): {
+    session: TimelineSession;
+    droppedSkillSteps: number;
+};
 export interface IngestResult {
     message: string;
     uploadedSessions: number;
