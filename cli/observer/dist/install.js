@@ -26,6 +26,9 @@ export function isOurObserverHook(command) {
 function isOurHookItem(item) {
     return isOurObserverHook(String(item.command || '')) || isOurObserverHook(String(item.commandWindows || ''));
 }
+export function stripOwnedHooks(entries) {
+    return rewriteEventHooks(entries, []);
+}
 export function rewriteEventHooks(entries, specs) {
     const kept = (Array.isArray(entries) ? entries : [])
         .map((entry) => ({

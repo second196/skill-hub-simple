@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { cac } from 'cac';
 import { installHooks } from './install.js';
+import { uninstallObserver } from './uninstall.js';
 import { runHook } from './hook.js';
 import { writeReport } from './report.js';
 import { uploadObservations } from './upload.js';
@@ -19,6 +20,15 @@ cli.command('install', '安装 Claude Code / Codex 采集 hooks，并注册开�
     const serviceUrl = resolveInstallUrl(options.serviceUrl, host, port);
     return installHooks({ serviceUrl });
 }, false));
+cli.command('uninstall', '一键卸载 Observer 本机痕迹（hooks、计划任务、数据；可选卸载 npm 包）')
+    .option('--keep-data', '保留本机数据目录（config/spool/logs/sessions）')
+    .option('--keep-codex-features', '保留 Codex [features].hooks 开关')
+    .option('--purge-packages', '同时执行 npm uninstall -g 两个 SkillHub CLI 包')
+    .action(async (options) => run(async () => uninstallObserver({
+    keepData: Boolean(options.keepData),
+    keepCodexFeatures: Boolean(options.keepCodexFeatures),
+    packages: Boolean(options.purgePackages)
+}), false));
 cli.command('config', '查看或修改本机 Observer 配置（IP/端口/服务地址）')
     .action(async () => run(async () => {
     await ensureStore();

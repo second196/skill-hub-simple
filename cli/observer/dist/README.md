@@ -29,6 +29,14 @@ skillhub-observer install --service-url http://127.0.0.1:8080
 skillhub-observer install --host 127.0.0.1 --port 8080
 ```
 
+一键卸载本机采集痕迹（hooks / 计划任务 / 数据）：
+
+```bash
+skillhub-observer uninstall
+skillhub-observer uninstall --keep-data
+skillhub-observer uninstall --purge-packages   # 同时 npm uninstall -g 两套 CLI
+```
+
 会写入：
 
 - Claude Code：`~/.claude/settings.json` 的 PreToolUse / PostToolUse / Stop / SessionEnd / SessionStart

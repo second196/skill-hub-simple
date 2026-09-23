@@ -178,8 +178,50 @@ skillhub-observer config
 skillhub-observer drain --reconcile
 ```
 
+## 卸载
+
+### 一键卸载 Observer 本机痕迹
+
+```bash
+skillhub-observer uninstall
+```
+
+默认会：
+
+1. 从 Claude Code / Codex hooks 中移除 Observer 条目
+2. 关闭 Codex `[features].hooks`（可用 `--keep-codex-features` 保留）
+3. 删除 Windows / macOS / Linux 上的 drain 计划任务与启动器
+4. 删除本机数据目录（`--keep-data` 可保留 config/spool/logs/sessions）
+5. 打印 npm 卸载命令；加 `--purge-packages` 会直接执行
+   `npm uninstall -g @second196/skillhub-observer @second196/skillhub-cli`
+
+### 卸载已安装技能
+
+```bash
+skillhub uninstall <slug>        # 卸载单个技能（含 Agent 入口）
+skillhub uninstall --all         # 清空用户技能库
+skillhub uninstall --all --json
+```
+
+### 完全移除两套 CLI
+
+```bash
+skillhub-observer uninstall --purge-packages
+skillhub uninstall --all
+npm uninstall -g @second196/skillhub-observer @second196/skillhub-cli
+```
+
+更稳妥的顺序是先 `skillhub uninstall --all`，再 `skillhub-observer uninstall --purge-packages`。
+
+**仍需手动清理的残留（当前命令不覆盖）：**
+
+- `npx skills add .../skill --global` 装入 Agent 目录的 `skillhub-cli-operation-guide`，请自行从 `~/.claude/skills`、`~/.codex/skills` 等目录删除
+- 平台侧技能与观测数据（后端库内记录）
+- `--keep-data` 保留的 `%LOCALAPPDATA%\SkillHub\observability`（或对应 macOS/Linux 路径）数据
+
 ## 下载量说明
 
 技能搜索页和技能详情页会展示累计下载量。每次通过 Web 下载或执行
 `skillhub install <slug>` 成功下载技能 ZIP 后，平台会将对应技能的下载量加一。
-查询命令仍然可以一次列出平台中的全部技能；CLI 不提供删除技能命令。
+查询命令仍然可以一次列出平台中的全部技能；本地已安装技能可用 `skillhub uninstall` 删除，
+平台侧不提供删除技能命令。

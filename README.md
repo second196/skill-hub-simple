@@ -289,7 +289,7 @@ skillhub install using-product-development --skill-version 1.0.1
 skillhub install using-product-development --service-url http://192.168.1.10:8080 --json
 ```
 
-`install` 会下载平台生成的 ZIP 并解压。无 `--target` 时，CLI 会根据操作系统使用用户级存储，并检测常见 Agent 的用户级技能目录，优先创建目录链接，不能链接时回退为复制。这样切换项目后仍然可以使用同一份技能。安装成功会计入该技能的累计下载量。CLI 只提供上传、查询和安装命令，不提供删除技能命令。
+`install` 会下载平台生成的 ZIP 并解压。无 `--target` 时，CLI 会根据操作系统使用用户级存储，并检测常见 Agent 的用户级技能目录，优先创建目录链接，不能链接时回退为复制。这样切换项目后仍然可以使用同一份技能。安装成功会计入该技能的累计下载量。本地已安装技能可用 `skillhub uninstall` 删除；平台侧不提供删除技能命令。
 
 ### 6. Agent 操作 Skill
 
@@ -349,6 +349,7 @@ skillhub-observer upload --service-url http://127.0.0.1:8080
 ```
 
 - `install`：写入 Claude Code / Codex hooks（含 Stop / SessionEnd / SessionStart）、`config.json`，并注册当前用户开机/每 5 分钟 `drain --reconcile`。结束 hook 只入队，不发 HTTP。
+- `uninstall`：一键移除 Observer 本机痕迹（hooks、计划任务、启动器、数据目录）。`--keep-data` 保留数据，`--keep-codex-features` 保留 Codex hooks 开关，`--purge-packages` 同时 `npm uninstall -g` 两套 CLI。
 - `config` / `config-set` / `config-path`：查看或动态修改后端 IP、端口、协议，**无需重新 install**。
 - `report`：生成本地完整 HTML 报告，包含全部会话、回合和助手回复。提供 `--service-url` 时会标记技能是否出现在平台目录中。
 - `upload`：全量扫描源 jsonl，入队后 drain，作为对账兜底，不再是唯一上传入口。

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { homedir, platform } from 'node:os'
 import { dirname, join } from 'node:path'
 import { atomicWriteFile } from './atomic.js'
@@ -9,6 +9,86 @@ export async function installBootTasks(): Promise<string> {
   if (platform() === 'win32') return installWindowsTasks()
   if (platform() === 'darwin') return installMacTasks()
   return installLinuxTasks()
+}
+
+export async function uninstallBootTasks(): Promise<string> {
+  if (platform() === 'win32') return uninstallWindowsTasks()
+  if (platform() === 'darwin') return uninstallMacTasks()
+  return uninstallLinuxTasks()
+}
+
+async function uninstallWindowsTasks(): Promise<string> {
+  const names = ['SkillHub Observer Drain OnLogon', 'SkillHub Observer Drain Interval']
+  const removed: string[] = []
+  for (const name of names) {
+    try {
+      await run('schtasks', ['/Delete', '/TN', name, '/F'])
+      removed.push(name)
+    } catch {
+      // task not registered
+    }
+  }
+  try {
+    await rm(drainCmdPath(), { force: true })
+    await rm(drainVbsPath(), { force: true })
+  } catch {
+    // launchers already gone
+  }
+  return removed.length
+    ? `已删除 Windows 计划任务: ${removed.join('、')}（并移除 drain 启动器）`
+    : 'Windows 计划任务不存在，已跳过删除'
+}
+
+async function uninstallMacTasks(): Promise<string> {
+  const plistPath = join(homedir(), 'Library', 'LaunchAgents', 'com.skillhub.observer.drain.plist')
+  try {
+    await run('launchctl', ['bootout', `gui/${process.getuid?.() || 501}`, plistPath])
+  } catch {
+    // not loaded
+  }
+  try {
+    await rm(plistPath, { force: true })
+    return `已卸载 macOS LaunchAgent: ${plistPath}`
+  } catch {
+    return `macOS LaunchAgent 不存在: ${plistPath}`
+  }
+}
+
+async function uninstallLinuxTasks(): Promise<string> {
+  const lines: string[] = []
+  if (await hasCommand('systemctl')) {
+    const unitDir = join(homedir(), '.config', 'systemd', 'user')
+    const servicePath = join(unitDir, 'skillhub-observer-drain.service')
+    const timerPath = join(unitDir, 'skillhub-observer-drain.timer')
+    try {
+      await run('systemctl', ['--user', 'disable', '--now', 'skillhub-observer-drain.timer'])
+      lines.push('已禁用 Linux systemd timer: skillhub-observer-drain.timer')
+    } catch {
+      lines.push('Linux systemd timer 未启用，已跳过')
+    }
+    await rm(servicePath, { force: true })
+    await rm(timerPath, { force: true })
+    try {
+      await run('systemctl', ['--user', 'daemon-reload'])
+    } catch {
+      // ignore
+    }
+  } else {
+    let existing = ''
+    try {
+      existing = await capture('crontab', ['-l'])
+    } catch {
+      existing = ''
+    }
+    const kept = existing.split(/\r?\n/).filter((line) => line.trim() && !line.includes('skillhub-observer') && !line.includes('drain --reconcile'))
+    if (kept.length !== existing.split(/\r?\n/).filter((line) => line.trim()).length) {
+      await writeCrontab(kept.length ? `${kept.join('\n')}\n` : '')
+      lines.push('已从用户 crontab 移除 Observer 条目')
+    } else {
+      lines.push('用户 crontab 中无 Observer 条目')
+    }
+  }
+  return lines.join('；') || 'Linux 定时任务不存在，已跳过'
 }
 
 async function installWindowsTasks(): Promise<string> {

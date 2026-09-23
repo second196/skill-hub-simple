@@ -13,7 +13,7 @@
   "scripts": {
     "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json && node ./scripts/mark-executable.cjs dist/index.js && node ./scripts/copy-readme.cjs",
     "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node ./scripts/version-gate.test.mjs",
+    "test": "npm run build && node ./scripts/version-gate.test.mjs && node ./scripts/uninstall.test.mjs",
     "prepublishOnly": "npm run build"
   },
   "engines": {

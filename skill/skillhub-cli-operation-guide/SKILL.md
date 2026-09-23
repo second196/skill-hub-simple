@@ -197,6 +197,19 @@ skillhub list --json
 skillhub install <slug> [--skill-version <semver>] [--target <dir>] --json
 ```
 
+### 3.7 uninstall
+
+```bash
+skillhub uninstall <slug...> [--json]
+skillhub uninstall --all [--json]
+skillhub uninstall --all --target <dir> --json
+```
+
+- 指定 slug：删除用户技能库中对应目录，并移除指向它的 Agent 入口（链接或由 install 复制的同名目录）。
+- `--all`：清空用户技能库；若库已空，仅清理指向 SkillHub 存储的 Agent 符号链接。
+- `--target`：只清理指定安装目录（不碰 Agent 入口）。
+- 平台侧技能仍保留，本命令只影响本机。
+
 `--skill-version` 是**安装**指定 `version_label`，不是上传注入版本。
 
 ## 4. 错误码

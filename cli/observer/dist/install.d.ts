@@ -4,7 +4,7 @@ interface HookItem {
     commandWindows?: string;
     [key: string]: unknown;
 }
-interface HookEntry {
+export interface HookEntry {
     matcher?: string;
     hooks?: HookItem[];
 }
@@ -13,6 +13,7 @@ export interface HookSpec {
     matcher?: string;
 }
 export declare function isOurObserverHook(command: string): boolean;
+export declare function stripOwnedHooks(entries: HookEntry[] | undefined): HookEntry[];
 export declare function rewriteEventHooks(entries: HookEntry[] | undefined, specs: HookSpec[]): HookEntry[];
 export declare function installHooks(options?: {
     serviceUrl?: string;

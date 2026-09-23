@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { isOurObserverHook, rewriteEventHooks } from './install.js'
+import { isOurObserverHook, rewriteEventHooks, stripOwnedHooks } from './install.js'
 
 const LAUNCHER = String.raw`C:\Users\Administrator\AppData\Local\SkillHub\observability\bin\hook.cmd`
 
@@ -109,5 +109,23 @@ describe('rewriteEventHooks', () => {
     )
     assert.equal(next.length, 1)
     assert.equal(next[0].matcher, '*')
+  })
+})
+
+describe('stripOwnedHooks', () => {
+  it('removes owned hooks and keeps third-party', () => {
+    const owned = `${LAUNCHER} pre codex`
+    const third = 'cc-skill-trace hook-capture --provider codex'
+    const next = stripOwnedHooks([
+      { hooks: [{ type: 'command', command: third }] },
+      { matcher: '*', hooks: [{ type: 'command', command: owned }] }
+    ])
+    const commands = next.flatMap((e) => (e.hooks || []).map((h) => h.command || ''))
+    assert.deepEqual(commands, [third])
+  })
+
+  it('returns empty when only owned hooks exist', () => {
+    const owned = String.raw`"D:\\nodejs\\node.exe" "D:\\program\\skill-hub-simple\\cli\\observer\\dist\\index.js" hook --phase stop --provider claude-code`
+    assert.deepEqual(stripOwnedHooks([{ hooks: [{ type: 'command', command: owned }] }]), [])
   })
 })

@@ -3,6 +3,7 @@ import { cac } from 'cac';
 import { uploadCommand, prepareCommand, checkCommand, verifySourceCommand } from './commands/upload.js';
 import { listCommand } from './commands/list.js';
 import { installCommand } from './commands/install.js';
+import { uninstallCommand } from './commands/uninstall.js';
 import { formatError } from './shared/output.js';
 import { VERSION_GATE_ERROR_CODES } from './shared/constants.js';
 const cli = cac('skillhub');
@@ -63,6 +64,16 @@ cli.command('install <slug>', '下载并安装Skill到本地目录')
     serviceUrl: options.serviceUrl,
     target: options.target,
     skillVersion: options.skillVersion,
+    json: Boolean(options.json)
+}), Boolean(options.json)));
+cli.command('uninstall [slug...]', '卸载本地已安装技能（含 Agent 入口）；--all 清空用户技能库')
+    .option('--all', '卸载用户技能库中的全部技能')
+    .option('--target <directory>', '仅清理指定安装目录下的技能')
+    .option('--json', '输出 JSON')
+    .action(async (slugs, options) => run(() => uninstallCommand({
+    slugs: Array.isArray(slugs) ? slugs.filter(Boolean) : (slugs ? [slugs] : []),
+    all: Boolean(options.all),
+    target: options.target,
     json: Boolean(options.json)
 }), Boolean(options.json)));
 cli.command('version-codes', '导出版本门禁错误码')

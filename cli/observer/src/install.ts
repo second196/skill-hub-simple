@@ -12,7 +12,7 @@ interface HookItem {
   [key: string]: unknown
 }
 
-interface HookEntry {
+export interface HookEntry {
   matcher?: string
   hooks?: HookItem[]
 }
@@ -42,6 +42,10 @@ export function isOurObserverHook(command: string): boolean {
 
 function isOurHookItem(item: HookItem): boolean {
   return isOurObserverHook(String(item.command || '')) || isOurObserverHook(String(item.commandWindows || ''))
+}
+
+export function stripOwnedHooks(entries: HookEntry[] | undefined): HookEntry[] {
+  return rewriteEventHooks(entries, [])
 }
 
 export function rewriteEventHooks(
