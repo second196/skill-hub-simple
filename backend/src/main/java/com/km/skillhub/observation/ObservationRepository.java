@@ -148,7 +148,7 @@ public class ObservationRepository {
      * True when the skill step's version_label matches a published skill_version row.
      * Alias is the observation_step table alias (must expose skill_slug and skill_version_label).
      */
-    static String publishedVersionMatch(String alias) {
+    public static String publishedVersionMatch(String alias) {
         String a = (alias == null || alias.trim().isEmpty()) ? "st" : alias.trim();
         return "EXISTS (SELECT 1 FROM skill_version pv JOIN skill ps ON ps.id=pv.skill_id " +
                 "WHERE ps.slug=" + a + ".skill_slug " +
@@ -311,32 +311,50 @@ public class ObservationRepository {
         }
     }
 
+    /**
+     * The single membership rule for "this skill was actually used": a skill step for that
+     * slug whose observed version matches a published one.
+     *
+     * <p>The overview cards, the session chain, the analysis and the quality metrics all
+     * derive from this predicate. Keeping one definition is what stops the overview from
+     * reporting usage for a skill whose session chain is empty.
+     *
+     * @param stepAlias observation_step alias
+     * @param slugExpression SQL producing the platform slug, e.g. {@code s.slug} or {@code ?}
+     */
+    public static String invokedSkillStep(String stepAlias, String slugExpression) {
+        String a = (stepAlias == null || stepAlias.trim().isEmpty()) ? "st" : stepAlias.trim();
+        return a + ".type='skill' AND " + a + ".skill_slug=" + slugExpression
+                + " AND " + publishedVersionMatch(a);
+    }
+
     public List<Map<String, Object>> listObservedSkills() {
         // Platform observation cards only: skill must exist in the platform skill table.
+        // Every count uses invokedSkillStep, so these numbers always agree with the
+        // session chain and the analysis on the detail page.
+        String invoked = invokedSkillStep("st", "s.slug");
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT s.slug, s.name, s.category, s.description, " +
-                        "COUNT(*) FILTER (WHERE st.type='skill') AS skill_calls, " +
-                        "COUNT(*) FILTER (WHERE st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL) AS file_loads, " +
-                        "COUNT(DISTINCT sess.id) AS session_count, " +
-                        "COUNT(DISTINCT c.client_id) AS client_count, " +
-                        "MAX(st.ts) AS last_used_at, " +
-                        usageSum("total_tokens", NON_ROLLUP_SKILL) + " AS token_total " +
+                        " (SELECT COUNT(*) FROM observation_step st WHERE " + invoked + ") AS skill_calls, " +
+                        " (SELECT COUNT(DISTINCT t.session_id) FROM observation_step st " +
+                        "    JOIN observation_turn t ON t.id=st.turn_id WHERE " + invoked + ") AS session_count, " +
+                        " (SELECT COUNT(DISTINCT sess.client_row_id) FROM observation_step st " +
+                        "    JOIN observation_turn t ON t.id=st.turn_id " +
+                        "    JOIN observation_session sess ON sess.id=t.session_id WHERE " + invoked + ") AS client_count, " +
+                        " (SELECT MAX(st.ts) FROM observation_step st WHERE " + invoked + ") AS last_used_at, " +
+                        " (SELECT COALESCE(SUM(NULLIF(st.payload#>>'{usage,total_tokens}','')::numeric),0) " +
+                        "    FROM observation_step st WHERE " + invoked + ") AS token_total " +
                         "FROM skill s " +
-                        "JOIN observation_step st ON st.skill_slug=s.slug " +
-                        "JOIN observation_turn t ON t.id=st.turn_id " +
-                        "JOIN observation_session sess ON sess.id=t.session_id " +
-                        "JOIN observation_client c ON c.id=sess.client_row_id " +
-                        "GROUP BY s.slug, s.name, s.category, s.description " +
-                        "ORDER BY last_used_at DESC NULLS LAST, skill_calls DESC");
+                        // A skill stays listed while it has any observed skill step, so a card can
+                        // legitimately show zero usage when none of those steps was attributable.
+                        "WHERE EXISTS (SELECT 1 FROM observation_step x " +
+                        "  WHERE x.type='skill' AND x.skill_slug=s.slug) " +
+                        "ORDER BY skill_calls DESC, s.slug");
         List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
         Map<String, List<Map<String, Object>>> trends = trendBySkill(null);
         for (Map<String, Object> row : rows) {
             Map<String, Object> item = new LinkedHashMap<String, Object>(row);
-            Object skillCalls = row.get("skill_calls");
-            Object fileLoads = row.get("file_loads");
-            int callCount = (skillCalls instanceof Number ? ((Number) skillCalls).intValue() : 0)
-                    + (fileLoads instanceof Number ? ((Number) fileLoads).intValue() : 0);
-            item.put("call_count", Integer.valueOf(callCount));
+            item.put("call_count", Integer.valueOf(intOf(row.get("skill_calls"))));
             item.put("token_total", Long.valueOf(longOf(row.get("token_total"))));
             String slug = String.valueOf(row.get("slug"));
             Map<String, Object> quality = skillQualitySummary(slug);
@@ -691,11 +709,15 @@ public class ObservationRepository {
 
     public Map<String, Object> overview() {
         Map<String, Object> result = new LinkedHashMap<String, Object>();
+        String invoked = invokedSkillStep("st", "s.slug");
+        // Skill-facing counts use the same membership rule as the skill list and the
+        // session chain; session/client/turn counts describe observation scope only.
         result.put("skillCount", jdbc.queryForObject(
-                "SELECT COUNT(DISTINCT st.skill_slug) FROM observation_step st JOIN skill s ON s.slug=st.skill_slug", Integer.class));
+                "SELECT COUNT(DISTINCT st.skill_slug) FROM observation_step st JOIN skill s ON s.slug=st.skill_slug " +
+                        "WHERE " + invoked, Integer.class));
         result.put("callCount", jdbc.queryForObject(
                 "SELECT COUNT(*) FROM observation_step st JOIN skill s ON s.slug=st.skill_slug " +
-                        "WHERE (st.type='skill' OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL))", Integer.class));
+                        "WHERE " + invoked, Integer.class));
         result.put("sessionCount", jdbc.queryForObject(
                 "SELECT COUNT(*) FROM observation_session", Integer.class));
         result.put("clientCount", jdbc.queryForObject(
@@ -1011,12 +1033,7 @@ public class ObservationRepository {
 
         Map<String, Object> kpis = new LinkedHashMap<String, Object>();
         kpis.put("callCount", safeCount(
-                "SELECT COUNT(*) FROM observation_step st " +
-                        "WHERE st.skill_slug=? AND ((" +
-                        "st.type='skill' AND " + publishedVersionMatch("st") + vf.sql +
-                        ")" + (vf.sql.isEmpty()
-                                ? " OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL)"
-                                : "") + ")",
+                "SELECT COUNT(*) FROM observation_step st WHERE " + invokedSkillStep("st", "?") + vf.sql,
                 vf.prepend(slug)));
         kpis.put("sessionCount", safeCount(
                 "SELECT COUNT(DISTINCT sess.id) FROM observation_session sess " +
@@ -1451,7 +1468,7 @@ public class ObservationRepository {
                 usageSum("output_tokens", NON_ROLLUP_SKILL) + " AS output_tokens " +
                 "FROM observation_step st JOIN skill s ON s.slug=st.skill_slug " +
                 "WHERE st.ts >= CURRENT_TIMESTAMP - INTERVAL '7 days' " +
-                "AND (st.type='skill' OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL))";
+                "AND " + invokedSkillStep("st", "s.slug");
         List<Object> args = new ArrayList<Object>();
         if (slug != null && !slug.trim().isEmpty()) {
             sql += " AND st.skill_slug=?";
@@ -1486,7 +1503,7 @@ public class ObservationRepository {
                             usageSum("total_tokens", NON_ROLLUP_SKILL) + " AS tokens " +
                             "FROM observation_step st JOIN skill s ON s.slug=st.skill_slug " +
                             "WHERE st.ts >= CURRENT_TIMESTAMP - INTERVAL '7 days' " +
-                            "AND (st.type='skill' OR (st.type IN ('tool','document') AND (st.payload->>'match') IS NOT NULL)) " +
+                            "AND " + invokedSkillStep("st", "s.slug") + " " +
                             "GROUP BY 1");
             List<Map<String, Object>> allPoints = new ArrayList<Map<String, Object>>();
             for (Map<String, Object> row : all) {

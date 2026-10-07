@@ -1,6 +1,7 @@
 package com.km.skillhub.analysis;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.km.skillhub.observation.ObservationRepository;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -401,15 +402,16 @@ public class ObservationAnalyzer {
      * @param slug restrict to one skill, or null for every pair
      */
     public List<Map<String, Object>> allConflicts(String slug) {
+        // Both sides must satisfy the membership rule, so a co-occurrence is only reported
+        // for skills that were genuinely invoked at a published version.
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT a.skill_slug AS slug_a, b.skill_slug AS slug_b, COUNT(DISTINCT a.turn_id) AS turns " +
                         "FROM observation_step a " +
-                        "JOIN observation_step b ON b.turn_id=a.turn_id " +
-                        "  AND b.type='skill' AND a.skill_slug < b.skill_slug " +
-                        "WHERE a.type='skill' " +
+                        "JOIN observation_step b ON b.turn_id=a.turn_id AND b.skill_slug > a.skill_slug " +
+                        "WHERE " + ObservationRepository.invokedSkillStep("a", "a.skill_slug") +
+                        "  AND " + ObservationRepository.invokedSkillStep("b", "b.skill_slug") +
                         "  AND COALESCE(a.payload->>'rollup','false') <> 'true' " +
                         "  AND COALESCE(b.payload->>'rollup','false') <> 'true' " +
-                        "  AND a.skill_slug IS NOT NULL AND b.skill_slug IS NOT NULL " +
                         "GROUP BY a.skill_slug, b.skill_slug " +
                         "HAVING COUNT(DISTINCT a.turn_id) >= 2 " +
                         "ORDER BY turns DESC LIMIT 200");
@@ -447,8 +449,9 @@ public class ObservationAnalyzer {
         Map<String, Integer> counts = new HashMap<String, Integer>();
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT st.skill_slug, COUNT(DISTINCT st.turn_id) AS turns FROM observation_step st " +
-                        "WHERE st.type='skill' AND COALESCE(st.payload->>'rollup','false') <> 'true' " +
-                        "  AND st.skill_slug IS NOT NULL GROUP BY st.skill_slug");
+                        "WHERE " + ObservationRepository.invokedSkillStep("st", "st.skill_slug") +
+                        "  AND COALESCE(st.payload->>'rollup','false') <> 'true' " +
+                        "GROUP BY st.skill_slug");
         for (Map<String, Object> row : rows) {
             counts.put(stringOf(row.get("skill_slug"), ""), Integer.valueOf(intOf(row.get("turns"))));
         }
@@ -462,11 +465,13 @@ public class ObservationAnalyzer {
      * shorter/cheaper way of getting the same job done becomes visible.
      */
     public List<Map<String, Object>> pathsFor(String slug) {
+        // Same membership rule as the overview and the session chain: a step whose observed
+        // version matches a published one. Without it, excluded steps would still show up as
+        // a "route" on a skill whose usage count is zero.
         List<Long> sessionIds = jdbc.queryForList(
                 "SELECT DISTINCT t.session_id FROM observation_turn t " +
                         "JOIN observation_step st ON st.turn_id=t.id " +
-                        "WHERE st.type='skill' AND st.skill_slug=? " +
-                        "  AND COALESCE(st.payload->>'rollup','false') <> 'true' " +
+                        "WHERE " + ObservationRepository.invokedSkillStep("st", "?") +
                         "ORDER BY t.session_id DESC LIMIT ?",
                 Long.class, slug, Integer.valueOf(MAX_SESSIONS_FOR_PATHS));
         if (sessionIds.isEmpty()) return Collections.emptyList();
@@ -477,7 +482,9 @@ public class ObservationAnalyzer {
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT t.session_id, st.skill_slug FROM observation_step st " +
                         "JOIN observation_turn t ON t.id=st.turn_id " +
-                        "WHERE t.session_id IN (" + placeholders + ") AND st.type='skill' " +
+                        "WHERE t.session_id IN (" + placeholders + ") " +
+                        // A step counts only when its own slug has a published matching version.
+                        "  AND " + ObservationRepository.invokedSkillStep("st", "st.skill_slug") +
                         "  AND COALESCE(st.payload->>'rollup','false') <> 'true' " +
                         "ORDER BY t.session_id, t.turn_index, st.seq",
                 args);
@@ -671,8 +678,13 @@ public class ObservationAnalyzer {
         }
         String placeholders = String.join(",", Collections.nCopies(ids.size(), "?"));
         List<Map<String, Object>> stepRows = jdbc.queryForList(
-                "SELECT turn_id, seq, type, skill_slug, payload FROM observation_step " +
-                        "WHERE turn_id IN (" + placeholders + ") ORDER BY turn_id, seq",
+                // version_ok carries the same membership rule down to the step level, so a
+                // turn that qualified through one skill cannot be credited to another skill
+                // whose observed version was never published.
+                "SELECT turn_id, seq, type, skill_slug, payload, " +
+                        "  (type <> 'skill' OR " + ObservationRepository.publishedVersionMatch("observation_step") +
+                        "  ) AS version_ok " +
+                        "FROM observation_step WHERE turn_id IN (" + placeholders + ") ORDER BY turn_id, seq",
                 ids.toArray());
         for (Map<String, Object> row : stepRows) {
             TurnData turn = byId.get(Long.valueOf(((Number) row.get("turn_id")).longValue()));
@@ -681,6 +693,7 @@ public class ObservationAnalyzer {
             step.seq = intOf(row.get("seq"));
             step.type = stringOf(row.get("type"), "");
             step.slug = stringOf(row.get("skill_slug"), null);
+            step.versionOk = !"skill".equals(step.type) || Boolean.TRUE.equals(row.get("version_ok"));
             step.payload = asMap(parseJson(row.get("payload")));
             turn.steps.add(step);
         }
@@ -766,6 +779,7 @@ public class ObservationAnalyzer {
             if (!"skill".equals(step.type)) continue;
             if (!slug.equals(step.slug)) continue;
             if (Boolean.TRUE.equals(step.payload.get("rollup"))) continue;
+            if (!step.versionOk) continue;
             steps.add(step);
         }
         return steps;
@@ -778,6 +792,7 @@ public class ObservationAnalyzer {
             if (!"skill".equals(step.type)) continue;
             if (step.slug == null || step.slug.isEmpty()) continue;
             if (Boolean.TRUE.equals(step.payload.get("rollup"))) continue;
+            if (!step.versionOk) continue;
             keys.add(conflictKey(step.slug));
         }
         return keys;
@@ -982,6 +997,8 @@ public class ObservationAnalyzer {
         int seq;
         String type;
         String slug;
+        /** 该步骤是否符合成员判定（skill 步骤需版本已发布；其余类型恒为 true）。 */
+        boolean versionOk = true;
         Map<String, Object> payload;
     }
 }
