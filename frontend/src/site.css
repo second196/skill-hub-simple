@@ -2336,6 +2336,19 @@ code {
   font-weight: 700;
 }
 
+/* 使用方式：一行短说明，不需要换行撑高表格 */
+.observe-quality-table .trigger-cell {
+  max-width: 220px;
+  color: #475467;
+  font-size: 12px;
+}
+
+.trigger-strong {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .quality-skill-link {
   display: flex;
   flex-direction: column;

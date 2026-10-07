@@ -342,11 +342,10 @@ public class ObservationRepository {
             Map<String, Object> quality = skillQualitySummary(slug);
             quality.put("tokenUsage", skillTokenSummary(slug));
             item.put("quality", quality);
-            item.put("health_score", quality.get("healthScore"));
             item.put("error_rate", quality.get("errorRate"));
             item.put("reload_rate", quality.get("reloadRate"));
-            item.put("load_complete_rate", quality.get("loadCompleteRate"));
-            item.put("progress_label", quality.get("progressLabel"));
+            item.put("checklist_coverage", quality.get("checklistCoverage"));
+            item.put("coverage_label", quality.get("coverageLabel"));
             item.put("trend", fillTrend(trends.get(slug)));
             result.add(item);
         }
@@ -360,7 +359,17 @@ public class ObservationRepository {
      * health = 0.35*loadComplete + 0.30*(1-error) + 0.25*(1-reload) + 0.10*progress
      */
     /**
-     * Lightweight quality for list/cards: no path distribution, no evidence funnel, no tools_after scan.
+     * Behavioral summary for one platform skill, used by list/cards.
+     *
+     * <p>There is deliberately no single "score" here. Merging several different
+     * signals into one number hides which signal moved, so the UI shows them side by
+     * side instead:
+     * <ul>
+     *   <li>how often the skill runs and how it gets triggered,</li>
+     *   <li>how many turns hit a hard error or reload the skill,</li>
+     *   <li>how completely the skill's own steps were carried out
+     *       ({@code checklistCoverage}, averaged from cached analysis).</li>
+     * </ul>
      */
     public Map<String, Object> skillQualitySummary(String slug) {
         return skillQualitySummary(slug, null);
@@ -384,36 +393,33 @@ public class ObservationRepository {
                             " (SELECT COUNT(DISTINCT session_id) FROM skill_steps) AS sessions," +
                             " (SELECT COUNT(*) FROM turn_loads) AS skill_turns," +
                             " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'outcome','ok')='error') AS errors," +
-                            " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','') IN ('file','path') " +
-                            "   OR COALESCE(payload->>'path','') ILIKE '%SKILL.md%') AS complete_loads," +
-                            " (SELECT COUNT(*) FROM turn_loads WHERE loads >= 2) AS reload_turns",
+                            " (SELECT COUNT(*) FROM turn_loads WHERE loads >= 2) AS reload_turns," +
+                            " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='call') AS match_call," +
+                            " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='file') AS match_file," +
+                            " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='path') AS match_path," +
+                            " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='text') AS match_text",
                     vf.prepend(slug)));
             int calls = intOf(row == null ? null : row.get("calls"));
             int sessions = intOf(row == null ? null : row.get("sessions"));
             int skillTurns = intOf(row == null ? null : row.get("skill_turns"));
             int errors = intOf(row == null ? null : row.get("errors"));
-            int complete = intOf(row == null ? null : row.get("complete_loads"));
             int reloadTurns = intOf(row == null ? null : row.get("reload_turns"));
             double errorRate = calls == 0 ? 0d : (double) errors / calls;
             double reloadRate = skillTurns == 0 ? 0d : (double) reloadTurns / skillTurns;
-            double loadCompleteRate = calls == 0 ? 0d : (double) complete / calls;
-            double progress = clamp01(calls == 0 ? 0d : (double) complete / Math.max(calls, 1) * 0.5d + 0.5d * (1d - errorRate));
-            double health = 100d * (0.35d * loadCompleteRate + 0.30d * (1d - errorRate) + 0.25d * (1d - reloadRate) + 0.10d * progress);
+            double coverage = cachedChecklistCoverage(slug, versionFilter);
 
             Map<String, Object> quality = new LinkedHashMap<String, Object>();
             quality.put("calls", Integer.valueOf(calls));
             quality.put("sessions", Integer.valueOf(sessions));
             quality.put("skillTurns", Integer.valueOf(skillTurns));
             quality.put("errors", Integer.valueOf(errors));
-            quality.put("completeLoads", Integer.valueOf(complete));
             quality.put("reloadTurns", Integer.valueOf(reloadTurns));
             quality.put("errorRate", Double.valueOf(round2(errorRate)));
             quality.put("reloadRate", Double.valueOf(round2(reloadRate)));
-            quality.put("loadCompleteRate", Double.valueOf(round2(loadCompleteRate)));
-            quality.put("progress", Double.valueOf(round2(progress)));
-            quality.put("progressLabel", progressLabel(progress));
-            quality.put("healthScore", Integer.valueOf((int) Math.round(health)));
-            quality.put("healthLabel", healthLabel(health));
+            quality.put("checklistCoverage", Double.valueOf(coverage));
+            quality.put("coverageLabel", coverageLabel(coverage));
+            quality.put("triggerCounts", triggerCounts(row));
+            quality.put("reloadNote", "重复载入按单轮对话统计：同一轮里反复读取该技能才算；跨轮的正常调用不计入");
             return quality;
         } catch (RuntimeException ex) {
             Map<String, Object> quality = new LinkedHashMap<String, Object>();
@@ -421,23 +427,64 @@ public class ObservationRepository {
             quality.put("sessions", Integer.valueOf(0));
             quality.put("skillTurns", Integer.valueOf(0));
             quality.put("errors", Integer.valueOf(0));
-            quality.put("completeLoads", Integer.valueOf(0));
             quality.put("reloadTurns", Integer.valueOf(0));
             quality.put("errorRate", Double.valueOf(0d));
             quality.put("reloadRate", Double.valueOf(0d));
-            quality.put("loadCompleteRate", Double.valueOf(0d));
-            quality.put("progress", Double.valueOf(0d));
-            quality.put("progressLabel", progressLabel(0d));
-            quality.put("healthScore", Integer.valueOf(0));
-            quality.put("healthLabel", healthLabel(0d));
+            quality.put("checklistCoverage", Double.valueOf(-1d));
+            quality.put("coverageLabel", coverageLabel(-1d));
+            quality.put("triggerCounts", triggerCounts(null));
             return quality;
         }
+    }
+
+    /** How the skill was invoked: explicit call, file read, directory path, or slash text. */
+    private Map<String, Object> triggerCounts(Map<String, Object> row) {
+        Map<String, Object> counts = new LinkedHashMap<String, Object>();
+        counts.put("call", Integer.valueOf(intOf(row == null ? null : row.get("match_call"))));
+        counts.put("file", Integer.valueOf(intOf(row == null ? null : row.get("match_file"))));
+        counts.put("path", Integer.valueOf(intOf(row == null ? null : row.get("match_path"))));
+        counts.put("text", Integer.valueOf(intOf(row == null ? null : row.get("match_text"))));
+        return counts;
+    }
+
+    /**
+     * Average step-completeness from cached analysis; -1 when the skill has no
+     * contract yet, so the UI can say "not evaluated" instead of showing a fake 0%.
+     */
+    public double cachedChecklistCoverage(String slug, String versionFilter) {
+        try {
+            VersionFilter vf = VersionFilter.of(versionFilter, "sa");
+            List<Object> args = new ArrayList<Object>();
+            args.add(slug);
+            for (Object arg : vf.args) args.add(arg);
+            Map<String, Object> row = firstOrNull(jdbc.queryForList(
+                    "SELECT AVG(CASE WHEN NULLIF(sa.result->>'checklistCoverage','')::numeric >= 0" +
+                            " THEN NULLIF(sa.result->>'checklistCoverage','')::numeric END) AS coverage " +
+                            "FROM skill_analysis sa WHERE sa.slug=? AND sa.analysis_type='coverage'" + vf.sql,
+                    args.toArray()));
+            if (row == null || row.get("coverage") == null) return -1d;
+            return round2(doubleOf(row.get("coverage")));
+        } catch (RuntimeException ex) {
+            return -1d;
+        }
+    }
+
+    static String coverageLabel(double coverage) {
+        if (coverage < 0) return "暂无法评估";
+        if (coverage >= 0.9d) return "完整";
+        if (coverage >= 0.8d) return "基本完整";
+        if (coverage >= 0.5d) return "部分执行";
+        return "执行不完整";
     }
 
     public Map<String, Object> skillQuality(String slug) {
         return skillQuality(slug, null);
     }
 
+    /**
+     * Same signals as {@link #skillQualitySummary} plus the step-by-step funnel.
+     * No combined score is produced on purpose — see the summary method for why.
+     */
     public Map<String, Object> skillQuality(String slug, String versionFilter) {
         VersionFilter vf = VersionFilter.of(versionFilter);
         Map<String, Object> row = firstOrNull(jdbc.queryForList(
@@ -455,53 +502,41 @@ public class ObservationRepository {
                         " (SELECT COUNT(DISTINCT session_id) FROM skill_steps) AS sessions," +
                         " (SELECT COUNT(*) FROM turn_loads) AS skill_turns," +
                         " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'outcome','ok')='error') AS errors," +
-                        " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','') IN ('file','path') " +
-                        "   OR COALESCE(payload->>'path','') ILIKE '%SKILL.md%') AS complete_loads," +
                         " (SELECT COUNT(*) FROM turn_loads WHERE loads >= 2) AS reload_turns," +
-                        " (SELECT COALESCE(AVG(tool_cnt),0) FROM (" +
-                        "   SELECT (SELECT COUNT(*) FROM observation_step tool WHERE tool.turn_id=ss.turn_id AND tool.type='tool' AND tool.seq > ss.seq) AS tool_cnt" +
-                        "   FROM skill_steps ss" +
-                        " ) tools_after)",
+                        " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='call') AS match_call," +
+                        " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='file') AS match_file," +
+                        " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='path') AS match_path," +
+                        " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='text') AS match_text",
                 vf.prepend(slug)));
         int calls = intOf(row == null ? null : row.get("calls"));
         int sessions = intOf(row == null ? null : row.get("sessions"));
         int skillTurns = intOf(row == null ? null : row.get("skill_turns"));
         int errors = intOf(row == null ? null : row.get("errors"));
-        int complete = intOf(row == null ? null : row.get("complete_loads"));
         int reloadTurns = intOf(row == null ? null : row.get("reload_turns"));
-        double avgToolsAfter = row == null ? 0d : doubleOf(row.get("tools_after"));
 
         double errorRate = calls == 0 ? 0d : (double) errors / calls;
         double reloadRate = skillTurns == 0 ? 0d : (double) reloadTurns / skillTurns;
-        double loadCompleteRate = calls == 0 ? 0d : (double) complete / calls;
-        double progress = clamp01(avgToolsAfter / 3.0d);
-        double health = 100d * (0.35d * loadCompleteRate + 0.30d * (1d - errorRate) + 0.25d * (1d - reloadRate) + 0.10d * progress);
+        double coverage = cachedChecklistCoverage(slug, versionFilter);
 
         Map<String, Object> quality = new LinkedHashMap<String, Object>();
         quality.put("calls", Integer.valueOf(calls));
         quality.put("sessions", Integer.valueOf(sessions));
         quality.put("skillTurns", Integer.valueOf(skillTurns));
         quality.put("errors", Integer.valueOf(errors));
-        quality.put("completeLoads", Integer.valueOf(complete));
         quality.put("reloadTurns", Integer.valueOf(reloadTurns));
-        quality.put("reloadSessions", Integer.valueOf(reloadTurns));
         quality.put("errorRate", Double.valueOf(round2(errorRate)));
         quality.put("reloadRate", Double.valueOf(round2(reloadRate)));
-        quality.put("loadCompleteRate", Double.valueOf(round2(loadCompleteRate)));
-        quality.put("progress", Double.valueOf(round2(progress)));
-        quality.put("progressLabel", progressLabel(progress));
-        quality.put("healthScore", Integer.valueOf((int) Math.round(health)));
-        quality.put("healthLabel", healthLabel(health));
+        quality.put("checklistCoverage", Double.valueOf(coverage));
+        quality.put("coverageLabel", coverageLabel(coverage));
+        quality.put("triggerCounts", triggerCounts(row));
         quality.put("evidence", skillEvidenceLevels(slug, versionFilter));
-        quality.put("reloadNote", "重读按 Turn 统计：同一轮对话内重复载入该技能才算；跨 Turn 的 SOP 正常触发不计入");
-        quality.put("formula", "健康分 = 载入完整 × 35% +（1 − 错误率）× 30% +（1 − 重读率）× 25% + 推进 × 10%");
+        quality.put("reloadNote", "重复载入按单轮对话统计：同一轮里反复读取该技能才算；跨轮的正常调用不计入");
         return quality;
     }
 
     /**
-     * Turn-level evidence funnel L1→L4 for one platform skill.
-     * Denominator = turns that already attributed this skill (L1 turns).
-     * L1 trigger | L2 load ok | L3 follow-up work | L4 closed-loop (L3 + no error + no abnormal same-turn reload)
+     * Turn-level funnel showing where a skill stops working, from "got triggered" to
+     * "finished without trouble". Pure SQL, so it costs nothing to recompute.
      */
     public Map<String, Object> skillEvidenceLevels(String slug) {
         return skillEvidenceLevels(slug, null);
@@ -519,27 +554,20 @@ public class ObservationRepository {
                         " SELECT turn_id, session_id," +
                         "   COUNT(*) AS loads," +
                         "   COUNT(*) FILTER (WHERE COALESCE(payload->>'outcome','ok') = 'error') AS error_loads," +
-                        "   COUNT(*) FILTER (WHERE COALESCE(payload->>'outcome','ok') <> 'error') AS ok_loads," +
-                        "   COUNT(*) FILTER (WHERE (COALESCE(payload->>'match','') IN ('file','path') OR COALESCE(payload->>'path','') ILIKE '%SKILL.md%') " +
-                        "     AND COALESCE(payload->>'outcome','ok') <> 'error') AS complete_ok_loads," +
-                        "   MIN(CASE WHEN COALESCE(payload->>'outcome','ok') <> 'error' THEN seq END) AS first_ok_seq" +
+                        "   MIN(seq) AS first_seq" +
                         " FROM skill_steps GROUP BY turn_id, session_id" +
-                        "), turn_flags AS (" +
+                        " ), turn_flags AS (" +
                         " SELECT ts.*," +
-                        "   CASE WHEN ts.ok_loads > 0 AND (ts.complete_ok_loads > 0 OR ts.ok_loads > 0) THEN 1 ELSE 0 END AS l2," +
-                        "   CASE WHEN ts.first_ok_seq IS NOT NULL AND EXISTS (" +
-                        "     SELECT 1 FROM observation_step x" +
-                        "     WHERE x.turn_id = ts.turn_id" +
-                        "       AND x.type IN ('tool','document')" +
-                        "       AND x.seq > ts.first_ok_seq" +
-                        "   ) THEN 1 ELSE 0 END AS has_followup" +
+                        "   CASE WHEN EXISTS (SELECT 1 FROM observation_step x" +
+                        "     WHERE x.turn_id = ts.turn_id AND x.type IN ('tool','document')" +
+                        "       AND x.seq > ts.first_seq) THEN 1 ELSE 0 END AS has_followup" +
                         " FROM turn_stats ts" +
                         " )" +
                         "SELECT" +
                         " COUNT(*) AS l1_turns," +
-                        " COALESCE(SUM(l2), 0) AS l2_turns," +
-                        " COALESCE(SUM(CASE WHEN l2 = 1 AND has_followup = 1 THEN 1 ELSE 0 END), 0) AS l3_turns," +
-                        " COALESCE(SUM(CASE WHEN l2 = 1 AND has_followup = 1 AND error_loads = 0 AND ok_loads < 2 THEN 1 ELSE 0 END), 0) AS l4_turns" +
+                        " COALESCE(SUM(has_followup), 0) AS l2_turns," +
+                        " COALESCE(SUM(CASE WHEN has_followup = 1 AND error_loads = 0 THEN 1 ELSE 0 END), 0) AS l3_turns," +
+                        " COALESCE(SUM(CASE WHEN has_followup = 1 AND error_loads = 0 AND loads < 2 THEN 1 ELSE 0 END), 0) AS l4_turns" +
                         " FROM turn_flags",
                 vf.prepend(slug)));
         int l1 = intOf(row == null ? null : row.get("l1_turns"));
@@ -554,10 +582,10 @@ public class ObservationRepository {
 
     private List<Map<String, Object>> evidenceLevelList(int l1, int l2, int l3, int l4) {
         List<Map<String, Object>> levels = new ArrayList<Map<String, Object>>();
-        levels.add(evidenceLevel("L1", "触发成功", "出现 skill 步且归因正确", l1, l1));
-        levels.add(evidenceLevel("L2", "加载成功", "完整 SKILL.md / 引用，且非 error", l2, l1));
-        levels.add(evidenceLevel("L3", "执行推进", "载入后有工具 / 文档产出", l3, l1));
-        levels.add(evidenceLevel("L4", "行为闭环", "无硬失败、无同 Turn 异常重读", l4, l1));
+        levels.add(evidenceLevel("L1", "触发了技能", "这一轮用到了该技能", l1, l1));
+        levels.add(evidenceLevel("L2", "有后续动作", "读入技能后确实去做了事", l2, l1));
+        levels.add(evidenceLevel("L3", "没有报错", "执行过程中没有出现失败", l3, l1));
+        levels.add(evidenceLevel("L4", "顺畅完成", "没有报错，也没有重复读取技能", l4, l1));
         return levels;
     }
 
@@ -575,6 +603,10 @@ public class ObservationRepository {
         return skillProblemSessions(slug, limit, null);
     }
 
+    /**
+     * Sessions worth a look first: hard errors first, then repeated loads, then turns
+     * where the skill was read but nothing was done with it.
+     */
     public List<Map<String, Object>> skillProblemSessions(String slug, int limit, String versionFilter) {
         VersionFilter vf = VersionFilter.of(versionFilter);
         return jdbc.queryForList(
@@ -587,45 +619,32 @@ public class ObservationRepository {
                         " SELECT turn_id, session_id," +
                         "   COUNT(*) AS loads," +
                         "   COUNT(*) FILTER (WHERE COALESCE(payload->>'outcome','ok')='error') AS errors," +
-                        "   COUNT(*) FILTER (WHERE COALESCE(payload->>'match','') IN ('file','path') OR COALESCE(payload->>'path','') ILIKE '%SKILL.md%') AS complete_loads" +
+                        "   MIN(seq) AS first_seq" +
                         " FROM skill_steps GROUP BY turn_id, session_id" +
+                        "), turn_flags AS (" +
+                        " SELECT ts.*," +
+                        "   CASE WHEN EXISTS (SELECT 1 FROM observation_step x WHERE x.turn_id=ts.turn_id" +
+                        "     AND x.type IN ('tool','document') AND x.seq > ts.first_seq) THEN 1 ELSE 0 END AS has_followup" +
+                        " FROM turn_stats ts" +
                         "), flags AS (" +
                         " SELECT session_id," +
                         "   SUM(loads) AS loads," +
                         "   COUNT(*) FILTER (WHERE loads >= 2) AS reload_turns," +
                         "   SUM(errors) AS errors," +
-                        "   SUM(complete_loads) AS complete_loads" +
-                        " FROM turn_stats GROUP BY session_id" +
+                        "   SUM(has_followup) AS followup_turns" +
+                        " FROM turn_flags GROUP BY session_id" +
                         " )" +
                         "SELECT sess.id, sess.session_key, sess.client_name, c.client_id, c.hostname, sess.started_at," +
-                        " f.loads, f.errors, f.complete_loads, f.reload_turns," +
+                        " f.loads, f.errors, f.followup_turns, f.reload_turns," +
                         " CASE WHEN f.errors > 0 THEN 0 ELSE 1 END AS error_rank," +
                         " CASE WHEN f.reload_turns > 0 THEN 0 ELSE 1 END AS reload_rank," +
-                        " CASE WHEN f.complete_loads = 0 THEN 0 ELSE 1 END AS complete_rank" +
+                        " CASE WHEN f.followup_turns = 0 THEN 0 ELSE 1 END AS followup_rank" +
                         " FROM flags f" +
                         " JOIN observation_session sess ON sess.id=f.session_id" +
                         " JOIN observation_client c ON c.id=sess.client_row_id" +
-                        " ORDER BY error_rank ASC, reload_rank ASC, complete_rank ASC, sess.started_at DESC NULLS LAST" +
+                        " ORDER BY error_rank ASC, reload_rank ASC, followup_rank ASC, sess.started_at DESC NULLS LAST" +
                         " LIMIT ?",
                 vf.prepend(slug, Integer.valueOf(limit)));
-    }
-
-    private static String progressLabel(double progress) {
-        if (progress >= 0.67d) return "高";
-        if (progress >= 0.33d) return "中";
-        return "低";
-    }
-
-    private static String healthLabel(double health) {
-        if (health >= 75d) return "健康";
-        if (health >= 60d) return "一般";
-        return "偏弱";
-    }
-
-    private static double clamp01(double value) {
-        if (value < 0d) return 0d;
-        if (value > 1d) return 1d;
-        return value;
     }
 
     private static double round2(double value) {

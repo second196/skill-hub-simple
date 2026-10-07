@@ -8,6 +8,7 @@ import { discoverProjectSkillRoots, listInstalledSkills, matchSlashSkillCommands
 import { extractPaths, isDocumentPath, readDocument } from './documents.js';
 import { sanitizePayload, sanitizeText } from './payload.js';
 import { loadClientId } from './store.js';
+import { logObserver } from './log.js';
 import { addSkillTokenUsage, emptySkillTokenUsage, parseClaudeMessageUsage, parseCodexTokenCountPayload, skillTokenUsageToPayload } from './usage.js';
 function createUsageTracker() {
     const skillEvents = [];
@@ -79,7 +80,23 @@ async function scanSources(clientId, sources, options) {
         const skills = await listInstalledSkills(await discoverProjectSkillRoots(projectRoot ? [projectRoot, ...files] : files));
         codex.push(...await scanCodex(clientId, skills, files, options, projectRoot || undefined));
     }
-    return [...claude, ...codex];
+    const all = [...claude, ...codex];
+    await warnAboutMissingVersions(all);
+    return all;
+}
+/**
+ * Version is part of the observation identity, so a skill step without one cannot be
+ * attributed. Report it here with the skill names rather than letting those steps
+ * disappear silently at upload time.
+ */
+async function warnAboutMissingVersions(events) {
+    const missing = events.filter((event) => event.type === 'skill' && event.payload?.version_missing === true);
+    if (!missing.length)
+        return;
+    const slugs = [...new Set(missing.map((event) => event.skill_slug).filter(Boolean))];
+    await logObserver(`version-missing: ${missing.length} skill steps have no version; skills=${slugs.join(',')}. ` +
+        `Add a SemVer "version" field to each skill's SKILL.md (or the composite package.json), ` +
+        `otherwise these steps cannot be attributed to a published version.`);
 }
 export async function listSessionSources(options = {}) {
     const claudeFiles = await listFiles(claudeProjectsRoot(), 6, options);
@@ -599,7 +616,11 @@ function skillUsageEvents(input) {
             outcome: input.outcome,
             match: input.usage.match,
             tool: input.toolName,
-            duration_ms: undefined
+            duration_ms: undefined,
+            // Version is part of the observation identity. Mark it loudly here so an
+            // unversioned skill package shows up as a diagnosable problem instead of
+            // vanishing when the platform rejects the session.
+            ...(version.versionLabel ? {} : { version_missing: true })
         }
     }));
     for (const parent of input.usage.parents) {
@@ -625,7 +646,8 @@ function skillUsageEvents(input) {
                 rollup: true,
                 child_slug: input.usage.slug,
                 child_name: input.usage.name,
-                duration_ms: undefined
+                duration_ms: undefined,
+                ...(parentVersion.versionLabel ? {} : { version_missing: true })
             }
         }));
     }
@@ -661,7 +683,8 @@ function skillEventsFromUserText(input) {
                 outcome: 'ok',
                 match: usage.match,
                 from_user_text: true,
-                ...(rollup ? { rollup: true, child_slug: child?.slug, child_name: child?.name } : {})
+                ...(rollup ? { rollup: true, child_slug: child?.slug, child_name: child?.name } : {}),
+                ...(version.versionLabel ? {} : { version_missing: true })
             }
         }));
     }

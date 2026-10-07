@@ -7,20 +7,19 @@ import SelectField from './SelectField.vue'
 import EchartHost from './EchartHost.vue'
 
 type ObserveQualityLike = {
-  healthScore?: number
-  healthLabel?: string
+  /** 技能写明的步骤里被执行到的比例；-1 表示暂时无法评估 */
+  checklistCoverage?: number
+  coverageLabel?: string
   errorRate?: number
   reloadRate?: number
-  loadCompleteRate?: number
-  progress?: number
-  formula?: string
-  reloadNote?: string
   calls?: number
   sessions?: number
   skillTurns?: number
   errors?: number
-  completeLoads?: number
   reloadTurns?: number
+  reloadNote?: string
+  /** 技能是怎么被用起来的：工具调用 / 读技能文件 / 读技能目录 / 指令输入 */
+  triggerCounts?: { call?: number; file?: number; path?: number; text?: number }
   pathDistribution?: Array<{ key?: string; label?: string; count?: number; ratio?: number }>
   evidence?: {
     denominator?: number
@@ -187,6 +186,12 @@ function fmtCompact(value: number): string {
 
 function fmtPct(value: number | undefined): string {
   return `${(Number(value || 0) * 100).toFixed(1)}%`
+}
+
+/** 执行完整度：-1 表示技能没有可用的步骤清单，只能说明无法评估 */
+function coverageText(value: unknown): string {
+  const n = Number(value ?? -1)
+  return n < 0 ? '暂无法评估' : fmtPct(n)
 }
 
 function fmtTime(value?: string): string {
@@ -398,17 +403,18 @@ const turnRows = computed(() => {
     let match = ''
     let skillSteps = 0
     let skillCalls = 0
-    let completeLoads = 0
     let errorLoads = 0
+    // 触发方式计数：技能是用工具调用起来的，还是读文件、读目录、指令输入
+    const triggerCounts: Record<string, number> = { call: 0, file: 0, path: 0, text: 0 }
     const scanSkill = (step: ObserveChainStepLike) => {
       const isSkill = step.type === 'skill' || Boolean(step.skill_slug)
       if (isSkill) skillSteps += 1
       if (!isSkill || step.payload?.rollup) return
       skillCalls += 1
       const m = String(step.payload?.match || '')
-      const path = String(step.payload?.path || '')
       const outcome = String(step.payload?.outcome || 'ok')
-      if (m === 'file' || m === 'path' || path.includes('SKILL.md')) completeLoads += 1
+      if (m && triggerCounts[m] !== undefined) triggerCounts[m] += 1
+      else if (m) triggerCounts.other = (triggerCounts.other || 0) + 1
       if (outcome === 'error') errorLoads += 1
     }
     const apiUsage = parseUsage(turn.usage)
@@ -444,8 +450,7 @@ const turnRows = computed(() => {
       steps: steps.length,
       skillSteps,
       skillCalls: callsInTurn,
-      completeLoads,
-      incompleteLoads: Math.max(0, callsInTurn - completeLoads),
+      triggerCounts,
       errorLoads,
       okLoads: Math.max(0, callsInTurn - errorLoads),
       reloadLoads: callsInTurn >= 2 ? callsInTurn - 1 : 0,
@@ -458,14 +463,19 @@ const turnRows = computed(() => {
 
 const sessionMetricAgg = computed(() => {
   const rows = turnRows.value
+  const triggers: Record<string, number> = { call: 0, file: 0, path: 0, text: 0 }
+  for (const row of rows) {
+    for (const key of Object.keys(row.triggerCounts)) {
+      triggers[key] = (triggers[key] || 0) + num(row.triggerCounts[key])
+    }
+  }
   return {
     skillCalls: rows.reduce((n, r) => n + r.skillCalls, 0),
-    completeLoads: rows.reduce((n, r) => n + r.completeLoads, 0),
-    incompleteLoads: rows.reduce((n, r) => n + r.incompleteLoads, 0),
     errorLoads: rows.reduce((n, r) => n + r.errorLoads, 0),
     okLoads: rows.reduce((n, r) => n + r.okLoads, 0),
     reloadTurns: rows.filter((r) => r.isReloadTurn).length,
     skillTurns: rows.filter((r) => r.skillCalls > 0).length,
+    triggerCounts: triggers,
     turns: rows.length,
     peakCalls: Math.max(0, ...rows.map((r) => r.skillCalls))
   }
@@ -482,11 +492,12 @@ const funnelLevels = computed(() => {
     }))
   }
   const q = props.detail?.quality || {}
+  // 漏斗兜底：与后端一致的四层含义，逐层看技能在哪一步开始不顺
   return [
-    { code: 'L1', title: '触发成功', count: num(q.skillTurns), rate: 1 },
-    { code: 'L2', title: '加载成功', count: num(q.completeLoads), rate: 0 },
-    { code: 'L3', title: '执行推进', count: 0, rate: 0 },
-    { code: 'L4', title: '行为闭环', count: 0, rate: 0 }
+    { code: 'L1', title: '触发了技能', count: num(q.skillTurns), rate: 1 },
+    { code: 'L2', title: '有后续动作', count: 0, rate: 0 },
+    { code: 'L3', title: '没有报错', count: 0, rate: 0 },
+    { code: 'L4', title: '顺畅完成', count: 0, rate: 0 }
   ]
 })
 
@@ -915,7 +926,7 @@ const overviewCards = computed(() => {
       id: 'usage' as ObserveMetricId,
       title: '使用与过程',
       value: fmtInt(num(k.callCount)),
-      caption: `会话 ${fmtInt(num(k.sessionCount))} · 完整 ${fmtPct(q.loadCompleteRate)}`,
+      caption: `会话 ${fmtInt(num(k.sessionCount))} · 执行完整度 ${coverageText(q.checklistCoverage)}`,
       tone: 'default' as const
     }
   ]
@@ -1044,27 +1055,60 @@ const usageCallPieOption = computed<EChartsOption>(() => {
   )
 })
 
+/** 技能是怎么被用起来的：这决定了它好不好被稳定触发 */
+const TRIGGER_COLORS: Record<string, string> = {
+  call: COLORS.input,
+  file: COLORS.cacheRead,
+  path: COLORS.cacheWrite,
+  text: COLORS.output,
+  other: COLORS.muted
+}
+const TRIGGER_NAMES: Record<string, string> = {
+  call: '工具调用',
+  file: '读技能文件',
+  path: '读技能目录',
+  text: '指令输入',
+  other: '其它'
+}
+
+const triggerParts = computed(() => {
+  const source = sessionScope.value
+    ? (sessionMetricAgg.value.triggerCounts || {})
+    : (props.detail?.quality?.triggerCounts || {})
+  return Object.keys(TRIGGER_NAMES)
+    .map((key) => ({
+      key,
+      label: TRIGGER_NAMES[key],
+      value: num((source as Record<string, unknown>)[key]),
+      color: TRIGGER_COLORS[key]
+    }))
+    .filter((part) => part.value > 0)
+})
+
 const usageCompleteBarOption = computed<EChartsOption>(() => {
   const rows = turnRows.value
-  const q = props.detail?.quality || {}
   if (sessionScope.value) {
+    const keys = ['call', 'file', 'path', 'text']
     return barByTurn(
       rows,
-      [
-        { name: '完整', data: rows.map((r) => r.completeLoads), color: COLORS.cacheRead, stack: 'l' },
-        { name: '不完整', data: rows.map((r) => r.incompleteLoads), color: COLORS.output, stack: 'l' }
-      ],
-      '载入次数'
+      keys.map((key) => ({
+        name: TRIGGER_NAMES[key],
+        data: rows.map((r) => num(r.triggerCounts[key])),
+        color: TRIGGER_COLORS[key],
+        stack: 'trigger'
+      })),
+      '使用次数'
     )
   }
+  const parts = triggerParts.value
   return {
-    color: [COLORS.cacheRead],
+    color: parts.map((part) => part.color),
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
     grid: { left: 56, right: 16, top: 24, bottom: 48 },
     xAxis: {
       type: 'category',
-      data: ['完整载入', '不完整'],
-      name: '状态',
+      data: parts.length ? parts.map((part) => part.label) : ['暂无记录'],
+      name: '使用方式',
       nameLocation: 'middle',
       nameGap: 30,
       axisLabel: { color: '#98a2b3', fontSize: 11 },
@@ -1082,7 +1126,7 @@ const usageCompleteBarOption = computed<EChartsOption>(() => {
       {
         type: 'bar',
         barMaxWidth: 48,
-        data: [num(q.completeLoads), Math.max(0, num(q.calls) - num(q.completeLoads))],
+        data: parts.map((part) => part.value),
         itemStyle: { borderRadius: [6, 6, 0, 0] }
       }
     ]
@@ -1090,19 +1134,13 @@ const usageCompleteBarOption = computed<EChartsOption>(() => {
 })
 
 const usageCompletePieOption = computed<EChartsOption>(() => {
-  const agg = sessionMetricAgg.value
-  const q = props.detail?.quality || {}
-  const complete = sessionScope.value ? agg.completeLoads : num(q.completeLoads)
-  const incomplete = sessionScope.value
-    ? agg.incompleteLoads
-    : Math.max(0, num(q.calls) - num(q.completeLoads))
-  const total = complete + incomplete
+  const parts = triggerParts.value
+  const total = parts.reduce((n, part) => n + part.value, 0)
   return pieFromParts(
-    [
-      { label: '完整载入', value: complete, color: COLORS.cacheRead },
-      { label: '不完整', value: incomplete, color: COLORS.output }
-    ],
-    total ? fmtPct(complete / total) : '—'
+    parts.length
+      ? parts.map((part) => ({ label: part.label, value: part.value, color: part.color }))
+      : [{ label: '暂无记录', value: 0, color: COLORS.muted }],
+    total ? fmtInt(total) : '—'
   )
 })
 
@@ -1257,10 +1295,10 @@ const funnelPieOption = computed<EChartsOption>(() => {
   const l4 = levels[3]?.count || 0
   return pieFromParts(
     [
-      { label: 'L4 闭环', value: l4, color: COLORS.cacheRead },
-      { label: 'L3 未闭环', value: Math.max(0, l3 - l4), color: COLORS.input },
-      { label: 'L2 未继续', value: Math.max(0, l2 - l3), color: COLORS.cacheWrite },
-      { label: 'L1 未加载成功', value: Math.max(0, l1 - l2), color: COLORS.output }
+      { label: 'L4 顺畅完成', value: l4, color: COLORS.cacheRead },
+      { label: 'L3 未顺畅', value: Math.max(0, l3 - l4), color: COLORS.input },
+      { label: 'L2 无后续动作', value: Math.max(0, l2 - l3), color: COLORS.cacheWrite },
+      { label: 'L1 触发即止', value: Math.max(0, l1 - l2), color: COLORS.output }
     ],
     l1 ? fmtPct(l4 / l1) : '—'
   )
@@ -1273,25 +1311,36 @@ const usageKpis = computed(() => {
   const levels = funnelLevels.value
   const l1 = levels[0]?.count || 0
   if (sessionScope.value) {
-    const completeTotal = agg.completeLoads + agg.incompleteLoads
+    const sessionTotal = agg.skillCalls
     return [
-      { label: '会话内技能调用', value: fmtInt(agg.skillCalls) },
+      { label: '本会话技能使用', value: fmtInt(sessionTotal) },
       { label: '覆盖会话', value: '1' },
-      { label: '本会话完整率', value: completeTotal ? fmtPct(agg.completeLoads / completeTotal) : '—' },
-      { label: '本会话错误率', value: agg.skillCalls ? fmtPct(agg.errorLoads / agg.skillCalls) : '—' },
-      { label: '本会话重载率', value: agg.skillTurns ? fmtPct(agg.reloadTurns / agg.skillTurns) : '—' },
-      { label: 'L4 闭环', value: fmtInt(levels[3]?.count || 0) }
+      { label: '本会话出错率', value: sessionTotal ? fmtPct(agg.errorLoads / sessionTotal) : '—' },
+      { label: '本会话重复载入', value: agg.skillTurns ? fmtPct(agg.reloadTurns / agg.skillTurns) : '—' },
+      { label: '本会话使用方式', value: triggerShareText(agg.triggerCounts) },
+      { label: 'L4 顺畅完成', value: fmtInt(levels[3]?.count || 0) }
     ]
   }
   return [
-    { label: '调用次数', value: fmtInt(num(k.callCount)) },
+    { label: '使用次数', value: fmtInt(num(k.callCount)) },
     { label: '会话覆盖', value: fmtInt(num(k.sessionCount)) },
-    { label: '载入完整率', value: fmtPct(q.loadCompleteRate) },
-    { label: '错误率', value: fmtPct(q.errorRate) },
-    { label: '同回合重载率', value: fmtPct(q.reloadRate) },
+    { label: '执行完整度', value: coverageText(q.checklistCoverage) },
+    { label: '出错率', value: fmtPct(q.errorRate) },
+    { label: '重复载入率', value: fmtPct(q.reloadRate) },
     { label: 'L4/L1', value: l1 ? fmtPct((levels[3]?.count || 0) / l1) : '—' }
   ]
 })
+
+/** 触发方式一句话概括，例如「工具调用 12 · 读技能文件 3」 */
+function triggerShareText(counts: Record<string, unknown> | undefined): string {
+  if (!counts) return '—'
+  const parts: string[] = []
+  for (const key of ['call', 'file', 'path', 'text']) {
+    const value = num(counts[key])
+    if (value > 0) parts.push(`${TRIGGER_NAMES[key]} ${value}`)
+  }
+  return parts.length ? parts.join(' · ') : '—'
+}
 
 const showUsageBoard = computed(() => selectedId.value === 'usage')
 
@@ -1718,7 +1767,7 @@ const activeDesc = computed(() => {
   if (selectedId.value === 'tokens') {
     return '按会话与回合展示 Token 用量，含构成、排行与分布。'
   }
-  return '一页合并：调用、会话覆盖、载入完整、错误、重复载入，以及过程漏斗 L1–L4。锁定会话时改为本会话口径。'
+  return '一页合并：使用次数、会话覆盖、执行完整度、出错、重复载入，以及使用过程漏斗 L1–L4。锁定会话时改为本会话口径。'
 })
 
 const activeKpis = computed(() => {
@@ -1756,8 +1805,8 @@ const dimensionChips = computed(() => {
       : ['构成拆分', '趋势', '会话排行', '回合分布', '会话明细']
   }
   return sessionScope.value
-    ? ['调用', '载入完整', '错误', '重复载入', '过程漏斗', '会话明细']
-    : ['调用与来源', '载入完整', '错误', '重复载入', '过程漏斗', '会话明细']
+    ? ['使用', '使用方式', '出错', '重复载入', '过程漏斗', '会话明细']
+    : ['使用与来源', '使用方式', '出错', '重复载入', '过程漏斗', '会话明细']
 })
 
 const emptyTokenHint = computed(() => {
@@ -1958,7 +2007,7 @@ function exportCsv() {
 
       <p v-if="emptyTokenHint" class="metric-empty-hint" role="status">{{ emptyTokenHint }}</p>
       <p v-if="selectedId === 'usage'" class="metric-block-note">
-        {{ props.detail?.quality?.reloadNote || '重读按 Turn 统计；过程漏斗 L1触发→L2加载成功→L3执行推进→L4行为闭环。' }}
+        {{ props.detail?.quality?.reloadNote || '重复载入按单轮统计；使用过程漏斗 L1触发技能→L2有后续动作→L3没有报错→L4顺畅完成。' }}
       </p>
 
       <!-- 当前会话摘要 -->
@@ -2000,7 +2049,7 @@ function exportCsv() {
           </section>
           <section class="metric-block">
             <header class="metric-block-head">
-              <h3>载入完整</h3>
+              <h3>使用方式</h3>
             </header>
             <div class="metric-chart chart-box-pro">
               <EchartHost :option="usageCompleteBarOption" :height="260" />
@@ -2008,7 +2057,7 @@ function exportCsv() {
           </section>
           <section class="metric-block">
             <header class="metric-block-head">
-              <h3>载入状态占比</h3>
+              <h3>使用方式占比</h3>
             </header>
             <div class="compose-layout-pro compose-layout-pie">
               <div class="donut-wrap">
@@ -2394,7 +2443,7 @@ function exportCsv() {
                 <td>窗口</td>
               </tr>
               <tr>
-                <td><code>载入完整 / 错误 / 重复载入</code></td>
+                <td><code>使用方式 / 出错 / 重复载入</code></td>
                 <td>沿用质量页签的会话行为统计</td>
                 <td>Skill</td>
               </tr>

@@ -31,7 +31,11 @@ export function slugify(value: string): string {
 }
 
 export async function listInstalledSkills(extraRoots: string[] = []): Promise<InstalledSkill[]> {
-  const roots = [...skillRoots(), ...extraRoots.map(normalizeRoot).filter(Boolean)]
+  // Project-scoped roots are searched first so a project's own copy of a skill wins
+  // over a user-level install with the same slug. Several roots can hold the same slug
+  // and only the first entry per slug survives, so this order decides which version
+  // ends up on an observation.
+  const roots = [...extraRoots.map(normalizeRoot).filter(Boolean), ...skillRoots()]
   const found: InstalledSkill[] = []
   const seen = new Set<string>()
   for (const root of roots) {

@@ -24,6 +24,8 @@ import {
   Upload
 } from '@lucide/vue'
 import ObserveMetricsPanel from './components/ObserveMetricsPanel.vue'
+import ObserveAnalysisPanel from './components/ObserveAnalysisPanel.vue'
+import type { SkillAnalysis, TriggerCounts } from './types/observe-analysis'
 import { agentPrefixedTitle, dedupeSessionRows, sessionDisplayTitle, shortSessionKey } from './utils/session-title'
 
 type Skill = { id:number; slug:string; name:string; description:string; category:string; status:string; version_label:string; download_count:number }
@@ -145,23 +147,19 @@ const discoveryHasMore = computed(() => discoverySkills.value.length < discovery
 type ObserveTrendPoint = { day: string; count: number }
 type ObservePathDist = { key: string; label: string; count: number; ratio: number }
 type ObserveQuality = {
-  healthScore: number
-  healthLabel: string
   errorRate: number
   reloadRate: number
-  loadCompleteRate: number
-  progress: number
-  progressLabel: string
+  /** 技能写明的步骤里，实际被执行到的比例；-1 表示暂时无法评估 */
+  checklistCoverage: number
+  coverageLabel: string
   calls: number
   sessions: number
   errors: number
-  completeLoads: number
   reloadTurns?: number
   skillTurns?: number
-  reloadSessions?: number
   reloadNote?: string
+  triggerCounts?: TriggerCounts
   pathDistribution?: ObservePathDist[]
-  formula?: string
   evidence?: {
     denominator: number
     levels: Array<{ code: string; title: string; hint: string; count: number; rate: number }>
@@ -176,7 +174,7 @@ type ObserveProblemSession = {
   started_at?: string
   loads: number
   errors: number
-  complete_loads: number
+  followup_turns: number
 }
 type ObserveOverview = { skillCount: number; callCount: number; sessionCount: number; clientCount: number; turnCount?: number; trend: ObserveTrendPoint[] }
 type ObserveSkillItem = {
@@ -190,11 +188,10 @@ type ObserveSkillItem = {
   last_used_at?: string
   trend?: ObserveTrendPoint[]
   quality?: ObserveQuality
-  health_score?: number
   error_rate?: number
   reload_rate?: number
-  load_complete_rate?: number
-  progress_label?: string
+  checklist_coverage?: number
+  coverage_label?: string
 }
 type ObserveClient = { client_id: string; hostname?: string; os?: string; session_count?: number; last_seen_at?: string }
 type ObserveSession = {
@@ -215,6 +212,7 @@ type ObserveChain = ObserveSession & { os?: string; turns: ObserveTurn[] }
 type ObserveSkillVersion = { label?: string; source?: string; callCount?: number }
 type ObserveSkillDetail = {
   quality?: ObserveQuality
+  analysis?: SkillAnalysis
   problemSessions?: ObserveProblemSession[]
   skill: { slug: string; name: string; category?: string; description?: string }
   kpis: { callCount: number; sessionCount: number; clientCount: number; turnCount: number }
@@ -239,6 +237,7 @@ const observeHomeLoading = ref(false)
 const observeHomeError = ref('')
 const observeDetail = ref<ObserveSkillDetail | null>(null)
 const observeDetailLoading = ref(false)
+const observeAnalysisRefreshing = ref(false)
 const observeDetailError = ref('')
 const observeClientId = ref('')
 const observeSessionId = ref('')
@@ -248,7 +247,7 @@ const observeShowStepContent = ref(true)
 const observeShowAssistantSteps = ref(true)
 type ObserveDetailTab = 'quality' | 'chain' | 'metrics'
 const observeDetailTab = ref<ObserveDetailTab>('quality')
-type ObserveQualitySortKey = 'calls' | 'health' | 'error' | 'reload' | 'complete'
+type ObserveQualitySortKey = 'calls' | 'coverage' | 'error' | 'reload'
 const observeSortKey = ref<ObserveQualitySortKey>('calls')
 type ObserveChainView = 'text' | 'tree'
 const observeChainView = ref<ObserveChainView>('text')
@@ -263,35 +262,51 @@ let chainSwipeActive = false
 function qualityOf(item: ObserveSkillItem): ObserveQuality {
   if (item.quality) return item.quality
   return {
-    healthScore: Number(item.health_score ?? 0),
-    healthLabel: healthLabel(Number(item.health_score ?? 0)),
     errorRate: Number(item.error_rate ?? 0),
     reloadRate: Number(item.reload_rate ?? 0),
-    loadCompleteRate: Number(item.load_complete_rate ?? 0),
-    progress: 0,
-    progressLabel: item.progress_label || '低',
+    checklistCoverage: Number(item.checklist_coverage ?? -1),
+    coverageLabel: item.coverage_label || '暂无法评估',
     calls: Number(item.call_count ?? 0),
     sessions: Number(item.session_count ?? 0),
-    errors: 0,
-    completeLoads: 0,
-    reloadSessions: 0
+    errors: 0
   }
-}
-
-function healthLabel(score: number): string {
-  if (score >= 75) return '健康'
-  if (score >= 60) return '一般'
-  return '偏弱'
 }
 
 function formatPercent(value: number | undefined): string {
   return `${Math.round(Number(value || 0) * 100)}%`
 }
 
-function qualityTone(score: number): string {
-  if (score >= 75) return 'tone-good'
-  if (score >= 60) return 'tone-mid'
+/** 完整度低于 0 表示没有步骤清单，只能给出「暂无法评估」 */
+function formatCoverage(value: number | undefined): string {
+  const n = Number(value ?? -1)
+  return n < 0 ? '暂无法评估' : `${Math.round(n * 100)}%`
+}
+
+/** 完整度的配色：越高越好，无法评估时用中性色 */
+function coverageTone(value: number | undefined): string {
+  const n = Number(value ?? -1)
+  if (n < 0) return 'tone-mid'
+  if (n >= 0.9) return 'tone-good'
+  if (n >= 0.8) return 'tone-mid'
   return 'tone-bad'
+}
+
+const TRIGGER_LABELS: Record<string, string> = {
+  call: '工具调用',
+  file: '读技能文件',
+  path: '读技能目录',
+  text: '指令输入'
+}
+
+/** 把触发方式计数压成一行短说明，例如「工具调用 12 · 读技能文件 3」 */
+function triggerSummary(counts: TriggerCounts | undefined): string {
+  if (!counts) return '—'
+  const parts: string[] = []
+  for (const key of ['call', 'file', 'path', 'text']) {
+    const value = Number(counts[key as keyof TriggerCounts] || 0)
+    if (value > 0) parts.push(`${TRIGGER_LABELS[key]} ${value}`)
+  }
+  return parts.length ? parts.join(' · ') : '—'
 }
 
 function sessionTitleOf(session: { title?: string; session_title?: string; session_key?: string; client_name?: string; started_at?: string; turns?: Array<{ user_text?: string }> }): string {
@@ -305,14 +320,12 @@ function sessionListRows(list: ObserveSession[] | undefined): ObserveSession[] {
 function qualitySortValue(item: ObserveSkillItem, key: ObserveQualitySortKey): number {
   const q = qualityOf(item)
   switch (key) {
-    case 'health':
-      return q.healthScore
+    case 'coverage':
+      return q.checklistCoverage
     case 'error':
       return q.errorRate
     case 'reload':
       return q.reloadRate
-    case 'complete':
-      return q.loadCompleteRate
     case 'calls':
     default:
       return Number(item.call_count || 0)
@@ -979,6 +992,35 @@ async function loadObserveSkill() {
   } finally {
     observeDetailLoading.value = false
   }
+}
+
+/** 报告只在第一次加载时展示骨架；已有内容时用「重新检查」的进度态 */
+const observeAnalysisLoading = computed(() => observeDetailLoading.value && !observeDetail.value?.analysis)
+
+/** 重新跑一遍检查，忽略缓存的契约与结论 */
+async function refreshObserveAnalysis() {
+  if (!isObserveSkill.value || observeAnalysisRefreshing.value) return
+  observeAnalysisRefreshing.value = true
+  try {
+    const params = new URLSearchParams()
+    if (observeVersion.value) params.set('version', observeVersion.value)
+    params.set('refresh', 'true')
+    const analysis = await request<SkillAnalysis>(
+      `/api/observations/skills/${encodeURIComponent(observeSlug.value)}/analysis?${params}`
+    )
+    if (observeDetail.value) observeDetail.value.analysis = analysis
+  } catch (e) {
+    observeDetailError.value = e instanceof Error ? e.message : '重新检查失败'
+  } finally {
+    observeAnalysisRefreshing.value = false
+  }
+}
+
+/** 从报告里的某条问题跳到对应会话的对话原文 */
+function openObserveSessionFromAnalysis(sessionId: number) {
+  if (!sessionId) return
+  observeDetailTab.value = 'chain'
+  onMetricsChangeSession(String(sessionId))
 }
 
 function selectObserveClient(clientId: string) {
@@ -1719,7 +1761,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           <div>
             <p class="home-kicker">Observability</p>
             <h1 class="page-title">Skill观测</h1>
-            <p class="page-subtitle">按平台Skill查看质量：载入完整、错误、重读、推进。点卡片进入质量详情。</p>
+            <p class="page-subtitle">按平台Skill查看质量：执行完整度、出错、重复载入、使用方式。点卡片进入质量详情。</p>
           </div>
           <RouterLink class="primary observe-sessions-entry" to="/observe/sessions">
             全部会话
@@ -1732,9 +1774,9 @@ function handleGlobalKeydown(event: KeyboardEvent) {
         <template v-else>
           <section class="observe-kpis observe-kpis-hero" aria-label="观测规模">
             <article class="observe-kpi observe-kpi-primary">
-              <span>调用量</span>
+              <span>使用次数</span>
               <strong>{{ observeOverview?.callCount || 0 }}</strong>
-              <small>次载入 / 调用</small>
+              <small>次使用</small>
             </article>
             <article class="observe-kpi observe-kpi-primary">
               <span>会话量</span>
@@ -1752,7 +1794,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             <div class="section-head">
               <div>
                 <h2>Skill质量总览</h2>
-                <p>健康分只算在单个Skill上，不做平台总分。健康分 = 载入完整 × 35% +（1 − 错误率）× 30% +（1 − 重读率）× 25% + 推进 × 10%。</p>
+                <p>不合并成单一分数：分别看使用量、执行完整度、出错和重复载入，哪一项有问题一眼可见。</p>
               </div>
             </div>
             <div class="observe-quality-table-wrap">
@@ -1762,30 +1804,25 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                     <th>Skill</th>
                     <th>
                       <button type="button" class="th-sort" :class="{ active: observeSortKey === 'calls' }" @click="setQualitySort('calls')">
-                        调用量{{ qualitySortIndicator('calls') }}
+                        使用量{{ qualitySortIndicator('calls') }}
                       </button>
                     </th>
                     <th>
-                      <button type="button" class="th-sort" :class="{ active: observeSortKey === 'health' }" @click="setQualitySort('health')">
-                        健康分{{ qualitySortIndicator('health') }}
+                      <button type="button" class="th-sort" :class="{ active: observeSortKey === 'coverage' }" @click="setQualitySort('coverage')">
+                        执行完整度{{ qualitySortIndicator('coverage') }}
                       </button>
                     </th>
                     <th>
                       <button type="button" class="th-sort" :class="{ active: observeSortKey === 'error' }" @click="setQualitySort('error')">
-                        错误{{ qualitySortIndicator('error') }}
+                        出错{{ qualitySortIndicator('error') }}
                       </button>
                     </th>
                     <th>
                       <button type="button" class="th-sort" :class="{ active: observeSortKey === 'reload' }" @click="setQualitySort('reload')">
-                        重读{{ qualitySortIndicator('reload') }}
+                        重复载入{{ qualitySortIndicator('reload') }}
                       </button>
                     </th>
-                    <th>
-                      <button type="button" class="th-sort" :class="{ active: observeSortKey === 'complete' }" @click="setQualitySort('complete')">
-                        载入完整{{ qualitySortIndicator('complete') }}
-                      </button>
-                    </th>
-                    <th>推进</th>
+                    <th>使用方式</th>
                     <th>会话</th>
                     <th></th>
                   </tr>
@@ -1799,7 +1836,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                       </RouterLink>
                     </td>
                     <td>
-                      <div class="call-volume-cell" :aria-label="`调用量 ${asNumber(skill.call_count)}`">
+                      <div class="call-volume-cell" :aria-label="`使用量 ${asNumber(skill.call_count)}`">
                         <span class="call-volume-bar-track" aria-hidden="true">
                           <span class="call-volume-bar" :style="{ width: callBarWidth(skill.call_count) }"></span>
                         </span>
@@ -1807,21 +1844,20 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                       </div>
                     </td>
                     <td>
-                      <span :class="['health-badge', qualityTone(qualityOf(skill).healthScore)]">
-                        {{ qualityOf(skill).healthScore }} {{ qualityOf(skill).healthLabel }}
+                      <span :class="['health-badge', coverageTone(qualityOf(skill).checklistCoverage)]">
+                        {{ formatCoverage(qualityOf(skill).checklistCoverage) }}
                       </span>
                     </td>
                     <td class="num">{{ formatPercent(qualityOf(skill).errorRate) }}</td>
                     <td class="num" :class="{ warn: qualityOf(skill).reloadRate >= 0.1 }">{{ formatPercent(qualityOf(skill).reloadRate) }}</td>
-                    <td class="num">{{ formatPercent(qualityOf(skill).loadCompleteRate) }}</td>
-                    <td>{{ qualityOf(skill).progressLabel }}</td>
+                    <td class="trigger-cell">{{ triggerSummary(qualityOf(skill).triggerCounts) }}</td>
                     <td class="num">{{ asNumber(skill.session_count) }}</td>
                     <td>
                       <RouterLink class="observe-row-action" :to="`/observe/${skill.slug}`">详情</RouterLink>
                     </td>
                   </tr>
                   <tr v-if="!observeSkills.length">
-                    <td colspan="9" class="empty">还没有匹配到平台Skill调用。请先在本机 upload 观测数据。</td>
+                    <td colspan="8" class="empty">还没有匹配到平台Skill调用。请先在本机 upload 观测数据。</td>
                   </tr>
                 </tbody>
               </table>
@@ -1845,20 +1881,20 @@ function handleGlobalKeydown(event: KeyboardEvent) {
               >
                 <div class="card-top">
                   <span class="category">{{ skill.category || '未分类' }}</span>
-                  <span :class="['health-badge', qualityTone(qualityOf(skill).healthScore)]">
-                    健康 {{ qualityOf(skill).healthScore }}
+                  <span :class="['health-badge', coverageTone(qualityOf(skill).checklistCoverage)]">
+                    完整度 {{ formatCoverage(qualityOf(skill).checklistCoverage) }}
                   </span>
                 </div>
                 <h3>{{ skill.name }}</h3>
                 <p>{{ skill.description || '暂无描述' }}</p>
                 <div class="quality-card-metrics">
-                  <span>调用 {{ asNumber(skill.call_count) }}</span>
+                  <span>使用 {{ asNumber(skill.call_count) }}</span>
                   <span>会话 {{ asNumber(skill.session_count) }}</span>
-                  <span :class="{ warn: qualityOf(skill).reloadRate >= 0.1 }">重读 {{ formatPercent(qualityOf(skill).reloadRate) }}</span>
+                  <span :class="{ warn: qualityOf(skill).reloadRate >= 0.1 }">重复载入 {{ formatPercent(qualityOf(skill).reloadRate) }}</span>
                 </div>
                 <div class="skill-card-footer">
                   <code>{{ skill.slug }}</code>
-                  <span class="download-count">{{ qualityOf(skill).healthLabel }} · {{ qualityOf(skill).progressLabel }}推进</span>
+                  <span class="download-count">{{ qualityOf(skill).coverageLabel }} · {{ triggerSummary(qualityOf(skill).triggerCounts) }}</span>
                 </div>
               </RouterLink>
               <p v-if="!observeSkills.length" class="empty">还没有匹配到平台Skill调用。</p>
@@ -1974,10 +2010,10 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           </header>
 
           <section class="observe-kpis observe-kpis-compact" aria-label="该Skill观测汇总">
-            <article class="observe-kpi"><span>调用</span><strong>{{ asNumber(observeDetail.kpis.callCount) }}</strong></article>
+            <article class="observe-kpi"><span>使用次数</span><strong>{{ asNumber(observeDetail.kpis.callCount) }}</strong></article>
             <article class="observe-kpi"><span>会话</span><strong>{{ asNumber(observeDetail.kpis.sessionCount) }}</strong></article>
-            <article class="observe-kpi"><span>客户端</span><strong>{{ asNumber(observeDetail.kpis.clientCount) }}</strong></article>
-            <article class="observe-kpi"><span>回合</span><strong>{{ asNumber(observeDetail.kpis.turnCount) }}</strong></article>
+            <article class="observe-kpi"><span>设备</span><strong>{{ asNumber(observeDetail.kpis.clientCount) }}</strong></article>
+            <article class="observe-kpi"><span>对话轮次</span><strong>{{ asNumber(observeDetail.kpis.turnCount) }}</strong></article>
           </section>
 
           <div class="tabs observe-detail-tabs" role="tablist" aria-label="观测视图">
@@ -2007,41 +2043,49 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           <section v-if="observeDetailTab === 'quality'" class="observe-quality-panel">
             <article class="quality-hero-card">
               <div>
-                <p class="eyebrow">健康分</p>
+                <p class="eyebrow">执行完整度</p>
                 <div class="health-score-row">
-                  <strong :class="['health-score', qualityTone(observeDetail.quality?.healthScore || 0)]">
-                    {{ observeDetail.quality?.healthScore ?? 0 }}
+                  <strong :class="['health-score', coverageTone(observeDetail.quality?.checklistCoverage)]">
+                    {{ formatCoverage(observeDetail.quality?.checklistCoverage) }}
                   </strong>
-                  <span :class="['health-badge', qualityTone(observeDetail.quality?.healthScore || 0)]">
-                    {{ observeDetail.quality?.healthLabel || healthLabel(observeDetail.quality?.healthScore || 0) }}
+                  <span :class="['health-badge', coverageTone(observeDetail.quality?.checklistCoverage)]">
+                    {{ observeDetail.quality?.coverageLabel || '暂无法评估' }}
                   </span>
                 </div>
-                <p class="quality-formula">健康分 = 载入完整 × 35% +（1 − 错误率）× 30% +（1 − 重读率）× 25% + 推进 × 10%</p>
+                <p class="quality-formula">按技能自己写明的步骤逐条核对，看实际做了多少。没有步骤清单时不做评估。</p>
               </div>
               <div class="quality-metric-grid">
                 <div>
-                  <span>载入完整</span>
-                  <strong>{{ formatPercent(observeDetail.quality?.loadCompleteRate) }}</strong>
-                </div>
-                <div>
-                  <span>错误率</span>
+                  <span>出错率</span>
                   <strong>{{ formatPercent(observeDetail.quality?.errorRate) }}</strong>
                 </div>
                 <div>
-                  <span>重读率</span>
+                  <span>重复载入</span>
                   <strong :class="{ warn: (observeDetail.quality?.reloadRate || 0) >= 0.1 }">{{ formatPercent(observeDetail.quality?.reloadRate) }}</strong>
                 </div>
                 <div>
-                  <span>推进</span>
-                  <strong>{{ observeDetail.quality?.progressLabel || '—' }}</strong>
+                  <span>使用方式</span>
+                  <strong class="trigger-strong">{{ triggerSummary(observeDetail.quality?.triggerCounts) }}</strong>
+                </div>
+                <div>
+                  <span>使用轮次</span>
+                  <strong>{{ asNumber(observeDetail.quality?.skillTurns ?? observeDetail.quality?.calls) }}</strong>
                 </div>
               </div>
             </article>
 
+            <ObserveAnalysisPanel
+              :analysis="observeDetail.analysis || null"
+              :loading="observeAnalysisLoading"
+              :refreshing="observeAnalysisRefreshing"
+              @open-session="openObserveSessionFromAnalysis"
+              @refresh="refreshObserveAnalysis"
+            />
+
             <div class="quality-two-col">
               <article class="panel quality-panel-block evidence-panel">
-                <h2>证据层级（按 Turn）</h2>
-                <p class="panel-hint">分母 = 计入该技能的 Turn（L1）。L4 为「正常使用」主指标。</p>
+                <h2>使用过程漏斗</h2>
+                <p class="panel-hint">分母是这一技能被用到的全部轮次。逐层看它在哪一步开始不顺。</p>
                 <ul v-if="observeDetail.quality?.evidence?.levels?.length" class="evidence-funnel">
                   <li v-for="level in observeDetail.quality.evidence.levels" :key="level.code">
                     <span class="evidence-code">{{ level.code }}</span>
@@ -2053,28 +2097,28 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                     <span class="evidence-hint">{{ level.hint }}</span>
                   </li>
                 </ul>
-                <p v-else class="empty">暂无证据层级数据。</p>
+                <p v-else class="empty">暂无使用过程数据。</p>
               </article>
               <article class="panel quality-panel-block">
-                <h2>诊断</h2>
+                <h2>一眼诊断</h2>
                 <ul class="quality-diagnosis">
+                  <li v-if="observeDetail.quality?.checklistCoverage !== undefined && observeDetail.quality.checklistCoverage >= 0 && observeDetail.quality.checklistCoverage < 0.8">
+                    执行完整度 {{ formatCoverage(observeDetail.quality?.checklistCoverage) }}：技能写的步骤没有全部做到
+                  </li>
+                  <li v-if="observeDetail.quality?.checklistCoverage !== undefined && observeDetail.quality.checklistCoverage < 0">
+                    这个技能没有可用的步骤清单，所以不做完整度评估（其余检查仍然有效）
+                  </li>
                   <li v-if="(observeDetail.quality?.reloadRate || 0) >= 0.1">
-                    重读率 {{ formatPercent(observeDetail.quality?.reloadRate) }} 偏高（{{ observeDetail.quality?.reloadTurns || observeDetail.quality?.reloadSessions || 0 }} 个 Turn 内重复载入）
+                    重复载入率 {{ formatPercent(observeDetail.quality?.reloadRate) }} 偏高（{{ observeDetail.quality?.reloadTurns || 0 }} 个轮次里重复读取）
                   </li>
                   <li v-if="observeDetail.quality?.reloadNote">
                     {{ observeDetail.quality.reloadNote }}
                   </li>
                   <li v-if="(observeDetail.quality?.errorRate || 0) > 0">
-                    错误率 {{ formatPercent(observeDetail.quality?.errorRate) }}，错误载入 {{ observeDetail.quality?.errors || 0 }} 次
+                    出错率 {{ formatPercent(observeDetail.quality?.errorRate) }}，共 {{ observeDetail.quality?.errors || 0 }} 次
                   </li>
-                  <li v-if="(observeDetail.quality?.loadCompleteRate || 0) < 0.9">
-                    载入完整率 {{ formatPercent(observeDetail.quality?.loadCompleteRate) }}，低于 90%
-                  </li>
-                  <li v-if="(observeDetail.quality?.progress || 0) < 0.33">
-                    推进偏弱（{{ observeDetail.quality?.progressLabel }}），载入后产出型步骤偏少
-                  </li>
-                  <li v-if="!(observeDetail.quality?.reloadRate || 0) && !(observeDetail.quality?.errorRate || 0) && (observeDetail.quality?.loadCompleteRate || 0) >= 0.9">
-                    当前样本质量稳定：一次载入为主、错误少
+                  <li v-if="(observeDetail.quality?.errorRate || 0) === 0 && (observeDetail.quality?.reloadRate || 0) === 0">
+                    没有出错，也没有重复载入，使用过程是顺畅的
                   </li>
                 </ul>
               </article>
@@ -2082,16 +2126,16 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 
             <article class="panel quality-panel-block">
               <h2>问题会话</h2>
-              <p class="panel-hint">负样本优先：错误 / 重读 / 未完整载入。点「链路」切到会话原文。</p>
+              <p class="panel-hint">把最容易出问题的会话排在前面：出错、重复载入、没有完整执行的优先。点「链路」看对话原文。</p>
               <table class="observe-quality-table">
                 <thead>
                   <tr>
                     <th>会话</th>
                     <th>开发工具</th>
                     <th>时间</th>
-                    <th>载入</th>
-                    <th>错误</th>
-                    <th>完整</th>
+                    <th>使用次数</th>
+                    <th>出错</th>
+                    <th>有后续动作</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -2102,7 +2146,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
                     <td>{{ formatObserveTime(session.started_at) }}</td>
                     <td class="num">{{ asNumber(session.loads) }}</td>
                     <td class="num" :class="{ warn: Number(session.errors) > 0 }">{{ asNumber(session.errors) }}</td>
-                    <td class="num" :class="{ warn: Number(session.complete_loads) === 0 }">{{ asNumber(session.complete_loads) }}</td>
+                    <td class="num" :class="{ warn: Number(session.followup_turns) === 0 }">{{ asNumber(session.followup_turns) }}</td>
                     <td>
                       <button
                         type="button"

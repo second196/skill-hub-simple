@@ -52,16 +52,24 @@ public class ObservationIngestService {
         int turnCount = 0;
         int stepCount = 0;
         int skipped = 0;
+        Map<String, Integer> skipReasons = new LinkedHashMap<String, Integer>();
+        List<String> skipDetails = new ArrayList<String>();
 
         for (Object sessionObj : asList(body.get("sessions"))) {
             Map<String, Object> session = asMap(sessionObj);
             String sessionKey = text(session, "sessionId", "session_id", "sessionKey", "session_key");
             if (isBlank(sessionKey)) {
                 skipped += 1;
+                countSkip(skipReasons, "missing-session-id");
                 continue;
             }
-            if (!sessionHasPublishedPlatformSkill(session, platform, publishedVersions, nameToSlug)) {
+            Qualification qualification = qualifySession(session, platform, publishedVersions, nameToSlug);
+            if (!qualification.qualified) {
                 skipped += 1;
+                countSkip(skipReasons, qualification.reason);
+                if (qualification.detail != null && skipDetails.size() < 20) {
+                    skipDetails.add(sessionKey.trim() + ": " + qualification.detail);
+                }
                 continue;
             }
             String clientName = text(session, "clientName", "client_name");
@@ -177,7 +185,81 @@ public class ObservationIngestService {
         result.put("turnCount", Integer.valueOf(turnCount));
         result.put("stepCount", Integer.valueOf(stepCount));
         result.put("skippedStepCount", Integer.valueOf(skipped));
+        result.put("skippedSessionCount", Integer.valueOf(skipped));
+        result.put("skipReasons", skipReasons);
+        result.put("skipDetails", skipDetails);
         return result;
+    }
+
+    private static void countSkip(Map<String, Integer> reasons, String reason) {
+        String key = reason == null ? "unknown" : reason;
+        Integer current = reasons.get(key);
+        reasons.put(key, Integer.valueOf(current == null ? 1 : current.intValue() + 1));
+    }
+
+    /**
+     * Upload qualification: at least one invoked skill must resolve to a platform skill
+     * <em>and</em> carry a version the platform has published.
+     *
+     * <p>A rejection carries the reason, because version is part of the observation
+     * identity: silently dropping whole sessions makes an unversioned skill package
+     * undiagnosable from the platform side.
+     */
+    private static final class Qualification {
+        static final Qualification OK = new Qualification(true, null, null);
+        final boolean qualified;
+        final String reason;
+        final String detail;
+
+        Qualification(boolean qualified, String reason, String detail) {
+            this.qualified = qualified;
+            this.reason = reason;
+            this.detail = detail;
+        }
+    }
+
+    private Qualification qualifySession(
+            Map<String, Object> session,
+            Map<String, String> platform,
+            Map<String, java.util.Set<String>> publishedVersions,
+            Map<String, String> nameToSlug
+    ) {
+        String currentSlug = null;
+        String platformSlugSeen = null;
+        String versionSeen = null;
+        boolean unversionedSeen = false;
+        for (Object turnObj : asList(session.get("turns"))) {
+            Map<String, Object> turn = asMap(turnObj);
+            for (Object stepObj : asList(turn.get("steps"))) {
+                Map<String, Object> step = asMap(stepObj);
+                String type = typeOf(step);
+                String resolved = resolveSlug(step, platform, nameToSlug, currentSlug);
+                if (resolved != null) currentSlug = resolved;
+                if (!"skill".equals(type) || resolved == null || !platform.containsKey(resolved)) continue;
+                platformSlugSeen = resolved;
+                String version = com.km.skillhub.skill.SkillVersions.normalizeVersionLabel(
+                        extractVersionField(step, "skillVersionLabel", "skill_version_label", "versionLabel", "version_label")
+                );
+                if (version == null) {
+                    unversionedSeen = true;
+                    continue;
+                }
+                versionSeen = version;
+                if (publishedVersions.getOrDefault(resolved, Collections.<String>emptySet())
+                        .contains(version.toLowerCase(Locale.ROOT))) {
+                    return Qualification.OK;
+                }
+            }
+        }
+        if (platformSlugSeen == null) {
+            return new Qualification(false, "no-platform-skill", null);
+        }
+        if (unversionedSeen) {
+            return new Qualification(false, "version-missing",
+                    "技能 " + platformSlugSeen + " 的步骤没有版本号，请给技能包的 SKILL.md 补 version 字段");
+        }
+        return new Qualification(false, "version-not-published",
+                "技能 " + platformSlugSeen + " 观测到版本 " + versionSeen + "，但平台未发布该版本");
     }
 
     private String extractVersionField(Map<String, Object> step, String... keys) {
@@ -200,26 +282,7 @@ public class ObservationIngestService {
             Map<String, java.util.Set<String>> publishedVersions,
             Map<String, String> nameToSlug
     ) {
-        String currentSlug = null;
-        for (Object turnObj : asList(session.get("turns"))) {
-            Map<String, Object> turn = asMap(turnObj);
-            for (Object stepObj : asList(turn.get("steps"))) {
-                Map<String, Object> step = asMap(stepObj);
-                String type = typeOf(step);
-                String resolved = resolveSlug(step, platform, nameToSlug, currentSlug);
-                if (resolved != null) currentSlug = resolved;
-                if ("skill".equals(type) && resolved != null && platform.containsKey(resolved)) {
-                    String version = com.km.skillhub.skill.SkillVersions.normalizeVersionLabel(
-                            extractVersionField(step, "skillVersionLabel", "skill_version_label", "versionLabel", "version_label")
-                    );
-                    if (version != null && publishedVersions.getOrDefault(resolved, Collections.emptySet())
-                            .contains(version.toLowerCase(Locale.ROOT))) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
+        return qualifySession(session, platform, publishedVersions, nameToSlug).qualified;
     }
 
     private static final java.util.regex.Pattern SEMVER =
