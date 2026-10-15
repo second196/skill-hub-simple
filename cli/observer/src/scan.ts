@@ -36,6 +36,11 @@ interface SkillActivation {
   parents: string[]
 }
 
+interface PendingCall {
+  event: ObservationEvent
+  startedAt: string
+}
+
 function createUsageTracker() {
   const skillEvents: SkillEventHandle[] = []
   const usageByTurnSkill = new Map<string, SkillTokenUsage>()
@@ -212,7 +217,7 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
     let currentSlug: string | undefined
     let currentName: string | undefined
     let currentActivation: SkillActivation | undefined
-    const pending = new Map<string, ObservationEvent>()
+    const pending = new Map<string, PendingCall>()
     const tracker = createUsageTracker()
     const fileEvents: ObservationEvent[] = []
     for (const entry of entries) {
@@ -321,7 +326,8 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
           seq += matchedEvents.length - 1
           tracker.rememberSkillEvents(matchedEvents, Math.max(turnIndex, 1))
           for (const event of matchedEvents) {
-            pending.set(callId, event)
+            event.payload.tool_id = callId
+            pending.set(callId, { event, startedAt: ts })
             fileEvents.push(event)
           }
           continue
@@ -341,9 +347,9 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
             ts,
             skillSlug: currentSlug,
             skillName: currentName,
-            payload: { path: documentPath, content: contentText || '' }
+            payload: { tool_id: callId, path: documentPath, content: contentText || '' }
           })
-          pending.set(callId, event)
+          pending.set(callId, { event, startedAt: ts })
           fileEvents.push(event)
           continue
         }
@@ -358,26 +364,25 @@ async function scanClaude(clientId: string, skills: InstalledSkill[], files: str
           ts,
           skillSlug: currentSlug,
           skillName: currentName,
-          payload: { name: toolName, args: input, result: '' }
+          payload: { tool_id: callId, name: toolName, args: input, result: '' }
         })
-        pending.set(callId, event)
+        pending.set(callId, { event, startedAt: ts })
         fileEvents.push(event)
       }
       if (role === 'user' && Array.isArray(content)) {
         for (const block of content) {
           const item = asRecord(block)
           if (item.type !== 'tool_result') continue
-          const event = pending.get(String(item.tool_use_id || ''))
-          if (!event) continue
+          const handle = pending.get(String(item.tool_use_id || ''))
+          if (!handle) continue
+          const event = handle.event
           const result = extractText(item.content ?? item)
           if (event.type === 'tool') event.payload.result = result
           if (event.type === 'document' && (!event.payload.content || String(event.payload.content).length < result.length)) {
             event.payload.content = result
           }
-          if (event.type === 'skill') {
-            event.payload.outcome = item.is_error ? 'error' : 'ok'
-            event.payload.result = result
-          }
+          if (event.type === 'skill') event.payload.result = result
+          applyResultMeta(event, handle.startedAt, ts, item.is_error === true)
         }
       }
     }
@@ -447,7 +452,7 @@ async function scanCodex(
     let currentSlug: string | undefined
     let currentName: string | undefined
     let currentActivation: SkillActivation | undefined
-    const pending = new Map<string, ObservationEvent>()
+    const pending = new Map<string, PendingCall>()
     const tracker = createUsageTracker()
     const fileEvents: ObservationEvent[] = []
     for (const entry of entries) {
@@ -555,7 +560,8 @@ async function scanCodex(
           seq += matchedEvents.length - 1
           tracker.rememberSkillEvents(matchedEvents, Math.max(turnIndex, 1))
           for (const event of matchedEvents) {
-            pending.set(callId, event)
+            event.payload.tool_id = callId
+            pending.set(callId, { event, startedAt: ts })
             fileEvents.push(event)
           }
           continue
@@ -575,9 +581,9 @@ async function scanCodex(
             ts,
             skillSlug: currentSlug,
             skillName: currentName,
-            payload: { path: documentPath, content: contentText || '' }
+            payload: { tool_id: callId, path: documentPath, content: contentText || '' }
           })
-          pending.set(callId, event)
+          pending.set(callId, { event, startedAt: ts })
           fileEvents.push(event)
           continue
         }
@@ -592,24 +598,23 @@ async function scanCodex(
           ts,
           skillSlug: currentSlug,
           skillName: currentName,
-          payload: { name, args, result: '' }
+          payload: { tool_id: callId, name, args, result: '' }
         })
-        pending.set(callId, event)
+        pending.set(callId, { event, startedAt: ts })
         fileEvents.push(event)
         continue
       }
       if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
-        const event = pending.get(String(payload.call_id || ''))
-        if (!event) continue
+        const handle = pending.get(String(payload.call_id || ''))
+        if (!handle) continue
+        const event = handle.event
         const result = typeof payload.output === 'string' ? sanitizeText(payload.output) : extractText(payload.output ?? payload)
         if (event.type === 'tool') event.payload.result = result
         if (event.type === 'document' && (!event.payload.content || String(event.payload.content).length < result.length)) {
           event.payload.content = result
         }
-        if (event.type === 'skill') {
-          event.payload.outcome = /error/i.test(result.slice(0, 80)) ? 'error' : 'ok'
-          event.payload.result = result
-        }
+        if (event.type === 'skill') event.payload.result = result
+        applyResultMeta(event, handle.startedAt, ts, codexErrorFlag(payload, result))
       }
     }
     tracker.applyUsage()
@@ -619,6 +624,64 @@ async function scanCodex(
     events.push(...fileEvents)
   }
   return events
+}
+
+function applyResultMeta(
+  event: ObservationEvent,
+  startedAt: string,
+  finishedAt: string,
+  structuredError: boolean | undefined
+): void {
+  const duration = durationMs(startedAt, finishedAt)
+  if (duration !== undefined) event.payload.duration_ms = duration
+  if (event.type !== 'skill') return
+  if (structuredError !== undefined) {
+    event.payload.error = structuredError
+    event.payload.outcome = structuredError ? 'error' : 'ok'
+  }
+}
+
+function durationMs(startedAt: string, finishedAt: string): number | undefined {
+  const start = Date.parse(startedAt)
+  const end = Date.parse(finishedAt)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return undefined
+  return end - start
+}
+
+function codexErrorFlag(payload: Record<string, unknown>, result: string): boolean {
+  const direct = firstBoolean(
+    payload.is_error,
+    payload.isError,
+    payload.error,
+    payload.success === false ? true : undefined
+  )
+  if (direct !== undefined) return direct
+  if (String(payload.status || payload.resultType || '').toLowerCase() === 'error') return true
+
+  const exitCode = firstNumber(payload.exit_code, payload.exitCode)
+  if (exitCode !== undefined) return exitCode !== 0
+  const output = asRecord(payload.output)
+  const nestedExitCode = firstNumber(output.exit_code, output.exitCode)
+  if (nestedExitCode !== undefined) return nestedExitCode !== 0
+
+  // Codex does not expose an is_error bit in current transcripts. Exit codes are still
+  // explicit and far less noisy than scanning arbitrary result text for "error".
+  const match = /^\s*Exit code:\s*(-?\d+)/i.exec(result)
+  return Boolean(match && Number(match[1]) !== 0)
+}
+
+function firstBoolean(...values: unknown[]): boolean | undefined {
+  for (const value of values) {
+    if (typeof value === 'boolean') return value
+  }
+  return undefined
+}
+
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+  }
+  return undefined
 }
 
 function skillUsageFromExplicit(name: string): SkillUsage | undefined {

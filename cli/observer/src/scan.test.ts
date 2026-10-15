@@ -427,6 +427,142 @@ test('does not match neighboring session ids by substring', () => {
   )
 })
 
+test('pairs tool results with structured error, tool id, and duration', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'skillhub-result-meta-'))
+  const previous = {
+    claude: process.env.SKILLHUB_CLAUDE_PROJECTS,
+    codex: process.env.SKILLHUB_CODEX_SESSIONS,
+    observability: process.env.SKILLHUB_OBSERVABILITY_DIR,
+    projectRoots: process.env.SKILLHUB_PROJECT_SKILL_ROOTS
+  }
+  try {
+    const project = join(root, 'proj')
+    const skillRoot = join(project, '.agents', 'skills')
+    const demoSkill = join(skillRoot, 'demo-skill')
+    await mkdir(demoSkill, { recursive: true })
+    await writeFile(join(demoSkill, 'SKILL.md'), '---\nname: demo-skill\n---\n# Demo\n', 'utf8')
+    const demoPath = join(demoSkill, 'SKILL.md').replace(/\\/g, '/')
+
+    const claudeRoot = join(root, 'claude')
+    const codexRoot = join(root, 'codex')
+    await mkdir(join(claudeRoot, 'proj'), { recursive: true })
+    await mkdir(join(codexRoot, '2026', '09', '25'), { recursive: true })
+
+    await writeFile(join(claudeRoot, 'proj', 'claude-fields.jsonl'), [
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'claude-fields',
+        timestamp: '2026-09-25T01:00:00.000Z',
+        message: { role: 'user', content: [{ type: 'text', text: 'run demo' }] }
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'claude-fields',
+        timestamp: '2026-09-25T01:00:01.000Z',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 't1', name: 'Skill', input: { skill: 'demo-skill' } }
+          ]
+        }
+      }),
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'claude-fields',
+        timestamp: '2026-09-25T01:00:01.500Z',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 't1', content: 'boom', is_error: true }]
+        }
+      })
+    ].join('\n') + '\n', 'utf8')
+
+    await writeFile(join(codexRoot, '2026', '09', '25', 'codex-fields.jsonl'), [
+      JSON.stringify({ timestamp: '2026-09-25T02:00:00.000Z', type: 'session_meta', payload: { id: 'codex-fields' } }),
+      JSON.stringify({
+        timestamp: '2026-09-25T02:00:01.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'run demo' }] }
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-25T02:00:02.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          name: 'shell_command',
+          call_id: 'c1',
+          arguments: JSON.stringify({ command: `Get-Content -Raw ${demoPath}` })
+        }
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-25T02:00:03.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'c1',
+          output: 'Exit code: 1\ncommand failed'
+        }
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-25T02:00:04.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          name: 'shell_command',
+          call_id: 'c2',
+          arguments: JSON.stringify({ command: 'echo ok' })
+        }
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-25T02:00:05.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'c2',
+          output: 'Exit code: 0\nok'
+        }
+      })
+    ].join('\n') + '\n', 'utf8')
+
+    process.env.SKILLHUB_CLAUDE_PROJECTS = claudeRoot
+    process.env.SKILLHUB_CODEX_SESSIONS = codexRoot
+    process.env.SKILLHUB_OBSERVABILITY_DIR = join(root, 'obs')
+    process.env.SKILLHUB_PROJECT_SKILL_ROOTS = skillRoot
+
+    const events = await scanAll()
+    const claudeSkill = events.find(
+      (event) => event.client_name === 'claude-code' && event.session_id === 'claude-fields' && event.type === 'skill'
+    )
+    assert.ok(claudeSkill)
+    assert.equal(claudeSkill.payload.tool_id, 't1')
+    assert.equal(claudeSkill.payload.error, true)
+    assert.equal(claudeSkill.payload.outcome, 'error')
+    assert.equal(claudeSkill.payload.duration_ms, 500)
+
+    const codexSkill = events.find(
+      (event) => event.client_name === 'codex' && event.session_id === 'codex-fields' && event.type === 'skill'
+    )
+    assert.ok(codexSkill)
+    assert.equal(codexSkill.payload.tool_id, 'c1')
+    assert.equal(codexSkill.payload.error, true)
+    assert.equal(codexSkill.payload.outcome, 'error')
+    assert.equal(codexSkill.payload.duration_ms, 1000)
+
+    const codexTool = events.find(
+      (event) => event.client_name === 'codex' && event.session_id === 'codex-fields' && event.type === 'tool'
+    )
+    assert.ok(codexTool)
+    assert.equal(codexTool.payload.tool_id, 'c2')
+    assert.equal(codexTool.payload.duration_ms, 1000)
+  } finally {
+    restoreEnv('SKILLHUB_CLAUDE_PROJECTS', previous.claude)
+    restoreEnv('SKILLHUB_CODEX_SESSIONS', previous.codex)
+    restoreEnv('SKILLHUB_OBSERVABILITY_DIR', previous.observability)
+    restoreEnv('SKILLHUB_PROJECT_SKILL_ROOTS', previous.projectRoots)
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name]
   else process.env[name] = value

@@ -153,8 +153,8 @@ flowchart TB
 | skill 内容是否执行完整 | 没有"预期步骤清单"，无法做"应做 vs 实做"比对 | 新增 `skill_contract`（§4.1、§5.1） |
 | 是否存在相似/冲突 skill | 没有跨 skill 的相似度与共现分析 | 新增离线 embedding + 共现矩阵（§5.5） |
 | 是否有更优执行链路 | 会话未按"任务意图"聚类，无法对比同类任务的路径成本 | 新增任务聚类 + 路径成本（§5.5） |
-| 执行耗时 | tool step 的 `duration_ms` 在采集端恒为 `undefined`（`scan.ts`） | 采集端补 `duration_ms`（§4.3，**未实现**） |
-| 真实错误 | Codex 端用 `/error/i` 只扫 result 前 80 字符，易误判 | 采集端补结构化 error 标志（§4.3，**未实现**） |
+| 执行耗时 | 已由采集端在 tool_use / tool_result 配对时写入 `duration_ms` | 已补齐（§4.3） |
+| 真实错误 | Claude 取结构化 `is_error`；Codex 取显式错误位与 `Exit code`，不再扫任意文本 | 已补齐（§4.3） |
 
 ### 3.3 现有指标评审（结论先行，详见 §7）
 
@@ -162,7 +162,7 @@ flowchart TB
 | --- | --- | --- |
 | calls / sessions / clients / trend | 保留 | 客观，衡量采用度 |
 | token 系列（input/cache/output/total/requests） | 保留 | 客观，衡量成本 |
-| errorRate | 修正 | Codex 端错误判定口径不稳（`scan.ts:589`） |
+| errorRate | 修正 | 已优先使用结构化 `error`，历史数据回退 `outcome='error'` |
 | reloadRate（重读率） | 降级为信号 | `≥2` 阈值会误伤合法重读，不参与合成分 |
 | loadCompleteRate（载入完整率） | **重定义** | 量的是 `match ∈ {file,path}`（触发方式），且把最规范的 `Skill` 工具调用（`match='call'`）判为"不完整"，方向反了（`ObservationRepository.java:387-388`） |
 | progress（推进） | **删除/统一** | 两处公式不一致：summary 用 `complete/calls*0.5 + 0.5*(1-error)`（`:400`），detail 用 `avgToolsAfter/3`（`:477`） |
@@ -237,11 +237,9 @@ CREATE TABLE skill_analysis (
 
 - `problem_rule`：`turnId`（命中规则的那个 turn）—— ✅
 - `coverage`：`turnId` —— ✅
-- `llm_verdict`：`turnId`（与 coverage/rule_hit 关联，避免重复调用 LLM）—— ⚠️ 未实现（L2 未接入）
-- `conflict`：`skill_pair`（如 `"a|b"` 排序后拼接）—— ⚠️ 未落库（冲突为每次请求实时计算）
-- `path_cost`：`task_cluster_id` —— ⚠️ 未落库（同上；且当前分组键是技能序列 `signature`，不是任务簇）
-
-当前实际写入 `skill_analysis` 的只有 `problem_rule` 与 `coverage` 两类。冲突与路线对比每次请求现算——它们只是 SQL 聚合，成本低，所以未做缓存。
+- `llm_verdict`：`turnId`（与 coverage/rule_hit 关联，避免重复调用 LLM）—— ✅ 已接入，缺省关闭模型时不写
+- `conflict`：`skill_pair`（如 `"a|b"` 排序后拼接）—— ✅ 已落库
+- `path_cost`：技能序列 `signature`（设计里写的是任务簇，当前实现按序列分组）—— ✅ 已落库
 
 落库的意义：检测是**旁路**，结果一旦算好即缓存，重复请求直接读表；也为报告提供可追溯的证据链。
 
@@ -252,22 +250,17 @@ CREATE TABLE skill_analysis (
 | 字段 | 取值 | 用途 |
 | --- | --- | --- |
 | `payload.version_missing` | 布尔：取不到包内 `version` 时为 `true` | 让版本缺失在采集侧显式可见，而非上传时静默丢弃（见 §E.3） |
+| `payload.duration_ms` | tool_use 与其 tool_result 的时间差（毫秒） | 路径耗时对比（G5） |
+| `payload.error` | 结构化布尔：Claude 取 `tool_result.is_error`；Codex 取显式错误位 / `Exit code` | 修正 errorRate（§7.1） |
+| `payload.tool_id` | 与结果配对的 call_id | 更准的耗时与配对 |
 
-**计划但未实现**（下表为设计意图，当前采集端仍写 `duration_ms: undefined`，且不产出 `error` / `tool_id`）：
-
-| 字段 | 位置 | 取值 | 用途 | 现状 |
-| --- | --- | --- | --- | --- |
-| `duration_ms` | skill step | tool_use 与其 tool_result 的时间差，取不到则省略 | 路径耗时对比（G5） | ❌ 未实现 |
-| `error` | skill step | 结构化布尔：Claude 取 `tool_result.is_error`，Codex 取 `function_call_output` 的结构化错误位，**不依赖文本正则** | 修正 errorRate（§7.1） | ❌ 未实现 |
-| `tool_id` | tool step | 与结果配对的 call_id | 更准的耗时与配对 | ❌ 未实现 |
-
-因此 §7.1 中 errorRate 的"改用结构化 error 字段"目前**尚未落地**，仍按 `outcome='error'` 计算。Claude 侧 `outcome` 已由结构化 `is_error` 判定（`scan.ts` 的 tool_result 回填），Codex 侧仍是文本启发式（`/error/i` 扫前 80 字符），误判风险未消除。
+Codex 旧版 transcript 没有 `is_error` 位，当前只认显式错误位与开头的 `Exit code`，不再对任意结果文本做 `/error/i` 扫描。
 
 ### 4.4 迁移与兼容
 
 - 两处新表通过 Flyway 迁移脚本落地：**`V11__skill_contract_and_analysis.sql`**（`skill_contract`、`skill_analysis` 及检测用索引）。
 - 新字段不进幂等键，不影响现有 `(clientId, sessionId, turnIndex, stepId)` 幂等。
-- 历史数据无 `error`/`duration_ms`：覆盖率与规则检测不受影响（依赖 `outcome`/`match`/`seq`）。
+- 历史数据无 `error`/`duration_ms`：错误率回退 `outcome`，覆盖率与规则检测不受影响（依赖 `match`/`seq`）。
 
 ---
 
@@ -275,7 +268,7 @@ CREATE TABLE skill_analysis (
 
 本章是方案主体。六个阶段（A–F），每阶段给出：输入、处理步骤、输出、伪代码/关键 SQL、成本与失败处理。
 
-> **实现状态提示**：本章同时包含**已实现**与**设计但未实现**的内容（尤其是涉及 LLM 的 §5.1 第 2 步、§5.4 整节、以及 §5.5 E2 embedding）。哪些落地、哪些没有，以**附录 D.2** 为准；实现状态表见 D.1。
+> **实现状态提示**：契约规则解析、L0/L1、E1/E3 为默认路径；LLM 契约补全、L2 复核、E2 embedding 已接入但缺省关闭。完整实现状态以**附录 D.2**为准，明细见 D.1。
 
 ### 5.1 阶段 A：契约提取（SKILL.md + 同包引用资源）
 
@@ -324,7 +317,7 @@ CREATE TABLE skill_analysis (
    - 产物模式：形如 `输出 xxx.md`、`生成 foo.json` 的语句提取文件名模式。
    - **置信度自评**：若步骤数 ≥ 1 且每个步骤都有 `title` 或 `keywords`，判定 `parse_method='rule'`，结束；否则进入第 2 步。
 
-2. **LLM 解析（一次性，每版本一次，平台侧）** ⚠️ **未实现**：
+2. **LLM 解析（一次性，每版本一次，平台侧）** ✅ 已接入（缺省关闭）：
    - 仅在规则解析置信度不足时触发。
    - 输入：合并后的 `SKILL.md + 引用资源`（总截断至 16k 字符，超限按 `SKILL.md > references > scripts > data` 优先级截断）+ 附录 C 的提取 prompt。
    - 输出：严格按附录 B schema 的 JSON。
@@ -391,7 +384,7 @@ CREATE TABLE skill_analysis (
 
 **边界**：契约步骤可能是**并行/可选**的（skill 允许任意顺序）。方案在 schema 里保留 `optional` 与 `parallel_group`（附录 B），`parallel_group` 相同的步骤不强制顺序——避免对"合法乱序"误报。
 
-### 5.4 阶段 D：L2 LLM 定向判定 ⚠️ 未实现（见 §D.2）
+### 5.4 阶段 D：L2 LLM 定向判定 ✅ 已接入（缺省关闭，见 §D.2）
 
 **端侧**：平台侧（后端 `ObservationAnalyzer`），CLI 不参与。需要同时访问全量观测数据与契约，且判定结果要落 `skill_analysis` 表供全局复用，故必须在后端。
 
@@ -428,7 +421,7 @@ CREATE TABLE skill_analysis (
   2. **分层代表**：去重后若仍有富余，按客户端分层各取代表，保证"平台/环境相关"的问题不被单一客户端淹没（例如某个 bug 只在 Windows 出现，抽样必须保留 Windows 样本）。
   3. **优先级截断**：按严重级别（P0 > P1 > P2）与 token 从高到低截断至 20。
 - **幂等与缓存**：结果落 `skill_analysis`（`analysis_type='llm_verdict'`），以 `turnId` 为 `scope_key` 全局唯一，**同 turn 只判一次**；`turnId` 天然含 `clientId` 前缀（见 §6.1），跨客户端不冲突、不重复。
-- 缺省**关闭**；设计上通过 `skillhub.analysis.llm.enabled` 开启（**该配置项未实现**，见 §D.2），无模型端点时自动跳过，仅回退 L0/L1 结论。
+- 缺省**关闭**；通过 `skillhub.analysis.llm.enabled=true` 加 `skillhub.analysis.llm.endpoint` 开启。无模型端点时自动跳过，仅回退 L0/L1 结论。
 
 **token 量级估算（假设 K 个客户端、每周期全局候选 turn 数 N）**：
 - L2 判定 token = **min(N, 20) × 每样本 ≤3k**（去重后），与 K 无关，只与"去重后的失败模式数"相关。
@@ -450,7 +443,7 @@ CREATE TABLE skill_analysis (
 **E2 相似度（相似 skill 候选）**：
 - 对 catalog 中每个 skill 的 `name + description + SKILL.md 首段`做 embedding（离线，一次，按 `(slug,version)` 缓存）。
 - 两两余弦相似度 Top-K，与 E1 结果交叉。
-- 说明：embedding 依赖模型端点，缺省关闭；未开启时退化为"name/slug 编辑距离 + description 关键词重叠"的弱相似度（0 token 兜底）。
+- 实现说明：已实现 0 token 词法 Jaccard 兜底，冲突报告返回 `similarity` / `jaccard`；开启模型端点后 `similarity` 改为 embedding 余弦，并在内存中按 slug 缓存。未开启时行为不变。
 
 **E3 路径成本（更优链路）**：
 - 任务聚类：用 `session_title` / `user_text` 首条（复用 `ObservationRepository` 已有的 `SESSION_TITLE_JOIN` 与 `cleanSessionTitleText`）聚类同类任务；embedding 可用时按 user_text 聚类，否则按标题关键词分桶。
@@ -510,7 +503,7 @@ CREATE TABLE skill_analysis (
 
 ### 6.4 数据质量与边界
 
-- **时序缺失/乱序**：step 按 `seq` 而非 `ts` 排序做序列分析（`ts` 仅用于展示；`duration_ms` 尚未采集，见 §4.3）。
+- **时序缺失/乱序**：step 按 `seq` 而非 `ts` 排序做序列分析；`ts` 用于展示，`duration_ms` 已在采集端补齐（见 §4.3）。
 - **超长内容**：已有 `sanitizeText`/`truncatePayloadValue`（后端 `SESSION_CHAIN_MAX_FIELD_CHARS=4000`），压缩输入而非全文。
 - **二进制/NUL**：已有 `ObservationPayloads.sanitize`（Java）与 `payload.ts`（TS）处理，契约解析复用其产物。
 - **脏数据**：`type` 非法值在 ingest 已抛错拒收（`ObservationIngestService.typeOf`），检测端对未知类型按 `tool` 兜底跳过。
@@ -532,7 +525,7 @@ CREATE TABLE skill_analysis (
 
 ### 6.7 误报/漏报控制
 
-- **两层架构天然控误报**：规则层追求**高召回**（宁可多标），LLM 复核追求**高精度**（确认/否决）。报告区分"疑似（L0/L1）"与"确认（LLM）"，人工只看确认 + 高严重疑似。**（L2 未实现，当前不区分，见 §D.2）**
+- **两层架构天然控误报**：规则层追求**高召回**（宁可多标），LLM 复核追求**高精度**（确认/否决）。报告区分"疑似（L0/L1）"与"确认（LLM）"，人工只看确认 + 高严重疑似。开启模型端点时，界面会单独呈现"模型复核过的回合"。
 - **父子归因去重**（§5.2 R4）：避免复合包父子被误判为冲突。
 - **合法乱序豁免**：契约 `parallel_group` 相同步骤不判 `order_violation`。
 - **阈值可配置**：覆盖率阈值、P95 分位、样本上限均配置化，按真实数据调参。
@@ -573,7 +566,7 @@ CREATE TABLE skill_analysis (
 | calls / sessions / clients / turnCount | 保留 | 采用度 |
 | trend（7 日） | 保留 | 趋势 |
 | token 系列（input/cache_read/cache_write/output/total/requests） | 保留 | 成本 |
-| errorRate | 待修正 | 计划改用结构化 `error` 字段；当前仍按 `outcome='error'` 计算（见 §4.3） |
+| errorRate | 已修正 | 优先使用结构化 `error` 字段；历史数据回退 `outcome='error'`（见 §4.3） |
 | reloadRate / reloadTurns | 降级为信号 | 保留展示，但不进任何合成指标 |
 | loadCompleteRate（载入完整率） | 重定义 | 已改为"触发方式分布"（`triggerCounts`：call/file/path/text 占比），不再冒充"完整率" |
 | progress（推进） | 删除 | 两处公式不一致，且可被覆盖率替代 |
@@ -612,17 +605,19 @@ checklistCoverage = 命中的非 optional 契约步骤数 / 非 optional 契约�
 | --- | --- | --- | --- |
 | GET | `/skills/{slug}/analysis` | 该 skill 的优化报告；`?version=` 指定版本，`?refresh=true` 强制重算并直写缓存 | 报告对象（`contract` / `summary` / `problems` / `coverage` / `conflicts` / `paths` / `suggestions`，见 §8.2） |
 | GET | `/skills/{slug}/contract` | 查看/调试该 skill 的期望步骤清单；`?refresh=true` 重新解析 | `{hasContract, stepCount, parseMethod, steps[]}` |
-| GET | `/analysis/conflicts` | 技能互干扰；`?slug=` 限定单个技能 | `{pairs: [{a, b, cooccur, otherTurns, share, suggestion}]}` |
-| GET | `/analysis/paths` | 执行路线对比；`?slug=`（必填） | `{slug, paths: [{signature, sessionCount, medianTokens, medianSteps, note?}]}` |
+| GET | `/analysis/conflicts` | 技能互干扰；`?slug=` 限定单个技能 | `{pairs: [{a, b, cooccur, otherTurns, share, similarity, jaccard, suggestion}]}` |
+| GET | `/analysis/paths` | 执行路线对比；`?slug=`（必填） | `{slug, paths: [{signature, sessionCount, medianTokens, medianSteps, medianDurationMs, note?}]}` |
 | GET | `/skills/{slug}` | 在原技能详情上增加 `analysis` 字段（与上表第一个接口同结构） | 原有结构 + `analysis` |
+| POST | `/skills/{slug}/analyze` | 异步触发分析并立即返回 `jobId`；`?version=` 指定版本 | `{jobId, status}` |
+| GET | `/analysis/jobs/{jobId}` | 查询异步分析状态与结果 | `{jobId, status, result?}` |
 
 **计划但未实现**：
 
 | 方法 | 路径 | 设计意图 |
 | --- | --- | --- |
-| POST | `/skills/{slug}/analyze` | 异步触发分析并返回 `jobId`。当前分析在 `GET /skills/{slug}/analysis` 内同步完成，没有 job 概念 |
+| 持久化 job 队列 | - | job 目前是内存态，不跨进程重启持久化 |
 
-说明：`paths` 返回的是"技能触发序列"分组（`signature`），不是任务簇（`clusters`）；`conflicts` 目前只算共现与占比（`cooccur` / `share`），不含 embedding 相似度（`jaccard` / `similarity`，属 §5.5 E2，未实现）。`medianDurationMs` 不可用，因为 `duration_ms` 尚未采集（§4.3）。
+说明：`paths` 返回的是"技能触发序列"分组（`signature`），不是任务簇（`clusters`）。`conflicts` 现在同时给出词法 `jaccard` 与 `similarity`；开启 embedding 后 `similarity` 改为语义余弦，缺省关闭时仍返回词法兜底。`medianDurationMs` 已可返回，历史数据没有 `duration_ms` 的路径此项为 0，前端显示为 `—`。
 
 ### 8.2 报告结构（单 skill `analysis` 区块 JSON 骨架）
 
@@ -669,7 +664,7 @@ checklistCoverage = 命中的非 optional 契约步骤数 / 非 optional 契约�
 | 契约解析不准（规则解析误提取步骤） | 覆盖率失真 | 规则解析带置信度，低置信走 LLM；`parallel_group` 豁免合法乱序；契约提供调试接口供人工校准 |
 | LLM 判定幻觉 | 误报"冲突/遗漏" | L2 只做封闭式判定 + 强制 JSON schema + 证据回填；结论可回查原文，人工终审 |
 | 父子归因错误导致误判冲突 | 复合包被拆成冲突 | 复用 `catalog.ts` 父子映射；R4 显式排除父子；E1 同样去重 |
-| 旧数据缺 `error`/`duration_ms` | 该两项字段本身未实现，不构成影响 | 覆盖率与规则检测依赖 `outcome`/`match`/`seq`，与这两项无关 |
+| 旧数据缺 `error`/`duration_ms` | 历史回合的这两项无法回填 | 错误率回退 `outcome`，耗时显示 `—`；覆盖率与规则检测依赖 `match`/`seq`，不受影响 |
 | LLM/embedding 成本失控 | 超预算 | 配额 + 熔断 + 样本上限 + 缺省关闭（§6.6） |
 | 检测延迟拖慢指标页 | 体验下降 | 结果落 `skill_analysis` 缓存；`skillDetail` 读缓存优先；重算走异步（§6.6） |
 | 隐私泄漏到外部模型 | 合规风险 | 默认关闭外部调用；开启时强制脱敏（§6.5） |
@@ -772,16 +767,20 @@ checklistCoverage = 命中的非 optional 契约步骤数 / 非 optional 契约�
 | §4.1 `skill_contract` 表 | `db/migration/V11__skill_contract_and_analysis.sql` | ✅ 已在真实 PostgreSQL 16 上执行通过 |
 | §4.2 `skill_analysis` 表 | 同上 | ✅ |
 | §4.2 检测用索引 | 同上（`turn_id,seq` / `skill_slug,type`） | ✅ |
+| §4.3 采集端字段（`duration_ms` / `error` / `tool_id`） | `cli/observer/src/scan.ts` | ✅ 含配对单测 |
 | §5.1 契约提取（引用驱动） | `analysis/SkillContractExtractor.java` | ✅ 规则解析；7 个单元测试覆盖自包含 / 引用资源 / 复合包 / 失败降级 / 多行 frontmatter |
 | §5.1 契约缓存 | `analysis/SkillContractRepository.java`、`ObservationAnalyzer.ensureContract` | ✅ 已发布版本不可变，存在即复用 |
+| §5.1 / §5.4 LLM 契约补全、L2 复核 | `analysis/AnalysisModelClient.java`、`ObservationAnalyzer` | ✅ 可配置、缺省关闭；含脱敏/预算/熔断/异步采样单测 |
 | §5.2 L0 规则 R1–R9 | `analysis/ObservationAnalyzer.java` | ✅ 全部实现；R1/R2/R3/R4/R6/R7/R8 在真实数据上已观察到触发，R9 在版本落后时触发，R5 依赖分位阈值、仅在长尾回合触发 |
 | §5.3 L1 覆盖率比对 | 同上（`coverageOf`） | ✅ 子序列匹配、`optional` 跳过、`parallel_group` 豁免乱序 |
-| §5.5 E1 共现冲突 | `ObservationAnalyzer.allConflicts` | ✅ 父子归因折叠，阈值 2 轮 |
-| §5.5 E3 链路成本对比 | `ObservationAnalyzer.pathsFor` | ✅ 按技能序列分组，中位数对比，标注最省路线 |
+| §5.5 E1 共现冲突 | `ObservationAnalyzer.allConflicts` | ✅ 父子归因折叠，阈值 2 轮；结果落 `skill_analysis` |
+| §5.5 E2 相似度 | 同上 | ✅ 缺省词法 Jaccard；开启模型端点后走 embedding 余弦 |
+| §5.5 E3 链路成本对比 | `ObservationAnalyzer.pathsFor` | ✅ 按技能序列分组，`medianTokens` / `medianSteps` / `medianDurationMs` 对比，标注最省路线；结果落库 |
 | §5.6 报告与修改建议 | `ObservationAnalyzer.buildSuggestions` | ✅ 每类发现绑定一条具体修改建议 |
 | §6.3 失败降级 | `ObservationController.safeAnalysis`、`ObservationAnalyzer.persist` | ✅ 分析失败不影响采集与指标页 |
+| §6.6 LLM 配额与熔断 | `AnalysisModelClient` | ✅ 全局日预算、并发 2、失败后 24h 熔断 |
 | §7 指标重构 | `ObservationRepository` | ✅ 删除 `healthScore`/`progress`/`loadCompleteRate`，新增 `checklistCoverage`、`triggerCounts`，重定义漏斗 L1–L4 |
-| §8.1 API | `ObservationController` | ✅ 4 个新接口 + `GET /skills/{slug}` 增加 `analysis` 字段，见下方列表 |
+| §8.1 API | `ObservationController`、`AnalysisJobService` | ✅ 同步报告/契约/冲突/路线 + 异步 job 接口 |
 | 界面（通俗文案） | `components/ObserveAnalysisPanel.vue`、`App.vue`、`ObserveMetricsPanel.vue` | ✅ 已在浏览器中逐屏核对 |
 
 新增接口（均在 `/api/observations` 下）：
@@ -790,31 +789,28 @@ checklistCoverage = 命中的非 optional 契约步骤数 / 非 optional 契约�
 - `GET /skills/{slug}/contract` —— 期望步骤清单（调试用）
 - `GET /analysis/conflicts` —— 技能互干扰（`?slug=` 限定单个技能）
 - `GET /analysis/paths?slug=` —— 执行路线对比
+- `POST /skills/{slug}/analyze` —— 异步触发分析并返回 `jobId`
+- `GET /analysis/jobs/{jobId}` —— 查询异步分析结果
 - `GET /skills/{slug}` —— 在原技能详情上增加 `analysis` 字段
 
 ### D.2 有意未接入或未实现的能力
 
-**一、依赖外部模型的两处**（§5.1 的 LLM 契约解析、§5.4 的 L2 LLM 定向判定）**未接入实际模型调用**，原因是本仓库没有可用的模型端点，写了也无法验证，属于未完成的猜测代码。方案里提到的 `skillhub.analysis.llm.enabled` 配置项**并不存在**（`application.yml` 无 analysis 配置段）。当前状态：
+**一、依赖外部模型的能力已接入但缺省关闭**（§5.1 的 LLM 契约解析、§5.4 的 L2 LLM 定向判定、§5.5 E2 的 embedding）。`application.yml` 已新增 `skillhub.analysis.*` 配置段；开启 `skillhub.analysis.llm.enabled=true` 并配置 `endpoint`（OpenAI 兼容）后生效。由于本仓库当前没有可用模型端点，端到端效果未在真实模型上验证；代码路径已有脱敏、样本上限、并发限制、每日预算、失败熔断与缓存。未开启时行为与之前一致：只输出 L0/L1 结论。
 
-- 契约解析在规则置信度不足时直接落 `parse_method='failed'` 并记录原因；**不影响**其余检测（规则检测、覆盖率之外的指标照常工作）。
-- L2 判定未实现，报告只输出 L0/L1 的结论；因此 §6.7 所说"区分疑似与确认"在界面上尚不成立，界面统一按"发现的问题"呈现。
+**二、仍然未落地的机制**：
 
-需要接入时，扩展点在 `SkillContractExtractor.extract`（契约补全）与 `ObservationAnalyzer` 的规则循环（样本判定），两者都已把输入压缩与结构化输出准备好（附录 B / C），接入后按 §6.6 的全局配额与去重约束执行即可。
+- `POST /skills/{slug}/analyze` 的 job 为**内存态**，进程重启即丢失；未做持久化队列。
+- `skill_analysis.scope_key` 仍未纳入 payload 摘要，reconcile 使 payload 变长后不会自动重算，需 `?refresh=true`。
+- `observation_step` 的分区与保留策略仍属设计说明，未建分区/清理任务。
+- 任务簇聚类（按 session_title / user_text 做同类任务聚类）未实现；当前路径分组键仍是技能序列 `signature`。
 
-**二、采集端字段补充**（§4.3 的 `duration_ms`、`error`、`tool_id`）**未实现**。实际只补了 `version_missing` 标记。连带影响：
-
-- errorRate 仍按 `outcome='error'` 计算，Codex 侧的文本启发式误判风险未消除（§7.1）。
-- 执行路线对比只有 token 与步骤数，没有耗时（§5.5 E3、§8.1）。
-
-**三、embedding 相似度**（§5.5 E2）**未实现**，冲突报告只有共现次数与占比，没有语义相似度，因此"职责重叠"的判断依据偏弱。
-
-**四、以下为设计说明、未落地的机制**：`POST /skills/{slug}/analyze` 的异步 `jobId`（§8.1）、`skill_analysis.scope_key` 纳入 payload 摘要以自动重算（§6.4）、`observation_step` 分区与保留策略（§6.9）、§6.7 所说"覆盖率阈值 / P95 分位 / 样本上限可配置"（当前为代码内常量）。
+**三、已补齐的字段**：`duration_ms`、结构化 `error`、`tool_id` 已在采集端落地，后端 errorRate 与路径耗时已联动。历史数据没有这些字段时会自动回退旧口径。
 
 ### D.3 验证方式
 
-- 后端：`mvn test`，41 个测试全绿（含 7 个新增契约提取测试）。
+- 后端：`mvn test` 全绿（含 7 个契约提取测试、模型客户端测试、异步 job 测试）。
 - 前端：`npm run build`（`vue-tsc --noEmit && vite build`）通过。
-- 采集端：`npm test`，52 个测试全绿。
+- 采集端：`npm test`，53 个测试全绿（含新增 result-meta 配对测试）。
 - 端到端：在**独立的一次性数据库**上跑完整迁移（V1–V11），上传技能、灌入构造会话，逐个核对规则、覆盖率、冲突、路线、建议的输出，并在浏览器中核对界面。
 - 真实数据：清空观测数据后用真实会话重扫，`using-product-development` 704 步 / `superpowers` 330 步 / `ui-ux-pro-max` 78 步全部带版本入库，完整度分别为 41% / 64% / 53%。
   （上列为该次验证时的数据状态；此后平台技能与版本被调整过，当前库中的数值与技能数量已不同，属正常。）

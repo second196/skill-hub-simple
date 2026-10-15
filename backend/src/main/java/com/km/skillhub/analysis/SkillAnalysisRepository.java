@@ -109,6 +109,20 @@ public class SkillAnalysisRepository {
         return value == null ? 0 : value.intValue();
     }
 
+    public int countRecent(String slug, String versionLabel, String type, int days) {
+        try {
+            int window = days <= 0 ? 7 : days;
+            Integer value = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM skill_analysis " +
+                            "WHERE slug=? AND version_label=? AND analysis_type=? " +
+                            "AND created_at >= CURRENT_TIMESTAMP - INTERVAL '" + window + " days'",
+                    Integer.class, slug, nullToEmpty(versionLabel), type);
+            return value == null ? 0 : value.intValue();
+        } catch (RuntimeException ex) {
+            return 0;
+        }
+    }
+
     private Object parseJson(Object value) {
         if (value == null) return null;
         String raw;

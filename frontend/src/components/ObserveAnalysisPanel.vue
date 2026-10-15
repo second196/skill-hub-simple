@@ -41,6 +41,14 @@ function fmtTokens(value: unknown): string {
   return n.toLocaleString('zh-CN')
 }
 
+function fmtDuration(value: unknown): string {
+  const n = Math.round(num(value))
+  if (n <= 0) return '—'
+  if (n < 1000) return `${n} ms`
+  if (n < 60_000) return `${(n / 1000).toFixed(1)} s`
+  return `${Math.floor(n / 60_000)}m ${Math.round((n % 60_000) / 1000)}s`
+}
+
 function percent(value: unknown): string {
   return `${Math.round(num(value) * 100)}%`
 }
@@ -50,6 +58,14 @@ const coverage = computed(() => props.analysis?.coverage || null)
 const suggestions = computed<AnalysisSuggestion[]>(() => props.analysis?.suggestions || [])
 const conflicts = computed(() => props.analysis?.conflicts || [])
 const paths = computed(() => props.analysis?.paths || [])
+const llmVerdicts = computed(() => props.analysis?.llmVerdicts || [])
+
+const VERDICT_LABELS: Record<string, string> = {
+  complete: '完整执行',
+  partial: '部分执行',
+  failed: '执行失败',
+  conflicted: '存在冲突'
+}
 
 /** 完整度：-1 表示还没法评估（技能没有可用的步骤清单） */
 const coverageValue = computed(() => {
@@ -227,6 +243,23 @@ const degraded = computed(() => Boolean(props.analysis?.degraded))
         </article>
       </div>
 
+      <article v-if="llmVerdicts.length" class="panel analysis-block">
+        <div class="block-head">
+          <h3>模型复核过的回合</h3>
+          <span class="count-chip">{{ llmVerdicts.length }} 轮</span>
+        </div>
+        <ul class="problem-items">
+          <li v-for="verdict in llmVerdicts" :key="verdict.turnId">
+            <p class="problem-detail">
+              第 {{ verdict.turnId }} 轮：{{ VERDICT_LABELS[verdict.verdict] || verdict.verdict }}
+              <span v-if="verdict.confidence != null">（置信度 {{ percent(verdict.confidence) }}）</span>
+            </p>
+            <p v-if="verdict.missedSteps?.length" class="block-hint">遗漏步骤：{{ verdict.missedSteps.join('、') }}</p>
+            <p v-if="verdict.evidence?.length" class="block-hint">证据：{{ verdict.evidence.join('；') }}</p>
+          </li>
+        </ul>
+      </article>
+
       <article v-if="conflicts.length" class="panel analysis-block">
         <div class="block-head">
           <h3>可能与其它技能互相干扰</h3>
@@ -239,6 +272,7 @@ const degraded = computed(() => Boolean(props.analysis?.degraded))
               <th>技能组合</th>
               <th>一起出现</th>
               <th>占比</th>
+              <th>相似度</th>
               <th>建议</th>
             </tr>
           </thead>
@@ -251,6 +285,7 @@ const degraded = computed(() => Boolean(props.analysis?.degraded))
               </td>
               <td class="num">{{ fmtCount(item.cooccur) }} 轮</td>
               <td class="num">{{ percent(item.share) }}</td>
+              <td class="num">{{ item.similarity == null ? '—' : percent(item.similarity) }}</td>
               <td class="suggestion-cell">{{ item.suggestion }}</td>
             </tr>
           </tbody>
@@ -269,6 +304,7 @@ const degraded = computed(() => Boolean(props.analysis?.degraded))
               <th>路线</th>
               <th>用过次数</th>
               <th>平均消耗</th>
+              <th>平均耗时</th>
               <th>平均步骤</th>
             </tr>
           </thead>
@@ -280,6 +316,7 @@ const degraded = computed(() => Boolean(props.analysis?.degraded))
               </td>
               <td class="num">{{ fmtCount(item.sessionCount) }}</td>
               <td class="num">{{ fmtTokens(item.medianTokens) }} tokens</td>
+              <td class="num">{{ fmtDuration(item.medianDurationMs) }}</td>
               <td class="num">{{ fmtCount(item.medianSteps) }}</td>
             </tr>
           </tbody>

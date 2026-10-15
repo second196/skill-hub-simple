@@ -3,6 +3,7 @@ package com.km.skillhub.analysis;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.km.skillhub.observation.ObservationRepository;
 import org.postgresql.util.PGobject;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -17,7 +18,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
@@ -34,25 +37,58 @@ import java.util.regex.Pattern;
 @Service
 public class ObservationAnalyzer {
 
-    private static final int MAX_TURNS = 200;
-    private static final int MAX_SESSIONS_FOR_PATHS = 100;
-    private static final double COVERAGE_WARN_THRESHOLD = 0.8d;
-
     /** Composite parents group sub-skills; they are containers, not competing skills. */
     private static final Set<String> COMPOSITE_PARENTS = new HashSet<String>(
             Arrays.asList("using-product-development", "superpowers"));
+
+    private static final String CONTRACT_SYSTEM_PROMPT =
+            "你是 skill 契约提取器。请把 SKILL.md 和引用资源整理成预期执行清单，"
+                    + "只输出 JSON，字段用 camelCase：{\"steps\":[{\"id\":\"s1\",\"title\":\"\","
+                    + "\"description\":\"\",\"keywords\":[],\"expectedTools\":[],\"expectedArtifacts\":[],"
+                    + "\"optional\":false,\"parallelGroup\":null}],\"triggers\":[],\"forbidden\":[],\"entryCommands\":[]}。"
+                    + "没有可执行步骤时输出 {\"steps\":[]}。";
+
+    private static final String VERDICT_SYSTEM_PROMPT =
+            "你是 skill 执行质量判定器。给定契约摘要和回合动作摘要，只输出 JSON："
+                    + "{\"verdict\":\"complete|partial|failed|conflicted\",\"missedSteps\":[],"
+                    + "\"extraneousActions\":[],\"conflictWith\":[],\"evidence\":[],\"confidence\":0.0}。";
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final SkillContractRepository contracts;
     private final SkillAnalysisRepository analyses;
+    private final AnalysisModelClient modelClient;
+    private final int maxTurns;
+    private final int maxSessionsForPaths;
+    private final double coverageWarnThreshold;
+    private final int conflictMinTurns;
+    private final int maxLlmSamples;
+    private final double llmCoverageThreshold;
+    private final double p95Quantile;
+    private final Map<String, List<Float>> embeddingCache = new ConcurrentHashMap<String, List<Float>>();
 
     public ObservationAnalyzer(JdbcTemplate jdbc, ObjectMapper mapper,
-                               SkillContractRepository contracts, SkillAnalysisRepository analyses) {
+                               SkillContractRepository contracts, SkillAnalysisRepository analyses,
+                               AnalysisModelClient modelClient,
+                               @Value("${skillhub.analysis.max-turns:200}") int maxTurns,
+                               @Value("${skillhub.analysis.max-sessions-for-paths:100}") int maxSessionsForPaths,
+                               @Value("${skillhub.analysis.coverage-warn-threshold:0.8}") double coverageWarnThreshold,
+                               @Value("${skillhub.analysis.conflict-min-turns:2}") int conflictMinTurns,
+                               @Value("${skillhub.analysis.llm.sample-limit:20}") int maxLlmSamples,
+                               @Value("${skillhub.analysis.llm.coverage-threshold:0.6}") double llmCoverageThreshold,
+                               @Value("${skillhub.analysis.p95-quantile:0.95}") double p95Quantile) {
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.contracts = contracts;
         this.analyses = analyses;
+        this.modelClient = modelClient;
+        this.maxTurns = maxTurns;
+        this.maxSessionsForPaths = maxSessionsForPaths;
+        this.coverageWarnThreshold = coverageWarnThreshold;
+        this.conflictMinTurns = conflictMinTurns;
+        this.maxLlmSamples = maxLlmSamples;
+        this.llmCoverageThreshold = llmCoverageThreshold;
+        this.p95Quantile = p95Quantile;
     }
 
     // ------------------------------------------------------------- contract
@@ -77,8 +113,39 @@ public class ObservationAnalyzer {
 
         SkillContractExtractor extractor = new SkillContractExtractor();
         SkillContractExtractor.Result result = extractor.extract(files);
+        if (modelClient.isEnabled() && !"rule".equals(result.getParseMethod())) {
+            extractContractWithModel(slug, files, result);
+        }
         contracts.upsert(slug, version, result);
         return contracts.findContract(slug, version);
+    }
+
+    /** Optional fallback when the rule parser cannot produce a checklist. */
+    private void extractContractWithModel(String slug, List<SkillContractExtractor.Source> files,
+                                          SkillContractExtractor.Result result) {
+        try {
+            StringBuilder input = new StringBuilder();
+            for (SkillContractExtractor.Source file : files) {
+                if (input.length() > 16000) break;
+                input.append("\n--- ").append(file.getPath()).append(" ---\n")
+                        .append(cap(file.getContent(), 6000));
+            }
+            String json = modelClient.chat(slug, CONTRACT_SYSTEM_PROMPT, input.toString()).orElse(null);
+            if (json == null) json = modelClient.chat(slug, CONTRACT_SYSTEM_PROMPT, input.toString()).orElse(null);
+            if (json == null) return;
+            Map<String, Object> root = mapper.readValue(extractJsonObject(json), Map.class);
+            SkillContract contract = contractFromJson(root);
+            if (contract == null || contract.getSteps().isEmpty()) return;
+            result.setContract(contract);
+            result.setParseMethod("llm");
+            result.getMeta().put("confidence", Double.valueOf(0.7d));
+            result.getMeta().put("model", "configured");
+            result.getMeta().remove("error");
+        } catch (RuntimeException ex) {
+            result.getMeta().put("llm_error", ex.getMessage());
+        } catch (Exception ex) {
+            result.getMeta().put("llm_error", ex.getMessage());
+        }
     }
 
     /** Blank and "all" resolve to the newest published version. */
@@ -116,13 +183,18 @@ public class ObservationAnalyzer {
         List<Map<String, Object>> problems = new ArrayList<Map<String, Object>>();
         List<Map<String, Object>> coverageRows = new ArrayList<Map<String, Object>>();
 
-        long tokenP95 = percentile(collectTurnTokens(turns, slug), 0.95);
-        long stepP95 = percentile(collectTurnStepCounts(turns), 0.95);
+        long tokenP95 = percentile(collectTurnTokens(turns, slug), p95Quantile);
+        long stepP95 = percentile(collectTurnStepCounts(turns), p95Quantile);
 
         Map<String, Integer> missedCount = new LinkedHashMap<String, Integer>();
         int deviationTotal = 0;
         int coveredTurns = 0;
         double coverageSum = 0d;
+        List<Map<String, Object>> llmVerdicts = new ArrayList<Map<String, Object>>();
+        List<LlmCandidate> llmCandidates = new ArrayList<LlmCandidate>();
+        int llmBudget = modelClient.isEnabled()
+                ? Math.max(0, maxLlmSamples - analyses.countRecent(slug, version, SkillAnalysisRepository.TYPE_VERDICT, 7))
+                : 0;
 
         for (TurnData turn : turns) {
             List<StepRow> skillSteps = skillStepsOf(turn, slug);
@@ -130,7 +202,7 @@ public class ObservationAnalyzer {
 
             // R1 — the skill call itself failed.
             for (StepRow step : skillSteps) {
-                if ("error".equalsIgnoreCase(stringOf(step.payload.get("outcome"), ""))) {
+                if (isErrorStep(step)) {
                     problems.add(problem("R1", "载入报错", "P0", turn,
                             "载入技能时报错，后面的步骤没能继续"));
                     break;
@@ -201,6 +273,16 @@ public class ObservationAnalyzer {
                             "做了 " + row.get("deviationCount") + " 个技能里没有提到的操作"));
                 }
             }
+
+            if (llmBudget > 0 && shouldReview(turn, problems, coverageRows)) {
+                llmCandidates.add(new LlmCandidate(turn, severityOf(turn, problems, coverageRows),
+                        failurePatternOf(turn, problems, coverageRows)));
+            }
+        }
+
+        for (LlmCandidate candidate : selectLlmSamples(llmCandidates, llmBudget)) {
+            Map<String, Object> verdict = llmVerdictOf(slug, version, candidate.turn, steps);
+            if (verdict != null) llmVerdicts.add(verdict);
         }
 
         // R9 — the user is running an older version than the platform's newest.
@@ -217,9 +299,11 @@ public class ObservationAnalyzer {
         report.put("coverage", buildCoverage(checklistCoverage, steps, missedCount, coverageRows));
         report.put("conflicts", conflictsFor(slug));
         report.put("paths", pathsFor(slug));
+        report.put("llmVerdicts", llmVerdicts);
         report.put("suggestions", buildSuggestions(problems, checklistCoverage, steps, missedCount));
 
         persist(slug, version, problems, coverageRows, checklistCoverage);
+        persistAggregates(slug, version);
         return report;
     }
 
@@ -393,6 +477,195 @@ public class ObservationAnalyzer {
         return false;
     }
 
+    // ------------------------------------------------------------------ LLM (optional)
+
+    /** Only flagged turns are worth a model call: P0/P1 findings or low coverage. */
+    private boolean shouldReview(TurnData turn, List<Map<String, Object>> problems,
+                                  List<Map<String, Object>> coverageRows) {
+        String severity = severityOf(turn, problems, coverageRows);
+        return "P0".equals(severity) || "P1".equals(severity);
+    }
+
+    /** Highest severity attached to this turn, or null when nothing was flagged. */
+    private String severityOf(TurnData turn, List<Map<String, Object>> problems,
+                              List<Map<String, Object>> coverageRows) {
+        String best = null;
+        for (Map<String, Object> problem : problems) {
+            if (longOf(problem.get("turnId")) != turn.turnId) continue;
+            String severity = stringOf(problem.get("severity"), "");
+            if (best == null || severityRank(severity) < severityRank(best)) best = severity;
+        }
+        for (int i = coverageRows.size() - 1; i >= 0; i--) {
+            Map<String, Object> row = coverageRows.get(i);
+            if (longOf(row.get("turnId")) != turn.turnId) continue;
+            double coverage = doubleOf(row.get("checklistCoverage"), -1d);
+            if (coverage >= 0 && coverage < llmCoverageThreshold) return "P1";
+            break;
+        }
+        return best;
+    }
+
+    private static int severityRank(String severity) {
+        if ("P0".equals(severity)) return 0;
+        if ("P1".equals(severity)) return 1;
+        if ("P2".equals(severity)) return 2;
+        return 3;
+    }
+
+    /** Failed-mode key: same rule + same missing steps counts as one pattern. */
+    private String failurePatternOf(TurnData turn, List<Map<String, Object>> problems,
+                                    List<Map<String, Object>> coverageRows) {
+        StringBuilder pattern = new StringBuilder();
+        for (Map<String, Object> problem : problems) {
+            if (longOf(problem.get("turnId")) != turn.turnId) continue;
+            pattern.append(stringOf(problem.get("ruleId"), "")).append('|');
+        }
+        for (Map<String, Object> row : coverageRows) {
+            if (longOf(row.get("turnId")) != turn.turnId) continue;
+            @SuppressWarnings("unchecked")
+            List<String> missing = (List<String>) row.get("missedTitles");
+            if (missing != null) pattern.append(String.join(",", missing));
+            break;
+        }
+        return pattern.toString();
+    }
+
+    /** Dedupe by failure mode, then keep one representative per client, then truncate. */
+    private List<LlmCandidate> selectLlmSamples(List<LlmCandidate> candidates, int limit) {
+        // One representative per (pattern, client). A pattern that only happens on one
+        // client is kept; identical failures across clients collapse to one entry first.
+        Map<String, LlmCandidate> byPatternClient = new LinkedHashMap<String, LlmCandidate>();
+        for (LlmCandidate candidate : candidates) {
+            String key = candidate.pattern + "|" + clientOf(candidate);
+            LlmCandidate existing = byPatternClient.get(key);
+            if (existing == null || severityRank(candidate.severity) < severityRank(existing.severity)) {
+                byPatternClient.put(key, candidate);
+            }
+        }
+
+        // First pass: one representative per failure pattern, whatever the client.
+        Map<String, LlmCandidate> byPattern = new LinkedHashMap<String, LlmCandidate>();
+        for (LlmCandidate candidate : byPatternClient.values()) {
+            LlmCandidate existing = byPattern.get(candidate.pattern);
+            if (existing == null || severityRank(candidate.severity) < severityRank(existing.severity)) {
+                byPattern.put(candidate.pattern, candidate);
+            }
+        }
+        List<LlmCandidate> selected = new ArrayList<LlmCandidate>(byPattern.values());
+        Set<String> selectedKeys = new HashSet<String>();
+        for (LlmCandidate candidate : selected) selectedKeys.add(candidate.pattern + "|" + clientOf(candidate));
+
+        // Second pass: if budget remains, add another client's representative so an
+        // environment-specific failure is not hidden by a single-client first pick.
+        List<LlmCandidate> extra = new ArrayList<LlmCandidate>();
+        for (LlmCandidate candidate : byPatternClient.values()) {
+            if (selectedKeys.contains(candidate.pattern + "|" + clientOf(candidate))) continue;
+            extra.add(candidate);
+        }
+        Collections.sort(extra, new java.util.Comparator<LlmCandidate>() {
+            public int compare(LlmCandidate a, LlmCandidate b) {
+                int severity = severityRank(a.severity) - severityRank(b.severity);
+                if (severity != 0) return severity;
+                return a.turn.clientId.compareTo(b.turn.clientId);
+            }
+        });
+        for (LlmCandidate candidate : extra) {
+            if (selected.size() >= limit) break;
+            selectedKeys.add(candidate.pattern + "|" + clientOf(candidate));
+            selected.add(candidate);
+        }
+
+        Collections.sort(selected, new java.util.Comparator<LlmCandidate>() {
+                public int compare(LlmCandidate a, LlmCandidate b) {
+                    return severityRank(a.severity) - severityRank(b.severity);
+                }
+            });
+        if (selected.size() > limit) selected = new ArrayList<LlmCandidate>(selected.subList(0, limit));
+        return selected;
+    }
+
+    private static String clientOf(LlmCandidate candidate) {
+        return candidate.turn.clientId == null || candidate.turn.clientId.isEmpty()
+                ? "unknown" : candidate.turn.clientId;
+    }
+
+    /** Compressed turn + contract -> strict JSON verdict; cached by turnId. */
+    private Map<String, Object> llmVerdictOf(String slug, String version, TurnData turn, List<SkillContract.Step> steps) {
+        Map<String, Object> cached = analyses.findOne(slug, version,
+                SkillAnalysisRepository.TYPE_VERDICT, String.valueOf(turn.turnId));
+        if (cached != null) return cached;
+        try {
+            StringBuilder input = new StringBuilder();
+            input.append("契约：\n");
+            for (SkillContract.Step step : steps) {
+                input.append(step.getId()).append(' ').append(step.getTitle()).append(' ')
+                        .append(step.getKeywords()).append('\n');
+            }
+            input.append("\n观测动作序列：\n");
+            for (StepRow step : turn.steps) {
+                if (!"tool".equals(step.type) && !"document".equals(step.type) && !"skill".equals(step.type)) continue;
+                input.append("seq=").append(step.seq).append(" type=").append(step.type)
+                        .append(" name=").append(stringOf(step.payload.get("name"), stringOf(step.payload.get("path"), "")))
+                        .append(" args=").append(cap(String.valueOf(step.payload.get("args")), 200))
+                        .append(" result=").append(cap(stringOf(step.payload.get("result"), ""), 200))
+                        .append(" outcome=").append(stringOf(step.payload.get("outcome"), ""))
+                        .append('\n');
+            }
+            String json = modelClient.chat(slug, VERDICT_SYSTEM_PROMPT,
+                    AnalysisModelClient.redact(input.toString())).orElse(null);
+            if (json == null) return null;
+            Map<String, Object> verdict = mapper.readValue(extractJsonObject(json), Map.class);
+            verdict.put("turnId", Long.valueOf(turn.turnId));
+            analyses.upsert(slug, version, SkillAnalysisRepository.TYPE_VERDICT,
+                    String.valueOf(turn.turnId), verdict, "ok");
+            return verdict;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /** Model output may wrap JSON in prose or code fences; pull out the object. */
+    private static String extractJsonObject(String text) {
+        if (text == null) return "{}";
+        int start = text.indexOf('{');
+        int end = text.lastIndexOf('}');
+        if (start < 0 || end <= start) return "{}";
+        return text.substring(start, end + 1);
+    }
+
+    @SuppressWarnings("unchecked")
+    private SkillContract contractFromJson(Map<String, Object> root) {
+        if (root == null) return null;
+        SkillContract contract = new SkillContract();
+        Object rawSteps = root.get("steps") == null ? root.get("Steps") : root.get("steps");
+        if (!(rawSteps instanceof List)) return contract;
+        int index = 0;
+        for (Object item : (List<Object>) rawSteps) {
+            if (!(item instanceof Map)) continue;
+            Map<String, Object> map = (Map<String, Object>) item;
+            index += 1;
+            SkillContract.Step step = new SkillContract.Step();
+            step.setId(stringOf(map.get("id"), "s" + index));
+            step.setTitle(stringOf(map.get("title"), ""));
+            step.setDescription(stringOf(map.get("description"), ""));
+            step.setKeywords(stringList(firstOf(map, "keywords", "Keywords")));
+            step.setExpectedTools(stringList(firstOf(map, "expectedTools", "expected_tools")));
+            step.setExpectedArtifacts(stringList(firstOf(map, "expectedArtifacts", "expected_artifacts")));
+            step.setOptional(Boolean.TRUE.equals(firstOf(map, "optional", "Optional")));
+            Object group = firstOf(map, "parallelGroup", "parallel_group");
+            step.setParallelGroup(group == null ? null : String.valueOf(group));
+            if (!step.getTitle().isEmpty()) contract.getSteps().add(step);
+        }
+        contract.setTriggers(stringList(firstOf(root, "triggers", "Triggers")));
+        contract.setForbidden(stringList(firstOf(root, "forbidden", "Forbidden")));
+        contract.setEntryCommands(stringList(firstOf(root, "entryCommands", "entry_commands")));
+        return contract;
+    }
+
+    private static Object firstOf(Map<String, Object> map, String first, String second) {
+        return map.get(first) != null ? map.get(first) : map.get(second);
+    }
+
     // ----------------------------------------------------------- conflicts
 
     /**
@@ -413,9 +686,10 @@ public class ObservationAnalyzer {
                         "  AND COALESCE(a.payload->>'rollup','false') <> 'true' " +
                         "  AND COALESCE(b.payload->>'rollup','false') <> 'true' " +
                         "GROUP BY a.skill_slug, b.skill_slug " +
-                        "HAVING COUNT(DISTINCT a.turn_id) >= 2 " +
+                        "HAVING COUNT(DISTINCT a.turn_id) >= " + conflictMinTurns + " " +
                         "ORDER BY turns DESC LIMIT 200");
         Map<String, Integer> totalBySlug = turnCountsBySlug();
+        Map<String, String> skillTextBySlug = skillTextBySlug();
         List<Map<String, Object>> conflicts = new ArrayList<Map<String, Object>>();
         for (Map<String, Object> row : rows) {
             String a = stringOf(row.get("slug_a"), "");
@@ -434,8 +708,12 @@ public class ObservationAnalyzer {
             item.put("cooccur", Integer.valueOf(together));
             item.put("otherTurns", Integer.valueOf(ownTurns));
             item.put("share", ownTurns == 0 ? 0d : round2((double) together / ownTurns));
+            double lexical = lexicalSimilarityOf(a, b, skillTextBySlug);
+            double similarity = similarityOf(a, b, skillTextBySlug);
+            item.put("similarity", Double.valueOf(round2(similarity)));
+            item.put("jaccard", Double.valueOf(round2(lexical)));
             item.put("suggestion", "同一轮对话里 " + a + " 和 " + b + " 一起出现了 " + together
-                    + " 次。如果两者职责重叠，建议合并或改写触发条件；如果只是正常配合，可以忽略。");
+                    + " 次，相似度约 " + Math.round(similarity * 100) + "%。如果两者职责重叠，建议合并或改写触发条件；如果只是正常配合，可以忽略。");
             conflicts.add(item);
         }
         return conflicts;
@@ -458,6 +736,77 @@ public class ObservationAnalyzer {
         return counts;
     }
 
+    /** Lexical stand-in for embedding similarity (E2 fallback, 0 token). */
+    private Map<String, String> skillTextBySlug() {
+        Map<String, String> text = new HashMap<String, String>();
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT slug, COALESCE(name,'') AS name, COALESCE(description,'') AS description FROM skill");
+        for (Map<String, Object> row : rows) {
+            String slug = stringOf(row.get("slug"), "");
+            if (slug.isEmpty()) continue;
+            text.put(slug, stringOf(row.get("name"), "") + "\n" + stringOf(row.get("description"), ""));
+        }
+        return text;
+    }
+
+    private double similarityOf(String a, String b, Map<String, String> texts) {
+        Double semantic = semanticSimilarity(a, b, texts);
+        if (semantic != null) return semantic.doubleValue();
+        return lexicalSimilarityOf(a, b, texts);
+    }
+
+    private double lexicalSimilarityOf(String a, String b, Map<String, String> texts) {
+        Set<String> tokensA = similarityTokens(texts.get(a));
+        Set<String> tokensB = similarityTokens(texts.get(b));
+        if (tokensA.isEmpty() || tokensB.isEmpty()) return 0d;
+        Set<String> union = new HashSet<String>(tokensA);
+        union.addAll(tokensB);
+        int shared = 0;
+        for (String token : tokensA) {
+            if (tokensB.contains(token)) shared += 1;
+        }
+        return (double) shared / union.size();
+    }
+
+    private Double semanticSimilarity(String a, String b, Map<String, String> texts) {
+        if (!modelClient.isEnabled()) return null;
+        List<Float> left = embeddingOf(a, texts);
+        List<Float> right = embeddingOf(b, texts);
+        if (left == null || right == null || left.isEmpty() || left.size() != right.size()) return null;
+        double dot = 0d;
+        double leftNorm = 0d;
+        double rightNorm = 0d;
+        for (int i = 0; i < left.size(); i++) {
+            double x = left.get(i).doubleValue();
+            double y = right.get(i).doubleValue();
+            dot += x * y;
+            leftNorm += x * x;
+            rightNorm += y * y;
+        }
+        if (leftNorm <= 0d || rightNorm <= 0d) return null;
+        return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
+    }
+
+    private List<Float> embeddingOf(String slug, Map<String, String> texts) {
+        List<Float> cached = embeddingCache.get(slug);
+        if (cached != null) return cached;
+        String text = texts.get(slug);
+        if (text == null || text.trim().isEmpty()) return null;
+        Optional<List<Float>> embedded = modelClient.embed(slug, AnalysisModelClient.redact(text));
+        if (!embedded.isPresent()) return null;
+        embeddingCache.put(slug, embedded.get());
+        return embedded.get();
+    }
+
+    private Set<String> similarityTokens(String text) {
+        Set<String> tokens = new HashSet<String>();
+        if (text == null) return tokens;
+        for (String piece : text.toLowerCase(Locale.ROOT).split("[^a-z0-9\\u4e00-\\u9fa5]+")) {
+            if (piece.length() >= 2) tokens.add(piece);
+        }
+        return tokens;
+    }
+
     // --------------------------------------------------------------- paths
 
     /**
@@ -473,7 +822,7 @@ public class ObservationAnalyzer {
                         "JOIN observation_step st ON st.turn_id=t.id " +
                         "WHERE " + ObservationRepository.invokedSkillStep("st", "?") +
                         "ORDER BY t.session_id DESC LIMIT ?",
-                Long.class, slug, Integer.valueOf(MAX_SESSIONS_FOR_PATHS));
+                Long.class, slug, Integer.valueOf(maxSessionsForPaths));
         if (sessionIds.isEmpty()) return Collections.emptyList();
         String placeholders = String.join(",", Collections.nCopies(sessionIds.size(), "?"));
         Object[] args = sessionIds.toArray();
@@ -518,6 +867,26 @@ public class ObservationAnalyzer {
                     Long.valueOf(longOf(row.get("tokens"))));
         }
 
+        Map<Long, List<Long>> durationsBySession = new HashMap<Long, List<Long>>();
+        for (Map<String, Object> row : jdbc.queryForList(
+                "SELECT t.session_id, NULLIF(st.payload->>'duration_ms','')::numeric AS duration_ms " +
+                        "FROM observation_step st JOIN observation_turn t ON t.id=st.turn_id " +
+                        "WHERE t.session_id IN (" + placeholders + ") " +
+                        "  AND st.type='skill' AND NULLIF(st.payload->>'duration_ms','') IS NOT NULL " +
+                        "  AND " + ObservationRepository.publishedVersionMatch("st") +
+                        "  AND COALESCE(st.payload->>'rollup','false') <> 'true'",
+                args)) {
+            Long sessionId = Long.valueOf(((Number) row.get("session_id")).longValue());
+            long duration = longOf(row.get("duration_ms"));
+            if (duration < 0) continue;
+            List<Long> bucket = durationsBySession.get(sessionId);
+            if (bucket == null) {
+                bucket = new ArrayList<Long>();
+                durationsBySession.put(sessionId, bucket);
+            }
+            bucket.add(Long.valueOf(duration));
+        }
+
         Map<String, List<Long>> grouped = new LinkedHashMap<String, List<Long>>();
         for (Long sessionId : sequenceBySession.keySet()) {
             List<String> sequence = sequenceBySession.get(sessionId);
@@ -535,16 +904,19 @@ public class ObservationAnalyzer {
         for (Map.Entry<String, List<Long>> entry : grouped.entrySet()) {
             List<Long> tokens = new ArrayList<Long>();
             List<Long> steps = new ArrayList<Long>();
+            List<Long> durations = new ArrayList<Long>();
             for (Long sessionId : entry.getValue()) {
                 tokens.add(tokensBySession.containsKey(sessionId) ? tokensBySession.get(sessionId) : Long.valueOf(0L));
                 steps.add(Long.valueOf(stepsBySession.containsKey(sessionId)
                         ? stepsBySession.get(sessionId).longValue() : 0L));
+                if (durationsBySession.containsKey(sessionId)) durations.addAll(durationsBySession.get(sessionId));
             }
             Map<String, Object> item = new LinkedHashMap<String, Object>();
             item.put("signature", entry.getKey());
             item.put("sessionCount", Integer.valueOf(entry.getValue().size()));
             item.put("medianTokens", Long.valueOf(median(tokens)));
             item.put("medianSteps", Long.valueOf(median(steps)));
+            item.put("medianDurationMs", Long.valueOf(median(durations)));
             paths.add(item);
         }
         Collections.sort(paths, new java.util.Comparator<Map<String, Object>>() {
@@ -586,7 +958,7 @@ public class ObservationAnalyzer {
             byRule.put(rule, Integer.valueOf(current == null ? 1 : current.intValue() + 1));
         }
 
-        if (coverage >= 0 && coverage < COVERAGE_WARN_THRESHOLD) {
+        if (coverage >= 0 && coverage < coverageWarnThreshold) {
             List<String> worst = new ArrayList<String>();
             for (Map.Entry<String, Integer> entry : missedCount.entrySet()) {
                 if (worst.size() < 3) worst.add(titleOfStep(steps, entry.getKey()));
@@ -661,7 +1033,7 @@ public class ObservationAnalyzer {
                         "  AND COALESCE(st.payload->>'rollup','false') <> 'true' " +
                         "  AND LOWER(REGEXP_REPLACE(TRIM(COALESCE(st.skill_version_label,'')),'^[vV]','')) = LOWER(?)) " +
                         "ORDER BY t.started_at DESC NULLS LAST, t.id DESC LIMIT ?",
-                slug, version, Integer.valueOf(MAX_TURNS));
+                slug, version, Integer.valueOf(maxTurns));
         if (rows.isEmpty()) return Collections.emptyList();
 
         Map<Long, TurnData> byId = new LinkedHashMap<Long, TurnData>();
@@ -785,6 +1157,12 @@ public class ObservationAnalyzer {
         return steps;
     }
 
+    private boolean isErrorStep(StepRow step) {
+        Object structured = step.payload.get("error");
+        if (structured instanceof Boolean) return ((Boolean) structured).booleanValue();
+        return "error".equalsIgnoreCase(stringOf(step.payload.get("outcome"), ""));
+    }
+
     /** Distinct skills in a turn with parent/child pairs folded into one identity. */
     private Set<String> conflictKeys(TurnData turn) {
         Set<String> keys = new LinkedHashSet<String>();
@@ -876,10 +1254,10 @@ public class ObservationAnalyzer {
         return id;
     }
 
-    private static String coverageLabel(double coverage) {
+    private String coverageLabel(double coverage) {
         if (coverage < 0) return "暂无法评估";
         if (coverage >= 0.9d) return "完整";
-        if (coverage >= COVERAGE_WARN_THRESHOLD) return "基本完整";
+        if (coverage >= coverageWarnThreshold) return "基本完整";
         if (coverage >= 0.5d) return "部分执行";
         return "执行不完整";
     }
@@ -1000,5 +1378,42 @@ public class ObservationAnalyzer {
         /** 该步骤是否符合成员判定（skill 步骤需版本已发布；其余类型恒为 true）。 */
         boolean versionOk = true;
         Map<String, Object> payload;
+    }
+
+    private static class LlmCandidate {
+        final TurnData turn;
+        final String severity;
+        final String pattern;
+
+        LlmCandidate(TurnData turn, String severity, String pattern) {
+            this.turn = turn;
+            this.severity = severity;
+            this.pattern = pattern;
+        }
+    }
+
+    private void persistAggregates(String slug, String version) {
+        try {
+            List<Map<String, Object>> conflictRows = new ArrayList<Map<String, Object>>();
+            for (Map<String, Object> conflict : allConflicts(slug)) {
+                String a = stringOf(conflict.get("a"), "");
+                String b = stringOf(conflict.get("b"), "");
+                if (a.isEmpty() || b.isEmpty()) continue;
+                Map<String, Object> row = new LinkedHashMap<String, Object>(conflict);
+                row.put("scopeKey", a.compareTo(b) <= 0 ? a + "|" + b : b + "|" + a);
+                conflictRows.add(row);
+            }
+            analyses.replaceAll(slug, version, SkillAnalysisRepository.TYPE_CONFLICT, conflictRows);
+
+            List<Map<String, Object>> pathRows = new ArrayList<Map<String, Object>>();
+            for (Map<String, Object> path : pathsFor(slug)) {
+                Map<String, Object> row = new LinkedHashMap<String, Object>(path);
+                row.put("scopeKey", stringOf(path.get("signature"), ""));
+                pathRows.add(row);
+            }
+            analyses.replaceAll(slug, version, SkillAnalysisRepository.TYPE_PATH, pathRows);
+        } catch (RuntimeException ignored) {
+            // Aggregates are side-path outputs; persist failure must not break the report.
+        }
     }
 }

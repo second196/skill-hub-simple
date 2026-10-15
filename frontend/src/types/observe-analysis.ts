@@ -55,6 +55,16 @@ export interface AnalysisSummary {
   coverageLabel: string
 }
 
+export interface AnalysisLlmVerdict {
+  turnId: number
+  verdict: 'complete' | 'partial' | 'failed' | 'conflicted' | string
+  missedSteps?: string[]
+  extraneousActions?: string[]
+  conflictWith?: string[]
+  evidence?: string[]
+  confidence?: number
+}
+
 export interface AnalysisCoverage {
   checklistCoverage: number
   label: string
@@ -71,6 +81,9 @@ export interface AnalysisConflict {
   cooccur: number
   otherTurns: number
   share: number
+  /** 零成本词法相似度兜底；模型 embedding 开启时替换为语义相似度 */
+  similarity?: number
+  jaccard?: number
   suggestion: string
 }
 
@@ -79,6 +92,8 @@ export interface AnalysisPath {
   sessionCount: number
   medianTokens: number
   medianSteps: number
+  /** 该路线的 skill step 耗时中位数（毫秒）；旧数据无此字段时前端显示 — */
+  medianDurationMs?: number
   note?: string
 }
 
@@ -100,6 +115,7 @@ export interface SkillAnalysis {
   coverage?: AnalysisCoverage
   conflicts?: AnalysisConflict[]
   paths?: AnalysisPath[]
+  llmVerdicts?: AnalysisLlmVerdict[]
   suggestions?: AnalysisSuggestion[]
 }
 

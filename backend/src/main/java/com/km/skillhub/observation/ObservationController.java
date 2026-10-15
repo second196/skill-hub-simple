@@ -1,6 +1,7 @@
 package com.km.skillhub.observation;
 
 import com.km.skillhub.analysis.ObservationAnalyzer;
+import com.km.skillhub.analysis.AnalysisJobService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,12 +21,14 @@ public class ObservationController {
     private final ObservationIngestService ingestService;
     private final ObservationRepository repository;
     private final ObservationAnalyzer analyzer;
+    private final AnalysisJobService analysisJobs;
 
     public ObservationController(ObservationIngestService ingestService, ObservationRepository repository,
-                                 ObservationAnalyzer analyzer) {
+                                 ObservationAnalyzer analyzer, AnalysisJobService analysisJobs) {
         this.ingestService = ingestService;
         this.repository = repository;
         this.analyzer = analyzer;
+        this.analysisJobs = analysisJobs;
     }
 
     /**
@@ -82,6 +85,22 @@ public class ObservationController {
                                         @RequestParam(required = false) String version,
                                         @RequestParam(required = false) Boolean refresh) {
         return safeAnalysis(slug, version, Boolean.TRUE.equals(refresh));
+    }
+
+    /** Async recompute: returns a job id immediately, poll the status endpoint for the report. */
+    @PostMapping("/skills/{slug}/analyze")
+    public Map<String, Object> analyzeAsync(@PathVariable String slug,
+                                            @RequestParam(required = false) String version) {
+        String jobId = analysisJobs.start(slug, version);
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put("jobId", jobId);
+        result.put("status", "running");
+        return result;
+    }
+
+    @GetMapping("/analysis/jobs/{jobId}")
+    public Map<String, Object> analysisJob(@PathVariable String jobId) {
+        return analysisJobs.status(jobId);
     }
 
     /** Step checklist that completeness is measured against. */

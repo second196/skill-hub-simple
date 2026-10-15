@@ -156,6 +156,16 @@ public class ObservationRepository {
     }
 
     /**
+     * Structured {@code error} supersedes the legacy text-derived outcome. Old traces
+     * without the new flag keep the previous outcome-based behaviour.
+     */
+    static String errorStep(String alias) {
+        String a = (alias == null || alias.trim().isEmpty()) ? "st" : alias.trim();
+        return "((COALESCE(" + a + ".payload->>'error','false'))='true' " +
+                "OR COALESCE(" + a + ".payload->>'outcome','ok')='error')";
+    }
+
+    /**
      * Shared SkillSession membership predicate on an observation_step alias:
      * type='skill' AND skill_slug=? AND optional version filter.
      * Inner-joining this predicate is equivalent to EXISTS for session membership.
@@ -410,7 +420,7 @@ public class ObservationRepository {
                             " (SELECT COUNT(*) FROM skill_steps) AS calls," +
                             " (SELECT COUNT(DISTINCT session_id) FROM skill_steps) AS sessions," +
                             " (SELECT COUNT(*) FROM turn_loads) AS skill_turns," +
-                            " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'outcome','ok')='error') AS errors," +
+                            " (SELECT COUNT(*) FROM skill_steps WHERE " + errorStep("st") + ") AS errors," +
                             " (SELECT COUNT(*) FROM turn_loads WHERE loads >= 2) AS reload_turns," +
                             " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='call') AS match_call," +
                             " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='file') AS match_file," +
@@ -519,7 +529,7 @@ public class ObservationRepository {
                         " (SELECT COUNT(*) FROM skill_steps) AS calls," +
                         " (SELECT COUNT(DISTINCT session_id) FROM skill_steps) AS sessions," +
                         " (SELECT COUNT(*) FROM turn_loads) AS skill_turns," +
-                        " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'outcome','ok')='error') AS errors," +
+                        " (SELECT COUNT(*) FROM skill_steps WHERE " + errorStep("st") + ") AS errors," +
                         " (SELECT COUNT(*) FROM turn_loads WHERE loads >= 2) AS reload_turns," +
                         " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='call') AS match_call," +
                         " (SELECT COUNT(*) FROM skill_steps WHERE COALESCE(payload->>'match','')='file') AS match_file," +
@@ -571,7 +581,7 @@ public class ObservationRepository {
                         "), turn_stats AS (" +
                         " SELECT turn_id, session_id," +
                         "   COUNT(*) AS loads," +
-                        "   COUNT(*) FILTER (WHERE COALESCE(payload->>'outcome','ok') = 'error') AS error_loads," +
+                        "   COUNT(*) FILTER (WHERE " + errorStep("st") + ") AS error_loads," +
                         "   MIN(seq) AS first_seq" +
                         " FROM skill_steps GROUP BY turn_id, session_id" +
                         " ), turn_flags AS (" +
@@ -636,7 +646,7 @@ public class ObservationRepository {
                         "), turn_stats AS (" +
                         " SELECT turn_id, session_id," +
                         "   COUNT(*) AS loads," +
-                        "   COUNT(*) FILTER (WHERE COALESCE(payload->>'outcome','ok')='error') AS errors," +
+                        "   COUNT(*) FILTER (WHERE " + errorStep("st") + ") AS errors," +
                         "   MIN(seq) AS first_seq" +
                         " FROM skill_steps GROUP BY turn_id, session_id" +
                         "), turn_flags AS (" +
