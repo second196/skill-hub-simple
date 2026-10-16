@@ -10,11 +10,21 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
+/**
+ * SkillHub raw observation API.
+ *
+ * <p>Keeps the original {@code /api/observations} contract. Dashboard, node detail and
+ * transcript reads are layered: old field aliases stay at the top level untouched and
+ * {@code raw} / {@code analysis} / {@code analysisStatus} are added on top, so existing
+ * clients never break. Read-time analysis never writes observation data back.</p>
+ */
 @RestController
 @RequestMapping("/api/observations")
 public class ObservationController {
@@ -22,22 +32,37 @@ public class ObservationController {
     private final ObservationRepository repository;
     private final ObservationAnalyzer analyzer;
     private final AnalysisJobService analysisJobs;
+    private final ObservationDashboardService dashboardService;
+    private final ObservationSessionAnalysisService sessionAnalysisService;
+    private final ObservationReadAnalysisService readAnalysisService;
+    private final ObservationSummaryRefreshService summaryRefresh;
 
     public ObservationController(ObservationIngestService ingestService, ObservationRepository repository,
-                                 ObservationAnalyzer analyzer, AnalysisJobService analysisJobs) {
+                                 ObservationAnalyzer analyzer, AnalysisJobService analysisJobs,
+                                 ObservationDashboardService dashboardService,
+                                 ObservationSessionAnalysisService sessionAnalysisService,
+                                 ObservationReadAnalysisService readAnalysisService,
+                                 ObservationSummaryRefreshService summaryRefresh) {
         this.ingestService = ingestService;
         this.repository = repository;
         this.analyzer = analyzer;
         this.analysisJobs = analysisJobs;
+        this.dashboardService = dashboardService;
+        this.sessionAnalysisService = sessionAnalysisService;
+        this.readAnalysisService = readAnalysisService;
+        this.summaryRefresh = summaryRefresh;
     }
 
     /**
      * Upload contract: full session/turn/step payloads, no summaries.
      * Identity is (clientId, sessionId, turnIndex, stepId).
+     * After a successful batch the read summaries refresh runs asynchronously.
      */
     @PostMapping("/ingest")
     public Map<String, Object> ingest(@RequestBody Map<String, Object> body) {
-        return ingestService.ingest(body);
+        Map<String, Object> result = ingestService.ingest(body);
+        summaryRefresh.requestReadSummaries();
+        return result;
     }
 
     @GetMapping
@@ -140,18 +165,94 @@ public class ObservationController {
         return repository.skillVersions(slug);
     }
 
+    /**
+     * Transcript: the session chain. Layered response — old aliases preserved at the
+     * top level, plus raw / analysis / analysisStatus.
+     */
     @GetMapping("/sessions/{id}")
     public Map<String, Object> session(@PathVariable long id,
                                        @RequestParam(required = false) String skill,
                                        @RequestParam(required = false) String version) {
-        return repository.sessionChain(id, skill, version);
+        return layeredRead(repository.sessionChain(id, skill, version));
     }
 
     @GetMapping("/sessions/{id}/chain")
     public Map<String, Object> chain(@PathVariable long id,
                                      @RequestParam(required = false) String skill,
                                      @RequestParam(required = false) String version) {
-        return repository.sessionChain(id, skill, version);
+        return layeredRead(repository.sessionChain(id, skill, version));
+    }
+
+    /** Session-scoped skill analysis: rules + coverage over this session's turns only. */
+    @GetMapping("/sessions/{id}/analysis")
+    public Map<String, Object> sessionAnalysis(@PathVariable long id,
+                                               @RequestParam String skill,
+                                               @RequestParam(required = false) String version,
+                                               @RequestParam(required = false) Boolean refresh) {
+        return sessionAnalysisService.analyze(id, skill, version, Boolean.TRUE.equals(refresh));
+    }
+
+    /** Single-page dashboard: graph / waterfall / stats / transcript / files assembly. */
+    @GetMapping("/sessions/{id}/dashboard")
+    public Map<String, Object> sessionDashboard(@PathVariable long id,
+                                                @RequestParam(required = false) String skill,
+                                                @RequestParam(required = false) String version) {
+        return layeredRead(dashboardService.sessionDashboard(id, skill, version));
+    }
+
+    /** One node's full detail (payload body, args/result/files/usage), layered as well. */
+    @GetMapping("/sessions/{id}/dashboard/node")
+    public Map<String, Object> dashboardNode(@PathVariable long id,
+                                             @RequestParam String nodeId) {
+        return layeredRead(dashboardService.dashboardNode(id, nodeId));
+    }
+
+    /** Session full-text search over payload/session content. */
+    @GetMapping("/search")
+    public List<Map<String, Object>> search(@RequestParam String q,
+                                            @RequestParam(required = false) String skill,
+                                            @RequestParam(required = false) String version,
+                                            @RequestParam(required = false, defaultValue = "30") int limit) {
+        return dashboardService.searchSessions(skill, version, q, limit);
+    }
+
+    /**
+     * Layered read: old field aliases stay at the top level, then raw, analysis and
+     * analysisStatus are added. The raw input is never mutated.
+     */
+    private Map<String, Object> layeredRead(Map<String, Object> raw) {
+        return ObservationReadResponse.layer(raw, readAnalysisService.analyze(raw, loadPlatformCatalog()));
+    }
+
+    /**
+     * Skill / published-version catalog for read analysis; a query failure marks it
+     * unavailable so the analysis degrades instead of failing the read.
+     */
+    private Map<String, Object> loadPlatformCatalog() {
+        Map<String, Object> catalog = new LinkedHashMap<String, Object>();
+        try {
+            Map<String, String> skills = repository.platformSkills();
+            Map<String, Set<String>> published = repository.publishedVersionsBySlug();
+            List<Map<String, Object>> items = new ArrayList<Map<String, Object>>();
+            for (Map.Entry<String, String> entry : skills.entrySet()) {
+                Map<String, Object> item = new LinkedHashMap<String, Object>();
+                item.put("slug", entry.getKey());
+                item.put("name", entry.getValue());
+                Set<String> labels = published.get(entry.getKey());
+                List<String> versions = new ArrayList<String>();
+                if (labels != null) versions.addAll(labels);
+                Collections.sort(versions);
+                item.put("versions", versions);
+                items.add(item);
+            }
+            catalog.put("available", Boolean.TRUE);
+            catalog.put("skills", items);
+        } catch (RuntimeException ex) {
+            catalog.put("available", Boolean.FALSE);
+            catalog.put("skills", Collections.emptyList());
+            catalog.put("error", String.valueOf(ex.getMessage()));
+        }
+        return catalog;
     }
 
     /** Analysis is a side path: a failure here must never break the metrics page. */

@@ -11,6 +11,8 @@ export default createRouter({
     { path: '/observe/sessions', component: EmptyRoute },
     { path: '/observe/:slug', component: EmptyRoute },
     { path: '/observe', component: EmptyRoute },
+    { path: '/ai-config', component: EmptyRoute },
+    { path: '/analyze-optimize', component: EmptyRoute },
     { path: '/skills/:slug', component: EmptyRoute }
   ]
 })

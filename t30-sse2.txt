@@ -1,0 +1,5 @@
+event:message
+data:{"id":4,"conversationId":1,"seq":4,"role":"user","msgType":"text","content":"hello sse","createdAt":"2026-10-15T20:17:15.104221Z"}
+
+:ping
+

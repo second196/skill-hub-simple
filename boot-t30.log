@@ -1,0 +1,86 @@
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+ :: Spring Boot ::               (v2.7.18)
+
+2026-10-16 04:09:00.878  INFO 22652 --- [           main] com.km.skillhub.SkillHubApplication      : Starting SkillHubApplication v0.1.0-SNAPSHOT using Java 21.0.10 on Win202604301450 with PID 22652 (D:\program\skill-hub-simple\backend\target\skill-hub-0.1.0-SNAPSHOT.jar started by SYSTEM in D:\program\skill-hub-simple\backend)
+2026-10-16 04:09:00.888  INFO 22652 --- [           main] com.km.skillhub.SkillHubApplication      : No active profile set, falling back to 1 default profile: "default"
+2026-10-16 04:09:04.740  INFO 22652 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port(s): 8080 (http)
+2026-10-16 04:09:04.778  INFO 22652 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-10-16 04:09:04.779  INFO 22652 --- [           main] org.apache.catalina.core.StandardEngine  : Starting Servlet engine: [Apache Tomcat/9.0.83]
+2026-10-16 04:09:04.991  INFO 22652 --- [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-10-16 04:09:04.991  INFO 22652 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 3963 ms
+2026-10-16 04:09:05.466  INFO 22652 --- [           main] o.f.c.internal.license.VersionPrinter    : Flyway Community Edition 8.5.13 by Redgate
+2026-10-16 04:09:05.477  INFO 22652 --- [           main] o.f.c.internal.license.VersionPrinter    : See what's new here: https://flywaydb.org/documentation/learnmore/releaseNotes#8.5.13
+2026-10-16 04:09:05.478  INFO 22652 --- [           main] o.f.c.internal.license.VersionPrinter    : 
+2026-10-16 04:09:05.503  INFO 22652 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-10-16 04:09:06.018  INFO 22652 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-10-16 04:09:06.082  INFO 22652 --- [           main] o.f.c.i.database.base.BaseDatabaseType   : Database: jdbc:postgresql://localhost:5432/skillhub_t30 (PostgreSQL 15.18)
+2026-10-16 04:09:06.102  WARN 22652 --- [           main] o.f.c.internal.database.base.Database    : Flyway upgrade recommended: PostgreSQL 15.18 is newer than this version of Flyway and support has not been tested. The latest supported version of PostgreSQL is 14.
+2026-10-16 04:09:06.201  INFO 22652 --- [           main] o.f.core.internal.command.DbValidate     : Successfully validated 17 migrations (execution time 00:00.074s)
+2026-10-16 04:09:06.242  INFO 22652 --- [           main] o.f.c.i.s.JdbcTableSchemaHistory         : Creating Schema History table "public"."flyway_schema_history" ...
+2026-10-16 04:09:06.358  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Current version of schema "public": << Empty Schema >>
+2026-10-16 04:09:06.391  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "1 - create skill repository"
+2026-10-16 04:09:06.527  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "2 - add skill download count"
+2026-10-16 04:09:06.582  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "3 - create discovery repository"
+2026-10-16 04:09:06.737  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "4 - create observation repository"
+2026-10-16 04:09:06.925  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "5 - allow assistant observation steps"
+2026-10-16 04:09:06.945  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "6 - observation session title"
+2026-10-16 04:09:06.974  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "7 - observation step skill version"
+2026-10-16 04:09:07.001  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "8 - drop version digest"
+2026-10-16 04:09:07.019  INFO 22652 --- [           main] o.f.c.i.s.DefaultSqlScriptExecutor       : DB: 索引 "idx_observation_step_skill_version" 不存在
+2026-10-16 04:09:07.043  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "9 - purge unmatched observation skill versions"
+2026-10-16 04:09:07.071  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "10 - allow unmatched observation skill versions"
+2026-10-16 04:09:07.074  INFO 22652 --- [           main] o.f.c.i.s.DefaultSqlScriptExecutor       : +----------+
+| ?column? |
++----------+
+| 1        |
++----------+
+
+2026-10-16 04:09:07.091  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "11 - skill contract and analysis"
+2026-10-16 04:09:07.202  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "12 - skill quality optimization"
+2026-10-16 04:09:07.353  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "13 - skill workbench conversation"
+2026-10-16 04:09:07.450  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "14 - skill react optimization"
+2026-10-16 04:09:07.522  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "15 - observation dashboard and query indexes"
+2026-10-16 04:09:07.916  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "16 - observation read summaries"
+2026-10-16 04:09:08.048  INFO 22652 --- [           main] o.f.c.i.s.DefaultSqlScriptExecutor       : +------------------------------------+
+| refresh_observation_read_summaries |
++------------------------------------+
+|                                    |
++------------------------------------+
+
+2026-10-16 04:09:08.061  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "17 - sys ai config"
+2026-10-16 04:09:08.100  INFO 22652 --- [           main] o.f.core.internal.command.DbMigrate      : Successfully applied 17 migrations to schema "public", now at version v17 (execution time 00:01.771s)
+2026-10-16 04:09:11.099  INFO 22652 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8080 (http) with context path ''
+2026-10-16 04:09:11.166  INFO 22652 --- [           main] com.km.skillhub.SkillHubApplication      : Started SkillHubApplication in 12.088 seconds (JVM running for 13.32)
+2026-10-16 04:09:24.499  INFO 22652 --- [   scheduling-1] c.k.s.discovery.DiscoverySyncService     : Discovery sync completed: 239 skills synchronized
+2026-10-16 04:13:04.472  INFO 22652 --- [nio-8080-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-10-16 04:13:04.473  INFO 22652 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-10-16 04:13:04.475  INFO 22652 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 1 ms
+2026-10-16 04:13:14.381  INFO 22652 --- [nio-8080-exec-8] o.apache.coyote.http11.Http11Processor   : Error parsing HTTP request header
+ Note: further occurrences of HTTP request parsing errors will be logged at DEBUG level.
+
+java.lang.IllegalArgumentException: Invalid character found in the request target [/api/observations/search?q=0xe90x9c0x800xe60xb10x82&limit=10 ]. The valid characters are defined in RFC 7230 and RFC 3986
+	at org.apache.coyote.http11.Http11InputBuffer.parseRequestLine(Http11InputBuffer.java:482) ~[tomcat-embed-core-9.0.83.jar!/:na]
+	at org.apache.coyote.http11.Http11Processor.service(Http11Processor.java:263) ~[tomcat-embed-core-9.0.83.jar!/:na]
+	at org.apache.coyote.AbstractProcessorLight.process(AbstractProcessorLight.java:63) ~[tomcat-embed-core-9.0.83.jar!/:na]
+	at org.apache.coyote.AbstractProtocol$ConnectionHandler.process(AbstractProtocol.java:928) ~[tomcat-embed-core-9.0.83.jar!/:na]
+	at org.apache.tomcat.util.net.NioEndpoint$SocketProcessor.doRun(NioEndpoint.java:1794) ~[tomcat-embed-core-9.0.83.jar!/:na]
+	at org.apache.tomcat.util.net.SocketProcessorBase.run(SocketProcessorBase.java:52) ~[tomcat-embed-core-9.0.83.jar!/:na]
+	at org.apache.tomcat.util.threads.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1191) ~[tomcat-embed-core-9.0.83.jar!/:na]
+	at org.apache.tomcat.util.threads.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:659) ~[tomcat-embed-core-9.0.83.jar!/:na]
+	at org.apache.tomcat.util.threads.TaskThread$WrappingRunnable.run(TaskThread.java:61) ~[tomcat-embed-core-9.0.83.jar!/:na]
+	at java.base/java.lang.Thread.run(Thread.java:1583) ~[na:na]
+
+2026-10-16 04:16:10.465  INFO 22652 --- [   scheduling-1] c.k.s.analysis.SkillOptimizeTaskJob      : skill optimize task claimed: taskId=1, skillId=1, versionId=1, mode=repair
+2026-10-16 04:16:10.498  INFO 22652 --- [timize-worker-1] c.k.s.analysis.SkillOptimizeTaskJob      : skill optimize task processed: taskId=1
+2026-10-16 04:16:17.726  WARN 22652 --- [nio-8080-exec-4] .w.s.m.s.DefaultHandlerExceptionResolver : Resolved [org.springframework.web.bind.MissingServletRequestParameterException: Required request parameter 'skill' for method parameter type String is not present]
+2026-10-16 04:17:15.576  INFO 22652 --- [   scheduling-1] c.k.s.analysis.SkillOptimizeTaskJob      : skill optimize task claimed: taskId=2, skillId=1, versionId=1, mode=repair
+2026-10-16 04:17:15.611  INFO 22652 --- [timize-worker-2] c.k.s.analysis.SkillOptimizeTaskJob      : skill optimize task processed: taskId=2
+2026-10-16 04:17:55.674  INFO 22652 --- [   scheduling-1] c.k.s.analysis.SkillOptimizeTaskJob      : skill optimize task claimed: taskId=3, skillId=1, versionId=1, mode=repair
+2026-10-16 04:17:55.701  INFO 22652 --- [timize-worker-1] c.k.s.analysis.SkillOptimizeTaskJob      : skill optimize task processed: taskId=3
+2026-10-16 04:18:00.091  INFO 22652 --- [timize-worker-2] c.k.s.analysis.SkillOptimizeTaskJob      : skill optimize task resume completed: taskId=3

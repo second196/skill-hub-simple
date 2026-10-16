@@ -1,5 +1,7 @@
 # Skill 观测分析与优化系统 —— 完整设计方案
 
+> **实现状态（2026-10）**：本方案的观测增强与质量部分（L0-L3 / 采集链路、会话 dashboard、全文检索、质量报告等）已在本仓库落地；优化流水线与工作台另见 [feature-skill-quality-optimization.md](feature-skill-quality-optimization.md)，功能差距与对齐全貌见 [skill-feature-gap-and-alignment-plan.md](skill-feature-gap-and-alignment-plan.md)。本文档其余部分保留为原始设计参考。
+
 > 版本：v1.0
 > 适用范围：SkillHub 的 Observer 采集链路、观测后端（`ObservationRepository` / `ObservationIngestService`）与前端指标面板（`ObserveMetricsPanel.vue`）
 > 目标读者：平台开发者、skill 维护者、观测系统二次开发人员

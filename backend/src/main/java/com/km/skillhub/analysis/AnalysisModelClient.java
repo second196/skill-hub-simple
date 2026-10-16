@@ -1,6 +1,9 @@
 package com.km.skillhub.analysis;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.km.skillhub.aiconfig.AiModelConfig;
+import com.km.skillhub.aiconfig.AiModelConfigService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -11,6 +14,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,28 +23,38 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Optional, OpenAI-compatible model client for the two LLM side paths: contract
  * extraction and L2 turn verdicts. It is disabled by default; without an endpoint it
  * returns {@link Optional#empty()} and the deterministic rules keep running.
+ *
+ * <p>Runtime settings resolution: {@code sys_ai_config} (via {@link AiModelConfigService})
+ * wins per field; empty / invalid DB values and DB-unavailable situations fall back to the
+ * application.yml {@code skillhub.analysis.llm.*} values captured in the constructor. When
+ * no database config bean is present (plain unit tests), yml constructor values apply as-is.
+ * Config updates take effect on the next call (no restart).
  */
 @Component
 public class AnalysisModelClient {
 
     private static final int MAX_REQUEST_CHARS = 12000;
+    /** 允许的思考程度取值；网关对未知值静默忽略，故这里先拦掉。 */
+    private static final List<String> REASONING_EFFORTS =
+            Collections.unmodifiableList(Arrays.asList("minimal", "low", "medium", "high"));
 
     private final ObjectMapper mapper;
-    private final boolean enabled;
-    private final String endpoint;
-    private final String apiKey;
-    private final String model;
-    private final String embeddingModel;
-    private final int timeoutMs;
-    private final int maxTokens;
+    private final boolean ymlEnabled;
+    private final String ymlEndpoint;
+    private final String ymlApiKey;
+    private final String ymlModel;
+    private final String ymlEmbeddingModel;
+    private final int ymlTimeoutMs;
+    private final int ymlMaxTokens;
     private final long dailyTokenBudget;
+    /** 运行时配置源；未注入时（单测）回退构造参数（yml）。 */
+    @Autowired(required = false)
+    private AiModelConfigService configService;
     private final Semaphore permits = new Semaphore(2);
     private final Budget globalBudget = new Budget(LocalDate.now());
     private final Map<String, Long> circuitUntil = new ConcurrentHashMap<String, Long>();
@@ -55,29 +69,102 @@ public class AnalysisModelClient {
                                @Value("${skillhub.analysis.llm.max-tokens:2000}") int maxTokens,
                                @Value("${skillhub.analysis.llm.daily-token-budget:50000}") long dailyTokenBudget) {
         this.mapper = mapper;
-        this.enabled = enabled;
-        this.endpoint = endpoint == null ? "" : endpoint.trim();
-        this.apiKey = apiKey == null ? "" : apiKey.trim();
-        this.model = model == null || model.trim().isEmpty() ? "gpt-4.1-mini" : model.trim();
-        this.embeddingModel = embeddingModel == null || embeddingModel.trim().isEmpty()
+        this.ymlEnabled = enabled;
+        this.ymlEndpoint = endpoint == null ? "" : endpoint.trim();
+        this.ymlApiKey = apiKey == null ? "" : apiKey.trim();
+        this.ymlModel = model == null || model.trim().isEmpty() ? "gpt-4.1-mini" : model.trim();
+        this.ymlEmbeddingModel = embeddingModel == null || embeddingModel.trim().isEmpty()
                 ? "text-embedding-3-small" : embeddingModel.trim();
-        this.timeoutMs = timeoutMs <= 0 ? 30000 : timeoutMs;
-        this.maxTokens = maxTokens <= 0 ? 2000 : maxTokens;
+        this.ymlTimeoutMs = timeoutMs <= 0 ? 30000 : timeoutMs;
+        this.ymlMaxTokens = maxTokens <= 0 ? 2000 : maxTokens;
         this.dailyTokenBudget = dailyTokenBudget <= 0 ? 50000 : dailyTokenBudget;
     }
 
+    /** 生效配置：DB 优先、yml 兜底；永不返回 null。 */
+    private AiModelConfig settings() {
+        if (configService != null) {
+            try {
+                AiModelConfig live = configService.getCurrent();
+                if (live != null) return live;
+            } catch (RuntimeException ignored) {
+                // fall through to yml defaults
+            }
+        }
+        AiModelConfig fallback = new AiModelConfig();
+        fallback.setEnabled(Boolean.valueOf(ymlEnabled));
+        fallback.setEndpoint(ymlEndpoint);
+        fallback.setApiKey(ymlApiKey);
+        fallback.setModel(ymlModel);
+        fallback.setEmbeddingModel(ymlEmbeddingModel);
+        fallback.setTimeoutMs(Integer.valueOf(ymlTimeoutMs));
+        fallback.setMaxTokens(Integer.valueOf(ymlMaxTokens));
+        return fallback;
+    }
+
+    private String liveEndpoint() {
+        String value = settings().getEndpoint();
+        if (value == null) return "";
+        String normalized = value.trim();
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
+    private String liveApiKey() {
+        String value = settings().getApiKey();
+        return value == null ? "" : value.trim();
+    }
+
+    private String liveModel() {
+        String value = settings().getModel();
+        return value == null || value.trim().isEmpty() ? "gpt-4.1-mini" : value.trim();
+    }
+
+    private String liveEmbeddingModel() {
+        String value = settings().getEmbeddingModel();
+        return value == null || value.trim().isEmpty()
+                ? "text-embedding-3-small" : value.trim();
+    }
+
+    private int liveTimeoutMs() {
+        Integer value = settings().getTimeoutMs();
+        return value == null || value.intValue() <= 0 ? 30000 : value.intValue();
+    }
+
+    private int liveMaxTokens() {
+        Integer value = settings().getMaxTokens();
+        return value == null || value.intValue() <= 0 ? 2000 : value.intValue();
+    }
+
+    /** 当前配置的思考程度；空（未配置 / 非法值）表示不传该参数。 */
+    private String liveReasoningEffort() {
+        String value = settings().getReasoningEffort();
+        if (value == null) return "";
+        String effort = value.trim();
+        if (effort.isEmpty()) return "";
+        return REASONING_EFFORTS.contains(effort) ? effort : "";
+    }
+
     public boolean isEnabled() {
-        return enabled && !endpoint.isEmpty();
+        AiModelConfig cfg = settings();
+        boolean on = cfg.getEnabled() != null && cfg.getEnabled().booleanValue();
+        return on && !liveEndpoint().isEmpty();
     }
 
     /** One chat completion; empty when disabled, rate-limited, or the endpoint failed. */
     public Optional<String> chat(String slug, String system, String user) {
-        if (!canUse(slug, system, user)) return Optional.empty();
+        AiModelConfig cfg = settings();
+        if (!canUse(cfg, slug, system, user)) return Optional.empty();
         try {
             Map<String, Object> body = new LinkedHashMap<String, Object>();
-            body.put("model", model);
+            body.put("model", liveModel());
             body.put("temperature", 0);
-            body.put("max_tokens", Integer.valueOf(maxTokens));
+            body.put("max_tokens", Integer.valueOf(liveMaxTokens()));
+            String effort = liveReasoningEffort();
+            if (!effort.isEmpty()) {
+                body.put("reasoning_effort", effort);
+            }
             List<Map<String, String>> messages = new ArrayList<Map<String, String>>();
             Map<String, String> systemMessage = new LinkedHashMap<String, String>();
             systemMessage.put("role", "system");
@@ -88,7 +175,7 @@ public class AnalysisModelClient {
             messages.add(systemMessage);
             messages.add(userMessage);
             body.put("messages", messages);
-            String response = post(endpoint + "/chat/completions", body);
+            String response = post(liveEndpoint() + "/chat/completions", body);
             if (response == null) {
                 recordFailure(slug);
                 return Optional.empty();
@@ -104,12 +191,13 @@ public class AnalysisModelClient {
 
     /** One embedding vector; empty when disabled, rate-limited, or the endpoint failed. */
     public Optional<List<Float>> embed(String slug, String text) {
-        if (!canUse(slug, text, "")) return Optional.empty();
+        AiModelConfig cfg = settings();
+        if (!canUse(cfg, slug, text, "")) return Optional.empty();
         try {
             Map<String, Object> body = new LinkedHashMap<String, Object>();
-            body.put("model", embeddingModel);
+            body.put("model", liveEmbeddingModel());
             body.put("input", cap(text, MAX_REQUEST_CHARS));
-            String response = post(endpoint + "/embeddings", body);
+            String response = post(liveEndpoint() + "/embeddings", body);
             if (response == null) {
                 recordFailure(slug);
                 return Optional.empty();
@@ -123,8 +211,9 @@ public class AnalysisModelClient {
         }
     }
 
-    private boolean canUse(String slug, String first, String second) {
-        if (!isEnabled()) return false;
+    private boolean canUse(AiModelConfig cfg, String slug, String first, String second) {
+        boolean enabled = cfg.getEnabled() != null && cfg.getEnabled().booleanValue();
+        if (!enabled || liveEndpoint().isEmpty()) return false;
         Long until = circuitUntil.get(slug);
         if (until != null && until.longValue() > System.currentTimeMillis()) return false;
         if (!permits.tryAcquire()) return false;
@@ -156,10 +245,12 @@ public class AnalysisModelClient {
         try {
             connection = (HttpURLConnection) new URL(url).openConnection();
             connection.setRequestMethod("POST");
+            int timeoutMs = liveTimeoutMs();
             connection.setConnectTimeout(timeoutMs);
             connection.setReadTimeout(timeoutMs);
             connection.setDoOutput(true);
             connection.setRequestProperty("Content-Type", "application/json");
+            String apiKey = liveApiKey();
             if (!apiKey.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + apiKey);
             byte[] payload = mapper.writeValueAsBytes(body);
             connection.setFixedLengthStreamingMode(payload.length);

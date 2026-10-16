@@ -21,10 +21,16 @@ import {
   Search,
   Star,
   Activity,
-  Upload
+  Upload,
+  Settings,
+  Wrench
 } from '@lucide/vue'
 import ObserveMetricsPanel from './components/ObserveMetricsPanel.vue'
 import ObserveAnalysisPanel from './components/ObserveAnalysisPanel.vue'
+import AiModelConfigPanel from './components/AiModelConfigPanel.vue'
+import ObserveSessionDashboard from './components/observe/ObserveSessionDashboard.vue'
+import QualityReportPanel from './components/observe/QualityReportPanel.vue'
+import SkillWorkbenchPage from './components/workbench/SkillWorkbenchPage.vue'
 import type { SkillAnalysis, TriggerCounts } from './types/observe-analysis'
 import { agentPrefixedTitle, dedupeSessionRows, sessionDisplayTitle, shortSessionKey } from './utils/session-title'
 
@@ -121,6 +127,8 @@ const isObserve = computed(() => route.path === '/observe')
 const isObserveSessions = computed(() => route.path === '/observe/sessions')
 const isObserveSkill = computed(() => /^\/observe\/[^/]+$/.test(route.path) && !isObserveSessions.value)
 const observeSlug = computed(() => isObserveSkill.value ? decodeURIComponent(route.path.slice('/observe/'.length)) : '')
+const isAiConfig = computed(() => route.path === '/ai-config')
+const isWorkbench = computed(() => route.path === '/analyze-optimize')
 
 const discoveryQuery = ref('')
 const discoveryCategory = ref('')
@@ -245,7 +253,7 @@ const observeVersion = ref('')
 const observeShowToolSteps = ref(true)
 const observeShowStepContent = ref(true)
 const observeShowAssistantSteps = ref(true)
-type ObserveDetailTab = 'quality' | 'chain' | 'metrics'
+type ObserveDetailTab = 'quality' | 'chain' | 'metrics' | 'dashboard' | 'report'
 const observeDetailTab = ref<ObserveDetailTab>('quality')
 type ObserveQualitySortKey = 'calls' | 'coverage' | 'error' | 'reload'
 const observeSortKey = ref<ObserveQualitySortKey>('calls')
@@ -971,7 +979,7 @@ async function loadObserveSkill() {
   observeSessionId.value = typeof route.query.session === 'string' ? route.query.session : ''
   observeVersion.value = typeof route.query.version === 'string' ? route.query.version : ''
   const rawTab = typeof route.query.tab === 'string' ? route.query.tab : ''
-  observeDetailTab.value = rawTab === 'chain' || rawTab === 'metrics' ? rawTab : 'quality'
+  observeDetailTab.value = rawTab === 'chain' || rawTab === 'metrics' || rawTab === 'dashboard' || rawTab === 'report' ? rawTab : 'quality'
   observeChainView.value = route.query.view === 'tree' ? 'tree' : 'text'
   observeExpandedTurns.value = new Set()
   observeTreeSelection.value = null
@@ -1069,6 +1077,19 @@ function setObserveDetailTab(tab: ObserveDetailTab) {
   if (observeVersion.value) query.version = observeVersion.value
   if (tab === 'chain') query.view = observeChainView.value
   void router.replace({ path: `/observe/${observeSlug.value}`, query })
+}
+
+/** 会话检索命中 → 跳到该会话的仪表盘（tab=dashboard + session 路由状态）。 */
+function openDashboardSession(payload: { sessionId: string; clientId?: string }) {
+  const id = String(payload.sessionId || '')
+  if (!id) return
+  observeDetailTab.value = 'dashboard'
+  observeSessionId.value = id
+  if (payload.clientId) observeClientId.value = payload.clientId
+  const query: Record<string, string> = { tab: 'dashboard', session: id }
+  if (payload.clientId || observeClientId.value) query.client = payload.clientId || observeClientId.value
+  if (observeVersion.value) query.version = observeVersion.value
+  void router.push({ path: `/observe/${observeSlug.value}`, query })
 }
 
 function openProblemSession(session: ObserveProblemSession) {
@@ -1401,6 +1422,8 @@ const featuredSkillCards = computed(() => featuredSkills.value)
 watch(
   () => [route.path, route.query.q, route.query.category, route.query.status, route.query.includeOffline, route.query.sort, route.query.source, route.query.client, route.query.session, route.query.version],
   async () => {
+    if (isWorkbench.value) return
+    if (isAiConfig.value) return
     if (isDiscoverDetail.value) {
       await loadDiscoveryDetail()
       return
@@ -1491,6 +1514,14 @@ function handleGlobalKeydown(event: KeyboardEvent) {
           <RouterLink class="site-nav-link" to="/observe" :class="{ 'router-link-active': isObserve || isObserveSkill || isObserveSessions }" :aria-current="isObserve || isObserveSkill || isObserveSessions ? 'page' : undefined">
             <Activity :size="15" :stroke-width="1.9" aria-hidden="true" />
             <span>观测</span>
+          </RouterLink>
+          <RouterLink class="site-nav-link" to="/ai-config" :aria-current="isAiConfig ? 'page' : undefined">
+            <Settings :size="15" :stroke-width="1.9" aria-hidden="true" />
+            <span>模型配置</span>
+          </RouterLink>
+          <RouterLink class="site-nav-link" to="/analyze-optimize" :aria-current="isWorkbench ? 'page' : undefined">
+            <Wrench :size="15" :stroke-width="1.9" aria-hidden="true" />
+            <span>分析优化</span>
           </RouterLink>
         </nav>
       </div>
@@ -2038,6 +2069,20 @@ function handleGlobalKeydown(event: KeyboardEvent) {
               :aria-selected="observeDetailTab === 'metrics'"
               @click="setObserveDetailTab('metrics')"
             >指标</button>
+            <button
+              type="button"
+              :class="{ selected: observeDetailTab === 'dashboard' }"
+              role="tab"
+              :aria-selected="observeDetailTab === 'dashboard'"
+              @click="setObserveDetailTab('dashboard')"
+            >仪表盘</button>
+            <button
+              type="button"
+              :class="{ selected: observeDetailTab === 'report' }"
+              role="tab"
+              :aria-selected="observeDetailTab === 'report'"
+              @click="setObserveDetailTab('report')"
+            >质量报告</button>
           </div>
 
           <section v-if="observeDetailTab === 'quality'" class="observe-quality-panel">
@@ -2172,6 +2217,20 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             @change-client="selectObserveClient"
             @change-session="onMetricsChangeSession"
             @change-version="onMetricsChangeVersion"
+          />
+
+          <ObserveSessionDashboard
+            v-else-if="observeDetailTab === 'dashboard'"
+            :session-id="observeSessionId"
+            :skill-slug="observeSlug"
+            :version="observeVersion"
+            @open-session="openDashboardSession"
+          />
+
+          <QualityReportPanel
+            v-else-if="observeDetailTab === 'report'"
+            :slug="observeSlug"
+            :version="observeVersion"
           />
 
           <template v-else>
@@ -2503,6 +2562,14 @@ function handleGlobalKeydown(event: KeyboardEvent) {
             </div>
           </aside>
         </form>
+      </section>
+
+      <section v-else-if="isAiConfig" class="ai-config-page">
+        <AiModelConfigPanel />
+      </section>
+
+      <section v-else-if="isWorkbench" class="workbench-route">
+        <SkillWorkbenchPage />
       </section>
 
       <template v-else-if="isDetail && detail">

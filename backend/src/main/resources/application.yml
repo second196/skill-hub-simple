@@ -43,10 +43,23 @@ skillhub:
       sample-limit: ${SKILLHUB_ANALYSIS_LLM_SAMPLE_LIMIT:20}
       coverage-threshold: ${SKILLHUB_ANALYSIS_LLM_COVERAGE_THRESHOLD:0.6}
       daily-token-budget: ${SKILLHUB_ANALYSIS_LLM_DAILY_TOKEN_BUDGET:50000}
+  optimize:
+    # Skill optimize pipeline workers (daemon pool; scheduler only claims + submits).
+    workers: ${SKILLHUB_OPTIMIZE_WORKERS:2}
+    worker-delay-ms: ${SKILLHUB_OPTIMIZE_WORKER_DELAY_MS:5000}
   upload:
     max-package-bytes: ${SKILLHUB_MAX_PACKAGE_BYTES:1073741824}
     max-expanded-bytes: ${SKILLHUB_MAX_EXPANDED_BYTES:1073741824}
     max-files: ${SKILLHUB_MAX_FILES:100000}
+  observation:
+    # Observation retention (aligned with kmplm's 90/180-day cleanup cron).
+    # Disabled by default: deletion only happens with explicit config, and a
+    # step-days/session-days value of 0 skips that tier entirely.
+    retention:
+      enabled: ${SKILLHUB_OBSERVATION_RETENTION_ENABLED:false}
+      step-days: ${SKILLHUB_OBSERVATION_RETENTION_STEP_DAYS:90}
+      session-days: ${SKILLHUB_OBSERVATION_RETENTION_SESSION_DAYS:180}
+      cron: ${SKILLHUB_OBSERVATION_RETENTION_CRON:0 30 4 * * ?}
   discovery:
     github:
       # Comma- or space-separated repositories. When empty, the scheduled

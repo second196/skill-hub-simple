@@ -8,6 +8,13 @@ SkillHub 是一个轻量的 Skill Hub，用于上传、浏览、下载、安装�
 - Web 端和 CLI 查询平台技能
 - Web 端和 CLI 下载、安装指定技能
 - Observer CLI 采集本地 Claude Code / Codex 会话，生成本地 HTML 报告，并把全部会话原文（含助手回复）上传到平台
+- Skill 质量报告：九维评分、静态检查 + 链路分析（`/api/observations/skills/{slug}/quality-report*`）
+- Skill 优化流水线：optimize task / candidate、五门禁（improvement / regression / tests / budget / paired）、ReAct 分步轨迹
+- 分析优化工作台（`/analyze-optimize`）：绑定 Skill@版本的 SSE 会话、分步推进（advance）、候选 diff 与 ReAct 轨迹查看
+- 观测会话 dashboard（Graph / Waterfall / Stats / Transcript / Files 多视图）、节点详情与会话全文检索
+- AI 模型运行时配置（`/api/ai-config`）：端点 / 模型 / 上下文窗口 / 推理力度，LLM 客户端热更新生效
+
+设计与差距文档见 [docs/skill-feature-gap-and-alignment-plan.md](docs/skill-feature-gap-and-alignment-plan.md)；质量/优化/工作台用户流程见 [docs/feature-skill-quality-optimization.md](docs/feature-skill-quality-optimization.md)；新增端点速查见 [docs/api-reference-skillhub-extended.md](docs/api-reference-skillhub-extended.md)。
 
 ## 一、启动项目
 
@@ -68,7 +75,7 @@ mvn spring-boot:run
 http://localhost:8080
 ```
 
-Flyway 会在首次启动时自动执行数据库迁移，创建技能、发现技能和观测相关表。
+Flyway 会在首次启动时自动执行数据库迁移，创建技能、发现技能、观测、质量/优化/工作台和 AI 配置相关表。
 
 也可以先打包再启动：
 
@@ -394,7 +401,7 @@ skill-hub_simple/
 │       │   └── observation/                   观测入库和查询
 │       └── resources/
 │           ├── application.yml                服务和数据库配置
-│           └── db/migration/                  Flyway 迁移 V1-V5
+│           └── db/migration/                  Flyway 迁移 V1-V17
 ├── frontend/                         Vue 3 + Vite 前端
 │   ├── src/App.vue                   页面和交互
 │   ├── src/router/                   路由
@@ -453,6 +460,39 @@ flowchart LR
 - `GET /api/observations/skills`：已观测技能
 - `GET /api/observations/skills/{slug}`：某个技能的客户端、会话和调用链路
 - `GET /api/observations/sessions/{id}`：某个会话的逐步链路
+- `GET /api/observations/sessions/{id}/analysis`：会话级技能分析（`skill` 参数必填）
+- `GET /api/observations/sessions/{id}/dashboard`：会话仪表盘（graph / waterfall / stats / transcript / files）
+- `GET /api/observations/sessions/{id}/dashboard/node`：仪表盘节点详情（`nodeId` 为 URL-safe base64）
+- `GET /api/observations/search`：会话全文检索（`q` 必填，可选 `skill` / `version` / `limit`）
+
+质量报告（`SkillQualityController`）：
+
+- `GET /api/observations/skills/{slug}/quality-report`：某版本质量报告（可选 `version`）
+- `GET /api/observations/skills/{slug}/quality-report/summary`：按版本汇总
+- `POST /api/observations/skills/{slug}/quality-report/analyze`：触发分析（body：`version`、`scope=static|chain|all`）
+
+优化流水线（`SkillOptimizeController` / `SkillReactController`）：
+
+- `GET/POST /api/observations/skills/{slug}/optimize-tasks`：优化任务列表（`mode`、`version` 过滤）/ 创建任务
+- `POST /api/observations/optimize-tasks/{id}/cancel`：取消任务
+- `GET /api/observations/optimize-candidates/{id}`：查看候选
+- `POST /api/observations/optimize-candidates/{id}/decision`：候选决策（`decision=adopt|reject`）
+- `GET /api/observations/optimize-tasks/{id}/react-steps`：ReAct 分步轨迹（`after` 游标分页）
+
+分析优化工作台会话（`SkillConversationController`）：
+
+- `POST /api/observations/skills/{slug}/versions/{versionId}/conversations`：新建绑定 Skill@版本的会话
+- `GET /api/observations/skills/{slug}/conversations`：历史会话（可选 `versionId`）
+- `GET /api/observations/conversations/{id}/messages`：消息分页（`after=seq`）
+- `GET /api/observations/conversations/{id}/events`：SSE 事件流（事件名 `message` + 15s `:ping` 注释帧）
+- `POST /api/observations/conversations/{id}/messages`：发送消息（body：`content`）
+- `POST /api/observations/conversations/{id}/advance`：分步任务断点续跑（body：`note`）
+
+AI 模型配置（`/api/ai-config`）：
+
+- `GET /api/ai-config`：当前生效配置（api_key 掩码）
+- `PUT /api/ai-config`：部分更新，更新后 LLM 客户端即时生效
+- `GET /api/ai-config/models`：代理拉取 OpenAI 兼容服务模型列表（可选 `endpoint` 覆盖）
 
 上传技能时，后端会解析 ZIP 或单文件、校验 `SKILL.md` frontmatter、计算摘要，然后在事务中写入数据库。
 
@@ -469,9 +509,31 @@ flowchart LR
 - `observation_step`：该回合中的用户、助手、技能、工具、文档步骤，payload 为完整 JSONB
 - `observation_ingest_batch`：上传批次统计
 
+质量 / 优化 / 工作台 / AI 配置表（Flyway V12-V17）：
+
+- `skill_quality_report`、`skill_quality_config`（V12）：九维质量报告与评分配置
+- `skill_optimize_task`、`skill_optimize_candidate`（V12）：优化任务与候选（含五门禁结果）
+- `skill_conversation`、`skill_message`、`skill_task_event`（V13）：工作台会话、消息、任务事件
+- `skill_react_step`、`skill_react_staging`（V14）：ReAct 分步轨迹与暂存
+- `observation_session_summary`、`observation_skill_summary`、`observation_skill_session_summary`、`observation_skill_client_summary`（V16）：观测读取预聚合摘要 + `refresh_observation_read_summaries()` 刷新函数
+- `sys_ai_config`（V17）：单行 AI 模型运行时配置（endpoint / model / context_window / reasoning_effort 等）
+
+V15 补充观测查询索引（`idx_obs_step_*`、`idx_obs_turn_*` 等），不新增表。
+
 其中 `skill_file.content` 使用 PostgreSQL `BYTEA` 保存文件二进制内容。下载时，后端从这些记录重新组装 ZIP。`skill.download_count` 使用原子更新累计成功下载次数。观测步骤按 `(turn_id, step_id)` 幂等写入，重复上传时保留更长的完整内容。
 
-### 5. 配置项
+### 5. Web 页面
+
+前端主要页面（`frontend/src/App.vue` 按路由分发，新页面组件在 `frontend/src/components/`）：
+
+| 路由 | 说明 |
+| --- | --- |
+| `/observe`、`/observe/sessions`、`/observe/:slug` | 观测总览 / 会话 / 技能详情；技能详情含质量（quality）、链路（chain）、指标（metrics）、仪表盘（dashboard）、报告（report）五个 Tab |
+| `/ai-config` | AI 模型运行时配置（`AiModelConfigPanel`） |
+| `/analyze-optimize` | 分析优化工作台（`SkillWorkbenchPage`：会话面板 + Detail / Evaluation / OptimizeHistory） |
+| `/search`、`/discover`、`/publish`、`/skills/:slug` | 搜索、发现、发布、技能详情 |
+
+### 6. 配置项
 
 后端配置文件是 `backend/src/main/resources/application.yml`，支持通过环境变量覆盖：
 
@@ -484,5 +546,20 @@ flowchart LR
 | `SKILLHUB_MAX_EXPANDED_BYTES` | `1073741824`（1 GiB） | ZIP 解压后最大大小 |
 | `SKILLHUB_MAX_FILES` | `100000` | 单个 Skill 最大文件数 |
 | `SKILLHUB_MAX_HTTP_POST_SIZE` | `1GB` | HTTP POST 最大体积，覆盖技能包和观测上传 |
+| `SKILLHUB_OPTIMIZE_WORKERS` | `2` | 优化流水线后台 worker 数（`skillhub.optimize.workers`） |
+| `SKILLHUB_OPTIMIZE_WORKER_DELAY_MS` | `5000` | 优化 worker 轮询间隔毫秒（`skillhub.optimize.worker-delay-ms`） |
+| `SKILLHUB_OBSERVATION_RETENTION_ENABLED` | `false` | 观测数据保留策略开关（`skillhub.observation.retention.enabled`，默认关闭，删除需显式开启） |
+| `SKILLHUB_OBSERVATION_RETENTION_STEP_DAYS` | `90` | observation_step 保留天数（0 跳过该层） |
+| `SKILLHUB_OBSERVATION_RETENTION_SESSION_DAYS` | `180` | 会话层保留天数（0 跳过该层） |
+| `SKILLHUB_OBSERVATION_RETENTION_CRON` | `0 30 4 * * ?` | 保留清理 cron |
+
+LLM 分析参数（`skillhub.analysis.llm.*`）默认静态配置；运行时可通过 `/api/ai-config` 热更新，详见 `sys_ai_config` 与 [docs/feature-skill-quality-optimization.md](docs/feature-skill-quality-optimization.md)。
+
+已知限制（T30 集成验证结论）：
+
+- 优化任务的 job 进程事件目前仅 `advance` 全量投影到会话消息，其余阶段事件未全部投影。
+- 优化候选的「生成候选 → 门禁 → 采纳发布新版本」全生命周期需要配置真实 LLM 才能跑通。
+- 工作台发消息仅落库，尚未实现对话式 LLM 应答。
+- Job 相关测试在共享测试库下的隔离性仍可改进。
 
 生产环境请使用环境变量设置数据库密码和连接地址，不要依赖默认密码。
